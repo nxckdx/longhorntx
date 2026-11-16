@@ -110,16 +110,18 @@ shows it as is.
 
 ## Traffic
 
-Measured on a homelab (2 nodes, 24 volumes, 42 replicas). The numbers are
-from `kubectl … --watch-only -o json` over 60 s:
+Example: a small cluster (2 nodes, 24 volumes, 42 replicas), idle, measured
+with `kubectl … --watch-only -o json` over 60 s:
 
-| Resource | Homelab, idle, per minute | Customer (many volumes) |
-|---|---|---|
-| engines | ~100 KB | ? |
-| volumes | ~90 KB | ? |
-| replicas | 0 | ? |
-| nodes | ~15 KB | ? |
-| settings | 0 | ? |
+| Resource | per minute |
+|---|---|
+| engines | ~100 KB |
+| volumes | ~90 KB |
+| replicas | 0 |
+| nodes | ~15 KB |
+| settings | 0 |
+
+Measure your own cluster with `lhtx measure` (see below).
 
 Findings:
 
@@ -150,7 +152,7 @@ Strategy:
   open a panel (label or field selector), not watched. Events go through
   core/v1 using protobuf.
 - Redraws happen at most ~5 times per second, however busy the cluster is.
-- Result in the homelab: startup ~50–60 KiB, then **~60 KiB/min (~1 KiB/s)**
+- Result on the small cluster above: startup ~50–60 KiB, then **~60 KiB/min (~1 KiB/s)**
   idle in the volume list, compared with up to MB/s for the web UI.
 - The header shows the bytes lhtx has received on the wire (measured at the
   TCP level, after TLS) and the current rate.
@@ -177,14 +179,14 @@ To simulate a slow link: `LHTX_THROTTLE_KBPS=50 lhtx` (limits the download).
 ### Measuring a cluster
 
 ```
-lhtx measure            # 60 s; lhtx measure -d 5m --context kunde-a
+lhtx measure            # 60 s; lhtx measure -d 5m --context prod
 ```
 
 Lists every resource once (like the TUI at startup: time and bytes on the
 wire, TLS/gzip/managedFields included) and then watches all of them for the
 duration without an initial list. Each resource uses its own connection, so
 the bytes can be attributed exactly. At the end it prints an estimate of
-TUI startup and idle traffic. Example (homelab, 24 volumes):
+TUI startup and idle traffic. Example (small cluster, 24 volumes):
 
 ```
 RESOURCE    ITEMS   LIST TIME   LIST BYTES   WATCH EVENTS   WATCH BYTES   PER MINUTE

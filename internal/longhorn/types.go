@@ -74,6 +74,8 @@ type VolumeSpec struct {
 	Frontend         string   `json:"frontend"`
 	DataLocality     string   `json:"dataLocality"`
 	Encrypted        bool     `json:"encrypted"`
+	BackupTargetName string   `json:"backupTargetName"`
+	MigrationNodeID  string   `json:"migrationNodeID"`
 }
 
 type VolumeStatus struct {
@@ -86,6 +88,7 @@ type VolumeStatus struct {
 	LastBackupAt     string           `json:"lastBackupAt"`
 	LastDegradedAt   string           `json:"lastDegradedAt"`
 	ShareState       string           `json:"shareState"`
+	IsStandby        bool             `json:"isStandby"`
 	Conditions       []Condition      `json:"conditions"`
 }
 

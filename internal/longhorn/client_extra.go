@@ -10,6 +10,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/rest"
 )
@@ -197,4 +198,28 @@ func VolumeRecurringJobs(v *Volume, jobs []*RecurringJob) []*RecurringJob {
 	}
 	sort.Slice(out, func(i, k int) bool { return out[i].Name < out[k].Name })
 	return out
+}
+
+func get[T any](ctx context.Context, c *Client, g schema.GroupVersionResource, name string) (*T, error) {
+	u, err := c.res(g).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+	return convert[T](u)
+}
+
+func (c *Client) Replica(ctx context.Context, name string) (*Replica, error) {
+	return get[Replica](ctx, c, GVRReplica, name)
+}
+
+func (c *Client) Node(ctx context.Context, name string) (*Node, error) {
+	return get[Node](ctx, c, GVRNode, name)
+}
+
+func (c *Client) SnapshotCR(ctx context.Context, name string) (*VolumeSnapshot, error) {
+	return get[VolumeSnapshot](ctx, c, GVRSnapshot, name)
+}
+
+func (c *Client) SettingCR(ctx context.Context, name string) (*Setting, error) {
+	return get[Setting](ctx, c, GVRSetting, name)
 }

@@ -26,6 +26,10 @@ type globals struct {
 	namespace string
 	output    string
 	verbose   bool
+
+	rw         bool
+	yes        bool
+	dryRunFlag string
 }
 
 func (g *globals) client() (*longhorn.Client, error) {
@@ -60,7 +64,7 @@ Without a subcommand it starts the interactive TUI.`,
 		SilenceErrors: true,
 		Args:          cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return tui.Run(cmd.Context(), tui.Options{Kube: g.kube, Namespace: g.namespace, Version: Version})
+			return tui.Run(cmd.Context(), tui.Options{Kube: g.kube, Namespace: g.namespace, Version: Version, RW: g.rw})
 		},
 	}
 	f := root.PersistentFlags()
@@ -69,12 +73,17 @@ Without a subcommand it starts the interactive TUI.`,
 	f.StringVarP(&g.namespace, "namespace", "n", longhorn.DefaultNamespace, "Longhorn namespace")
 	f.StringVarP(&g.output, "output", "o", "table", "output format: table|wide|json")
 	f.BoolVarP(&g.verbose, "verbose", "v", false, "print network traffic used to stderr")
+	f.BoolVar(&g.rw, "rw", false, "allow changes (lhtx is read-only by default)")
+	f.BoolVarP(&g.yes, "yes", "y", false, "do not ask for confirmation (with --rw)")
+	f.StringVar(&g.dryRunFlag, "dry-run", "", "show (client) or validate on the server (server) without changing anything")
+	f.Lookup("dry-run").NoOptDefVal = "client"
 
 	root.AddCommand(
 		volumesCmd(g), replicasCmd(g), nodesCmd(g), diskCmd(g), rebuildsCmd(g),
 		snapshotsCmd(g), backupsCmd(g), eventsCmd(g), jobsCmd(g), settingsCmd(g), targetsCmd(g),
 		measureCmd(g), contextsCmd(g),
 	)
+	root.AddCommand(writeCmds(g)...)
 	return root
 }
 

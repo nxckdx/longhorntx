@@ -150,7 +150,7 @@ func eventsCmd(g *globals) *cobra.Command {
 func settingsCmd(g *globals) *cobra.Command {
 	return &cobra.Command{
 		Use:     "settings [FILTER]",
-		Aliases: []string{"setting", "set"},
+		Aliases: []string{"setting"},
 		Short:   "List Longhorn settings (optionally filtered by name)",
 		Args:    cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/nxckdx/longhorntx/internal/format"
 	"github.com/nxckdx/longhorntx/internal/longhorn"
@@ -198,7 +199,4 @@ func textBar(pct, w int) string {
 	return strings.Repeat("█", full) + strings.Repeat("░", w-full)
 }
 
-func isTTY() bool {
-	fi, err := os.Stdout.Stat()
-	return err == nil && fi.Mode()&os.ModeCharDevice != 0
-}
+func isTTY() bool { return term.IsTerminal(int(os.Stdout.Fd())) }

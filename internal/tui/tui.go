@@ -19,6 +19,7 @@ type Options struct {
 	Kube      kube.Options
 	Namespace string
 	Version   string
+	RW        bool // start in write mode
 }
 
 func Run(ctx context.Context, o Options) error {
@@ -46,6 +47,7 @@ const (
 	pActivity
 	pDisk
 	pDetail
+	pSettings
 	pContexts
 	pHelp
 )
@@ -73,6 +75,7 @@ type page struct {
 	release func() // engine watch
 	panel   panelKind
 	pdata   *panelData
+	sel     int // selected replica box
 }
 
 type model struct {
@@ -113,6 +116,18 @@ type model struct {
 	lastTick time.Time
 	rxRate   float64
 
+	// write mode, dialogs, status messages
+	rw       bool
+	modal    *modal
+	flash    string
+	flashErr bool
+	flashAt  time.Time
+
+	// settings page (loaded on demand)
+	settings        []*longhorn.Setting
+	settingsLoading bool
+	settingsErr     error
+
 	width, height int
 }
 
@@ -121,6 +136,7 @@ func newModel(ctx context.Context, o Options) *model {
 		ctx: ctx, opts: o, kctx: o.Kube.Context, connecting: true,
 		stack: []*page{{kind: pVolumes}},
 		rates: longhorn.NewRateTracker(), shown: map[string]float64{},
+		rw: o.RW,
 	}
 }
 
@@ -250,6 +266,7 @@ func (m *model) switchContext(name string) tea.Cmd {
 	m.lastRX, m.rxRate = 0, 0
 	m.shown = map[string]float64{}
 	m.rates = longhorn.NewRateTracker()
+	m.modal, m.settings, m.settingsErr = nil, nil, nil
 	return connect(m.ctx, m.opts, name)
 }
 
@@ -328,6 +345,18 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case panelMsg:
 		m.applyPanel(msg)
+		return m, nil
+
+	case actionDoneMsg:
+		return m, m.applyActionDone(msg)
+
+	case settingsMsg:
+		if msg.client != m.client {
+			return m, nil
+		}
+		m.settingsLoading = false
+		m.settings, m.settingsErr = msg.settings, msg.err
+		m.clamp()
 		return m, nil
 
 	case tea.KeyPressMsg:
@@ -411,6 +440,9 @@ func (m *model) handleKey(k tea.KeyPressMsg) tea.Cmd {
 	if key == "ctrl+c" {
 		return tea.Quit
 	}
+	if m.modal != nil {
+		return m.modalKey(k)
+	}
 	p := m.top()
 
 	if m.filtering {
@@ -457,6 +489,10 @@ func (m *model) handleKey(k tea.KeyPressMsg) tea.Cmd {
 		return nil
 	}
 
+	if cmd, ok := m.actionKey(p, key); ok {
+		return cmd
+	}
+
 	// global keys
 	switch key {
 	case "q":
@@ -484,6 +520,12 @@ func (m *model) handleKey(k tea.KeyPressMsg) tea.Cmd {
 	case "3":
 		m.root(pActivity)
 		return nil
+	case "4":
+		m.root(pSettings)
+		if m.settings == nil && !m.settingsLoading {
+			return m.loadSettings()
+		}
+		return nil
 	case "c":
 		names, _, err := m.opts.Kube.Contexts()
 		if err != nil {
@@ -506,9 +548,22 @@ func (m *model) handleKey(k tea.KeyPressMsg) tea.Cmd {
 	}
 
 	if p.kind == pDetail {
+		switch key {
+		case "[":
+			p.sel = max(p.sel-1, 0)
+			return nil
+		case "]":
+			if vv := m.findView(p.vol); vv != nil {
+				p.sel = min(p.sel+1, len(vv.Replicas)-1)
+			}
+			return nil
+		}
 		if cmd, ok := m.detailKey(p, key); ok {
 			return cmd
 		}
+	}
+	if p.kind == pSettings && key == "ctrl+r" {
+		return m.loadSettings()
 	}
 
 	// list navigation
@@ -577,7 +632,7 @@ func (m *model) listHeight() int {
 		h--
 	}
 	switch p.kind {
-	case pDisk, pActivity:
+	case pDisk, pActivity, pSettings:
 		h -= 2 // title + rule
 	case pDetail:
 		h -= m.detailTopHeight()
@@ -615,6 +670,9 @@ func (m *model) View() tea.View {
 		body = m.viewDetail(p)
 	default:
 		body = m.viewPage(p)
+	}
+	if m.modal != nil && m.height > 2 {
+		body = m.viewModal(m.height - 2)
 	}
 	content := m.viewHeader() + "\n" + body
 	lines := strings.Split(content, "\n")

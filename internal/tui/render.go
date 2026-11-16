@@ -14,7 +14,7 @@ import (
 // ---------------------------------------------------------------- header / footer
 
 func (m *model) viewHeader() string {
-	l := contextStyle(m.ctxLabel()).Render(m.ctxLabel()) + " " + sBold.Render("lhtx")
+	l := contextStyle(m.ctxLabel()).Render(m.ctxLabel()) + m.rwBadge() + " " + sBold.Render("lhtx")
 
 	if m.store != nil {
 		root := m.stack[0].kind
@@ -64,7 +64,7 @@ func (m *model) viewHeader() string {
 			k     pageKind
 			key   string
 			label string
-		}{{pVolumes, "1", vol}, {pNodes, "2", nodes}, {pActivity, "3", act}}
+		}{{pVolumes, "1", vol}, {pNodes, "2", nodes}, {pActivity, "3", act}, {pSettings, "4", "Settings"}}
 		for _, t := range tabs {
 			if t.k == root {
 				l += " " + sTabActive.Render(t.key+" "+t.label)
@@ -107,11 +107,25 @@ func (m *model) viewFooter() string {
 		keys = [][2]string{{"↑↓", "select"}, {"enter", "switch"}, {"esc", "back"}}
 	case p.kind == pHelp:
 		keys = [][2]string{{"any key", "back"}}
+	case m.modal != nil:
+		keys = nil
 	case p.kind == pDetail:
 		keys = [][2]string{{"s", "snapshots"}, {"b", "backups"}, {"e", "events"}, {"J", "jobs"}, {"esc", "back"}}
 		if p.panel != panelNone {
 			keys = append(keys, [2]string{"ctrl+r", "reload"})
 		}
+		if m.rw {
+			keys = append(keys, [2]string{"S", "snapshot"}, [2]string{"B", "backup"}, [2]string{"R", "replicas"}, [2]string{"[ ]", "select"}, [2]string{"X", "del replica"})
+			if p.panel == panelSnapshots {
+				keys = append(keys, [2]string{"D", "del snapshot"})
+			}
+		}
+	case m.rw && p.kind == pNodes:
+		keys = [][2]string{{"C", "scheduling on/off"}, {"E", "evict on/off"}, {"enter", "open"}, {"W", "write mode off"}}
+	case m.rw && (p.kind == pVolumes || p.kind == pActivity):
+		keys = [][2]string{{"S", "snapshot"}, {"B", "backup"}, {"R", "replicas"}, {"enter", "open"}, {"/", "filter"}, {"W", "write mode off"}}
+	case m.rw && p.kind == pDisk:
+		keys = [][2]string{{"X", "delete replica"}, {"enter", "open"}, {"esc", "back"}, {"W", "write mode off"}}
 	default:
 		keys = [][2]string{{"enter", "open"}, {"/", "filter"}, {"1-3", "views"}, {"c", "context"}, {"?", "help"}}
 		if len(m.stack) > 1 {
@@ -125,6 +139,13 @@ func (m *model) viewFooter() string {
 		b = append(b, sKey.Render("["+k[0]+"]")+" "+k[1])
 	}
 	s := " " + strings.Join(b, "  ")
+	if m.flash != "" && time.Since(m.flashAt) < 8*time.Second {
+		c := cOK
+		if m.flashErr {
+			c = cErr
+		}
+		s = " " + fg(c, m.flash) + "  " + sDim.Render("│") + s
+	}
 	if m.store != nil {
 		if err := m.store.Err(); err != nil {
 			s += "  " + sErr.Render("⚠ "+err.Error())
@@ -201,7 +222,11 @@ func (m *model) detailTop(p *page) string {
 			for len(c) < h {
 				c = append(c, "")
 			}
-			row = append(row, " ", box(v.Replicas[i+j].Node, c, boxW))
+			title := v.Replicas[i+j].Node
+			if i+j == p.sel && len(v.Replicas) > 1 {
+				title = "▶ " + title
+			}
+			row = append(row, " ", box(title, c, boxW))
 		}
 		b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, row...) + "\n")
 	}
@@ -334,7 +359,7 @@ func (m *model) viewHelp() string {
  lhtx – low-traffic Longhorn TUI (read-only)
 
  Views
-   1  Volumes      2  Nodes → disks → replicas      3  Activity (rebuilds, backups, …)
+   1  Volumes   2  Nodes → disks → replicas   3  Activity   4  Settings
 
  Navigation
    ↑/k ↓/j        move              g/G       top / bottom
@@ -345,6 +370,13 @@ func (m *model) viewHelp() string {
  Volume details
    s snapshots   b backups   e events   J recurring jobs   tab next panel
    ctrl+r reload panel (panels are loaded on demand, not watched)
+
+ Write mode (off by default; W toggles, or start with --rw)
+   S snapshot   B backup (snapshot + backup)   R replica count
+   X delete replica ([ ] selects in volume details)   D delete snapshot (in panel)
+   C scheduling on/off, E eviction on/off (nodes view)   enter edit (settings)
+   Every action shows the request first: y apply (Y for destructive ones),
+   d server dry run (validated by Longhorn, nothing changed), esc cancel.
 
  Traffic
    Volumes, replicas and nodes are watched permanently. Engines (chatty)

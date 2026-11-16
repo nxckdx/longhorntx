@@ -144,7 +144,7 @@ func (m *model) panelRows(p *page) []row {
 			if !s.Status.ReadyToUse {
 				ready = fg(cWarn, "…")
 			}
-			rows = append(rows, row{cells: []string{s.Name, format.Age(s.Status.CreationTime, now), format.Bytes(int64(s.Status.Size)), kind, ready}})
+			rows = append(rows, row{cells: []string{s.Name, format.Age(s.Status.CreationTime, now), format.Bytes(int64(s.Status.Size)), kind, ready}, ref: s})
 		}
 	case panelBackups:
 		for _, b := range d.backups {

@@ -17,7 +17,15 @@ type row struct {
 	cells  []string
 	header bool // not selectable (group heading)
 	open   func() tea.Cmd
+	ref    any // object behind the row, for actions
 }
+
+// rowRef types used by actions
+type (
+	volRef     string // volume name
+	replicaRef string // replica name
+	nodeRef    struct{ node, disk string }
+)
 
 type col struct {
 	title string
@@ -55,6 +63,8 @@ func (m *model) rowsFor(p *page) []row {
 		rows = m.activityRows()
 	case pDetail:
 		rows = m.panelRows(p)
+	case pSettings:
+		rows = m.settingsRows()
 	default:
 		return nil
 	}
@@ -90,6 +100,8 @@ func (m *model) colsFor(p *page) []col {
 			{"PROGRESS", 24, 0}, {"SPEED", 12, 0}, {"ETA", 9, 0}, {"STATE", 12, 0}}
 	case pDetail:
 		return m.panelCols(p)
+	case pSettings:
+		return []col{{"NAME", 0, 2}, {"VALUE", 0, 3}}
 	}
 	return nil
 }
@@ -101,6 +113,21 @@ func (m *model) viewPage(p *page) string {
 	case pDisk:
 		b.WriteString(m.diskTitle(p) + "\n")
 		b.WriteString(sDim.Render(" "+strings.Repeat("─", max(m.width-2, 0))) + "\n")
+	case pSettings:
+		t := " " + sBold.Render("Settings") + sDim.Render("  loaded on demand · ctrl+r reload")
+		if m.rw {
+			t += sDim.Render(" · enter: change value")
+		} else {
+			t += sDim.Render(" · W: write mode to change values")
+		}
+		switch {
+		case m.settingsLoading:
+			t += sDim.Render(" · loading …")
+		case m.settingsErr != nil:
+			t += "  " + sErr.Render(m.settingsErr.Error())
+		}
+		b.WriteString(t + "\n")
+		b.WriteString(sDim.Render(" "+strings.Repeat("─", max(m.width-2, 0))) + "\n")
 	case pActivity:
 		b.WriteString(" " + sBold.Render("Activity") + sDim.Render("  rebuilds, purges, restores, clones · backups since lhtx started (finished ones stay 2 min)") + "\n")
 		b.WriteString(sDim.Render(" "+strings.Repeat("─", max(m.width-2, 0))) + "\n")
@@ -110,6 +137,7 @@ func (m *model) viewPage(p *page) string {
 		pNodes:    "no nodes",
 		pDisk:     "no replicas on this disk",
 		pActivity: "nothing running – rebuilds, purges and backups appear here live",
+		pSettings: "no settings loaded",
 	}[p.kind]
 	b.WriteString(m.renderList(p, m.colsFor(p), m.rowsFor(p), empty))
 	return b.String()
@@ -186,6 +214,7 @@ func (m *model) volumeRows() []row {
 				sDim.Render(v.Name),
 			},
 			open: func() tea.Cmd { return m.openDetail(name) },
+			ref:  volRef(name),
 		})
 	}
 	return rows
@@ -239,6 +268,7 @@ func (m *model) nodeRows() []row {
 		rows = append(rows, row{
 			cells: []string{sBold.Render(n.Name), status, "", "", "", nrepCell, ""},
 			open:  func() tea.Cmd { m.push(&page{kind: pDisk, node: name}); return nil },
+			ref:   nodeRef{node: name},
 		})
 		for j := range n.Disks {
 			d := &n.Disks[j]
@@ -272,6 +302,7 @@ func (m *model) nodeRows() []row {
 					smartCell(d.SMART),
 				},
 				open: func() tea.Cmd { m.push(&page{kind: pDisk, node: name, disk: uuid}); return nil },
+				ref:  nodeRef{node: name, disk: d.Name},
 			})
 		}
 	}
@@ -368,6 +399,7 @@ func (m *model) diskRows(p *page) []row {
 					sDim.Render(d.Path),
 				},
 				open: func() tea.Cmd { return m.openDetail(vol) },
+				ref:  replicaRef(r.Replica),
 			})
 		}
 	}
@@ -426,6 +458,7 @@ func (m *model) activityRows() []row {
 		rows = append(rows, row{
 			cells: []string{fg(cInfo, a.Kind), pvc, sDim.Render(target), dash(a.Node), prog, speed, eta, state},
 			open:  func() tea.Cmd { return m.openDetail(vol) },
+			ref:   volRef(vol),
 		})
 	}
 	return rows

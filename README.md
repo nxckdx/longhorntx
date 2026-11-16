@@ -8,7 +8,8 @@ several MB/s (longhorn/longhorn#2372, #4211, #11134). lhtx talks **only to the
 Kubernetes API** (your kubeconfig, like kubectl), reads the `*.longhorn.io`
 CRDs and uses watches instead of polling.
 
-- read-only (write actions are planned behind `--rw`, with confirmation and `--dry-run`)
+- read-only by default; changes only with `--rw` (or `W` in the TUI), always
+  with a preview and confirmation, plus `--dry-run` / server-side dry run
 - multiple clusters through kubeconfig contexts (`--context`, `c` in the TUI)
 - shows which **disk** each replica is on, not just the node
 - rebuild progress with speed and ETA
@@ -39,11 +40,43 @@ VOLUME = Longhorn volume / PV name, namespace/pvc, or a bare PVC name if unique
 --context NAME  --kubeconfig PATH  -n longhorn-system  -v (print wire bytes)
 ```
 
+### Changes (write mode)
+
+Nothing is changed without `--rw`. Every command first prints the exact request
+(verb, object, changed fields, JSON body). `--dry-run` stops there.
+`--dry-run=server` sends the request with `dryRun=All`: the apiserver and
+Longhorn's admission webhooks validate it, but nothing is persisted. Both work
+without `--rw`. Destructive actions ask you to type the object name, `--yes`
+skips the prompt (needed without a terminal).
+
+```
+lhtx create snapshot VOLUME [--name N]
+lhtx create backup VOLUME [--snapshot S]   # without --snapshot: snapshot, wait, back up
+lhtx delete snapshot NAME
+lhtx delete replica NAME                   # refused for the only healthy replica
+lhtx set replicas VOLUME COUNT             # volume must be attached
+lhtx set setting NAME VALUE
+lhtx cordon|uncordon NODE[:DISK]           # replica scheduling off/on
+lhtx evict NODE[:DISK] [--cancel]          # also disables scheduling (Longhorn requires it)
+
+# examples
+lhtx evict node-3:/var/lib/longhorn --dry-run=server
+lhtx --rw set replicas gitea/gitea-data 3
+```
+
+All changes go through Longhorn CRs, the same objects longhorn-manager's own
+API creates (verified against v1.12.1): Snapshot CR (`spec.volume`,
+`spec.createSnapshot`), Backup CR (`spec.snapshotName`, labels `backup-volume`
+and `backup-target`), deleting Snapshot/Replica CRs, merge patches on
+Volume/Node/Setting. Patches carry the `resourceVersion` the decision was
+based on, so they fail instead of overwriting a newer state. Deletes use a
+UID precondition.
+
 TUI:
 
 | Key | |
 |---|---|
-| `1` `2` `3` | Volumes · Nodes → disks → replicas · Activity |
+| `1` `2` `3` `4` | Volumes · Nodes → disks → replicas · Activity · Settings |
 | `↑↓`/`jk`, `g`/`G` | move |
 | `enter` | open (volume detail, disk, …) |
 | `esc` / `q` | back (quit on the top level) |
@@ -51,6 +84,15 @@ TUI:
 | `s` `b` `e` `J`, `tab` | detail panels: snapshots, backups, events, recurring jobs |
 | `ctrl+r` | reload panel |
 | `c` | switch kubeconfig context |
+| `W` | write mode on/off (red **RW** badge; or start with `lhtx --rw`) |
+| `S` `B` `R` | snapshot · backup · replica count (volume list / details) |
+| `X`, `[` `]` | delete replica (selected with `[` `]` in details, or in the disk view) |
+| `D` | delete snapshot (snapshots panel); `B` there backs up the selected snapshot |
+| `C` `E` | replica scheduling / eviction on/off (nodes view, node or disk row) |
+| `enter` (Settings) | change value |
+
+Every action opens a dialog with the request: `y` applies (`Y` for
+destructive ones), `d` runs a server-side dry run, `esc` cancels.
 | `?` | help |
 
 ## Install / develop (Nix)
@@ -203,5 +245,7 @@ engines     24      22ms        20.8 KiB     5              34.8 KiB      69.6 K
    events, `lhtx rebuilds -w`, context switching
 2. **Read more data** ✔ snapshots, backups, settings, recurring jobs, backup targets
    · open: settings and backup-volume view in the TUI, snapshot tree
-3. Actions with confirmation and dry-run (`--rw`)
+3. **Actions** ✔ snapshot/backup create, snapshot/replica delete, replica count,
+   scheduling/eviction for nodes and disks, settings – with preview, confirmation,
+   client and server dry run · open: attach/detach, volume expansion, recurring jobs
 4. Multi-cluster overview, more traffic statistics

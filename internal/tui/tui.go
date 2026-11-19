@@ -100,9 +100,10 @@ type model struct {
 	acts  []longhorn.Activity
 
 	// navigation
-	stack     []*page
-	filter    string
-	filtering bool
+	problemsFirst bool // volume list: faulted/degraded/active first
+	stack         []*page
+	filter        string
+	filtering     bool
 
 	// context picker
 	ctxNames  []string
@@ -545,6 +546,17 @@ func (m *model) handleKey(k tea.KeyPressMsg) tea.Cmd {
 			return m.loadSettings()
 		}
 		return nil
+	case "p":
+		if p.kind == pVolumes {
+			m.problemsFirst = !m.problemsFirst
+			p.cursor, p.offset = 0, 0
+			if m.problemsFirst {
+				m.setFlash("sorted: problems and activity first", false)
+			} else {
+				m.setFlash("sorted by PVC", false)
+			}
+			return nil
+		}
 	case "5":
 		m.root(pHealth)
 		if m.health == nil && !m.healthLoading && m.store != nil && m.store.AllSynced() {

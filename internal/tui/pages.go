@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"image/color"
+	"sort"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -87,7 +88,7 @@ func (m *model) colsFor(p *page) []col {
 	switch p.kind {
 	case pVolumes:
 		return []col{{"PVC", 0, 3}, {"STATE", 9, 0}, {"ROBUSTNESS", 10, 0}, {"REPL", 5, 0},
-			{"SIZE", 9, 0}, {"ACTUAL", 9, 0}, {"NODE", 12, 0}, {"ACTIVITY", 16, 0}, {"VOLUME", 0, 2}}
+			{"SIZE", 9, 0}, {"ACTUAL", 9, 0}, {"NODE", 12, 0}, {"ACTIVITY", 21, 0}, {"VOLUME", 0, 2}}
 	case pNodes:
 		return []col{{"NODE / DISK", 0, 1}, {"STATUS", 14, 0}, {"USED", 25, 0}, {"SIZE", 10, 0},
 			{"SCHEDULED", 25, 0}, {"REPLICAS", 8, 0}, {"SMART", 22, 0}}
@@ -195,10 +196,41 @@ func (m *model) renderList(p *page, cols []col, rows []row, empty string) string
 
 // ---------------------------------------------------------------- volumes
 
+// volumeOrder returns the indexes of m.views in display order: as built
+// (by PVC), or with problemsFirst faulted → degraded → active → rest.
+func (m *model) volumeOrder() []int {
+	idx := make([]int, len(m.views))
+	for i := range idx {
+		idx[i] = i
+	}
+	if !m.problemsFirst {
+		return idx
+	}
+	active := map[string]bool{}
+	for _, a := range m.acts {
+		if !a.Done {
+			active[a.Volume] = true
+		}
+	}
+	rank := func(v *longhorn.VolumeView) int {
+		switch {
+		case v.Health == "faulted":
+			return 0
+		case v.Health == "degraded":
+			return 1
+		case active[v.Name] || v.Rebuilding():
+			return 2
+		}
+		return 3
+	}
+	sort.SliceStable(idx, func(a, b int) bool { return rank(&m.views[idx[a]]) < rank(&m.views[idx[b]]) })
+	return idx
+}
+
 func (m *model) volumeRows() []row {
 	haveReplicas := m.synced(longhorn.ResReplicas)
 	rows := make([]row, 0, len(m.views))
-	for i := range m.views {
+	for _, i := range m.volumeOrder() {
 		v := &m.views[i]
 		healthy := v.HealthyReplicas()
 		replC := cOK
@@ -241,9 +273,10 @@ func (m *model) volumeActivity(v *longhorn.VolumeView) string {
 			continue
 		}
 		if a.Progress >= 0 {
-			return fg(cInfo, fmt.Sprintf("◐ %s %d%%", a.Kind, a.Progress))
+			// small animated bar, same smoothing as the activity view
+			return fg(cInfo, a.Kind+" ") + bar(m.shownPct(a.Key(), a.Progress), 8, cInfo) + fmt.Sprintf(" %3d%%", a.Progress)
 		}
-		return fg(cInfo, "◐ "+a.Kind)
+		return fg(cInfo, "◐ "+a.Kind) + sDim.Render(" (no progress)")
 	}
 	return ""
 }

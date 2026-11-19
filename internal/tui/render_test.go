@@ -76,3 +76,32 @@ func TestActivityPage(t *testing.T) {
 		}
 	}
 }
+
+func TestVolumeListRebuildAndProblemsFirst(t *testing.T) {
+	m := newModel(t.Context(), Options{})
+	m.width, m.height = 150, 12
+	mk := func(name, pvc, health string) *longhorn.Volume {
+		var v longhorn.Volume
+		_ = json.Unmarshal([]byte(`{"metadata":{"name":"`+name+`"},"spec":{"size":"21474836480","numberOfReplicas":2},
+			"status":{"state":"attached","robustness":"`+health+`","currentNodeID":"node-1",
+			"kubernetesStatus":{"namespace":"`+strings.Split(pvc, "/")[0]+`","pvcName":"`+strings.Split(pvc, "/")[1]+`"}}}`), &v)
+		return &v
+	}
+	vols := []*longhorn.Volume{mk("pvc-a", "app/aaa", "healthy"), mk("pvc-b", "app/bbb", "healthy"), mk("pvc-z", "zz/zzz", "degraded")}
+	m.views = longhorn.Build(longhorn.State{Volumes: vols})
+	m.acts = []longhorn.Activity{{Kind: "rebuild", Volume: "pvc-b", Target: "pvc-b-r-1", Progress: 64, Total: 20 << 30}}
+	m.stack = []*page{{kind: pVolumes}}
+	out := ansi.Strip(m.viewPage(m.top()))
+	if !strings.Contains(out, "rebuild") || !strings.Contains(out, "64%") || !strings.Contains(out, "█") {
+		t.Errorf("rebuild bar missing:\n%s", out)
+	}
+	m.problemsFirst = true
+	out = ansi.Strip(m.viewPage(m.top()))
+	if os.Getenv("SHOW") != "" {
+		t.Log("\n" + out)
+	}
+	lines := strings.Split(out, "\n")
+	if !strings.Contains(lines[1], "zz/zzz") || !strings.Contains(lines[2], "app/bbb") {
+		t.Errorf("problems first order wrong:\n%s", out)
+	}
+}

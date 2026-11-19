@@ -122,6 +122,12 @@ func (m *model) viewFooter() string {
 		}
 	case m.rw && p.kind == pNodes:
 		keys = [][2]string{{"C", "scheduling on/off"}, {"E", "evict on/off"}, {"enter", "open"}, {"W", "write mode off"}}
+	case !m.rw && p.kind == pVolumes:
+		sortLbl := "problems first"
+		if m.problemsFirst {
+			sortLbl = "sort by PVC"
+		}
+		keys = [][2]string{{"enter", "open"}, {"/", "filter"}, {"p", sortLbl}, {"1-5", "views"}, {"c", "context"}, {"?", "help"}, {"q", "quit"}}
 	case m.rw && (p.kind == pVolumes || p.kind == pActivity):
 		keys = [][2]string{{"S", "snapshot"}, {"B", "backup"}, {"R", "replicas"}, {"enter", "open"}, {"/", "filter"}, {"W", "write mode off"}}
 	case m.rw && p.kind == pDisk:
@@ -365,6 +371,7 @@ func (m *model) viewHelp() string {
    ↑/k ↓/j        move              g/G       top / bottom
    enter / l      open              esc / h   back
    /              filter            c         switch context
+   p              volume list: problems & activity first (toggle)
    q              back / quit       ?         this help
 
  Volume details

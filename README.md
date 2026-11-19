@@ -105,6 +105,12 @@ nix develop                                # go, gopls, kubectl, pv
 go build -o lhtx ./cmd/lhtx && go test ./...
 ```
 
+Shell completion (commands, flags, contexts, volume/PVC, node:disk, replica,
+snapshot and setting names) is installed by the Nix package. Otherwise:
+`source <(lhtx completion zsh)` (or bash/fish). Names are cached for 10 minutes
+in `~/.cache/lhtx/` per context, so pressing TAB does not list all volumes
+every time.
+
 With `nix run`, arguments for lhtx must come after `--`; otherwise nix itself
 parses flags like `--context`.
 

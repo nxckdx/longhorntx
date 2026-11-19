@@ -30,9 +30,16 @@
             env.CGO_ENABLED = 0;
             ldflags = [ "-s" "-w" "-X github.com/nxckdx/longhorntx/internal/cli.Version=${version}" ];
 
-            # kubectl plugin: `kubectl lhtx ...`
+            nativeBuildInputs = [ pkgs.installShellFiles ];
+
+            # kubectl plugin: `kubectl lhtx ...`; shell completions
             postInstall = ''
               ln -s $out/bin/lhtx $out/bin/kubectl-lhtx
+            '' + pkgs.lib.optionalString (pkgs.stdenv.buildPlatform.canExecute pkgs.stdenv.hostPlatform) ''
+              installShellCompletion --cmd lhtx \
+                --bash <($out/bin/lhtx completion bash) \
+                --zsh <($out/bin/lhtx completion zsh) \
+                --fish <($out/bin/lhtx completion fish)
             '';
 
             meta = with pkgs.lib; {

@@ -44,6 +44,17 @@ type Action struct {
 	Changes     []Change
 	Warnings    []string
 	Destructive bool
+	// Lines replace the request details in the preview (batch summaries).
+	Lines   []string
+	summary string // one-line description used in batch summaries
+}
+
+// Summary is a one-line description of the action for batch previews.
+func (a *Action) Summary() string {
+	if a.summary != "" {
+		return a.summary
+	}
+	return a.Title
 }
 
 // Change is a human-readable field change for the preview.
@@ -73,6 +84,12 @@ func ParseDryRun(s string) (DryRun, error) {
 func (a *Action) Preview(namespace string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s %s.%s/%s -n %s\n", a.Verb, a.GVR.Resource, a.GVR.Group, a.Name, namespace)
+	if len(a.Lines) > 0 {
+		for _, l := range a.Lines {
+			b.WriteString("  " + l + "\n")
+		}
+		return strings.TrimSuffix(b.String(), "\n")
+	}
 	for _, c := range a.Changes {
 		fmt.Fprintf(&b, "  %s: %s → %s\n", c.Field, dashIfEmpty(c.From), dashIfEmpty(c.To))
 	}

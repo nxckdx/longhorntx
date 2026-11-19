@@ -30,6 +30,7 @@ type Store struct {
 	c *Client
 
 	volumes, replicas, nodes cache.SharedIndexInformer
+	orphans                  cache.SharedIndexInformer // started after the initial sync
 
 	mu      sync.Mutex
 	engines map[string]*engineWatch // by volume
@@ -87,6 +88,7 @@ func NewStore(c *Client) *Store {
 	s.volumes = newInformer[Volume](s, GVRVolume, "")
 	s.replicas = newInformer[Replica](s, GVRReplica, "")
 	s.nodes = newInformer[Node](s, GVRNode, "")
+	s.orphans = newInformer[Orphan](s, GVROrphan, "")
 	return s
 }
 
@@ -139,10 +141,12 @@ func (s *Store) Start(ctx context.Context) {
 		}
 		if name == ResReplicas {
 			s.reconcileAutoEngines()
-			// backups come last: nice to have, should not slow down startup
+			// backups and orphans come last: nice to have, should not slow
+			// down startup (orphans are few and quiet)
 			if s.WatchBackups {
 				go s.runBackupWatch(s.ctx)
 			}
+			go s.orphans.RunWithContext(s.ctx)
 		}
 		s.notify()
 	}
@@ -416,3 +420,6 @@ func newInformerSel[T any](s *Store, g schema.GroupVersionResource, selector, fi
 type plainListWatch struct{ *cache.ListWatch }
 
 func (plainListWatch) IsWatchListSemanticsUnSupported() bool { return true }
+
+// Orphans returns the orphan CRs (empty until their list arrived).
+func (s *Store) Orphans() []*Orphan { return listStore[Orphan](s.orphans) }

@@ -223,3 +223,11 @@ func (c *Client) SnapshotCR(ctx context.Context, name string) (*VolumeSnapshot, 
 func (c *Client) SettingCR(ctx context.Context, name string) (*Setting, error) {
 	return get[Setting](ctx, c, GVRSetting, name)
 }
+
+func (c *Client) Orphans(ctx context.Context) ([]*Orphan, error) {
+	return list[Orphan](ctx, c, GVROrphan, "")
+}
+
+func (c *Client) OrphanCR(ctx context.Context, name string) (*Orphan, error) {
+	return get[Orphan](ctx, c, GVROrphan, name)
+}

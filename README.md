@@ -37,6 +37,7 @@ lhtx events VOLUME                   # events of volume, engine, replicas and PV
 lhtx jobs [VOLUME]                   # recurring jobs (that apply to the volume)
 lhtx settings [FILTER]               # Longhorn settings
 lhtx orphans                         # orphaned replica data / instances
+lhtx engineimages                    # engine images, state, how many volumes use them
 lhtx targets                         # backup targets
 lhtx contexts                        # kubeconfig contexts
 lhtx doctor [--backup-max-age 36h]   # health check, exit code 0/1/2/3 (ok/warn/crit/error)
@@ -110,6 +111,7 @@ lhtx delete replica NAME                   # refused for the only healthy replic
 lhtx delete orphan NAME|--all-cleanable    # Longhorn deletes the data dir if cleanable
 lhtx set replicas VOLUME COUNT             # volume must be attached
 lhtx set setting NAME VALUE
+lhtx upgrade-engine VOLUME... --image v1.12.1   # like "Upgrade Engine" in the web UI
 lhtx cordon|uncordon NODE[:DISK]           # replica scheduling off/on
 lhtx evict NODE[:DISK] [--cancel]          # also disables scheduling (Longhorn requires it)
 
@@ -141,7 +143,8 @@ TUI:
 | `ctrl+r` | reload panel (details) or reload volumes (poll mode) |
 | `c` | switch kubeconfig context |
 | `W` | write mode on/off (red **RW** badge; or start with `lhtx --rw`) |
-| `S` `B` `R` | snapshot · backup · replica count (volume list / details) |
+| `S` `B` `R` `U` | snapshot · backup · replica count · engine image (volume list / details) |
+| `space`, `ctrl+a` | volume list: select volumes / all filtered ones (`esc` clears); `S` `B` `R` `U` then act on all selected |
 | `X`, `[` `]` | delete replica (selected with `[` `]` in details, or in the disk view) |
 | `D` | delete snapshot (snapshots panel); `B` there backs up the selected snapshot |
 | `C` `E` | replica scheduling / eviction on/off (nodes view, node or disk row) |

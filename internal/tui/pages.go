@@ -72,6 +72,8 @@ func (m *model) rowsFor(p *page) []row {
 		rows = m.healthRows()
 	case pDrain:
 		rows = m.drainRows(p)
+	case pOrphans:
+		rows = m.orphanRows()
 	default:
 		return nil
 	}
@@ -127,6 +129,8 @@ func (m *model) colsFor(p *page) []col {
 		return m.panelCols(p)
 	case pSettings:
 		return []col{{"NAME", 0, 2}, {"VALUE", 0, 3}}
+	case pOrphans:
+		return []col{{"NODE", 12, 0}, {"TYPE", 9, 0}, {"DISK", 0, 1}, {"DATA DIR", 0, 2}, {"VOLUME", 0, 2}, {"AGE", 6, 0}, {"CLEANABLE", 9, 0}}
 	case pHealth, pDrain:
 		return []col{{"SEVERITY", 11, 0}, {"CHECK", 15, 0}, {"OBJECT", 0, 2}, {"MESSAGE", 0, 5}}
 	}
@@ -155,6 +159,9 @@ func (m *model) viewPage(p *page) string {
 		}
 		b.WriteString(t + "\n")
 		b.WriteString(sDim.Render(" "+strings.Repeat("─", max(m.width-2, 0))) + "\n")
+	case pOrphans:
+		b.WriteString(m.orphansTitle() + "\n")
+		b.WriteString(sDim.Render(" "+strings.Repeat("─", max(m.width-2, 0))) + "\n")
 	case pDrain:
 		b.WriteString(m.drainTitle(p) + "\n")
 		b.WriteString(sDim.Render(" "+strings.Repeat("─", max(m.width-2, 0))) + "\n")
@@ -173,6 +180,7 @@ func (m *model) viewPage(p *page) string {
 		pSettings: "no settings loaded",
 		pHealth:   "✔ nothing to report",
 		pDrain:    "✔ no volume is affected",
+		pOrphans:  "✔ no orphans",
 	}[p.kind]
 	b.WriteString(m.renderList(p, m.colsFor(p), m.rowsFor(p), empty))
 	return b.String()

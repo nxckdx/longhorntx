@@ -30,6 +30,8 @@ type modal struct {
 
 	// composite "snapshot + backup" (not a single request)
 	backupVol *longhorn.Volume
+	// several independent actions confirmed at once (e.g. orphans)
+	batch []*longhorn.Action
 
 	// prompt
 	label    string
@@ -87,6 +89,32 @@ func (m *model) actionKey(p *page, key string) (tea.Cmd, bool) {
 			m.setFlash("write mode ON – actions ask for confirmation", false)
 		} else {
 			m.setFlash("write mode off", false)
+		}
+		return nil, true
+	}
+	if p.kind == pOrphans && (key == "X" || key == "ctrl+x") {
+		if !m.requireRW() {
+			return nil, true
+		}
+		ovs := m.orphanViews()
+		if key == "ctrl+x" {
+			var acts []*longhorn.Action
+			for _, ov := range ovs {
+				if !ov.Cleanable || ov.InUse {
+					continue
+				}
+				if a, err := longhorn.DeleteOrphan(ov); err == nil {
+					acts = append(acts, a)
+				}
+			}
+			m.confirmBatch(fmt.Sprintf("Delete %d cleanable orphans (data directories on the nodes)", len(acts)), acts)
+			return nil, true
+		}
+		rows := m.rowsFor(p)
+		if p.cursor < len(rows) {
+			if ov, ok := rows[p.cursor].ref.(longhorn.OrphanView); ok {
+				m.confirm(longhorn.DeleteOrphan(ov))
+			}
 		}
 		return nil, true
 	}
@@ -276,6 +304,9 @@ func (m *model) modalKey(k tea.KeyPressMsg) tea.Cmd {
 		m.setFlash("cancelled", false)
 	case "d":
 		m.modal = &modal{kind: modalBusy, busyText: "server dry run …"}
+		if md.batch != nil {
+			return m.runBatch(md.batch, a.Title, longhorn.DryRunServer)
+		}
 		return m.runAction(a, longhorn.DryRunServer)
 	case "y", "Y":
 		if a.Destructive && key != "Y" {
@@ -292,9 +323,55 @@ func (m *model) modalKey(k tea.KeyPressMsg) tea.Cmd {
 			}
 		}
 		m.modal = &modal{kind: modalBusy, busyText: "applying …"}
+		if md.batch != nil {
+			return m.runBatch(md.batch, a.Title, longhorn.DryRunNone)
+		}
 		return m.runAction(a, longhorn.DryRunNone)
 	}
 	return nil
+}
+
+// confirmBatch shows one dialog for several actions. The summary action
+// carries title, warnings and the destructive flag; its preview lists the
+// individual requests.
+func (m *model) confirmBatch(title string, acts []*longhorn.Action) {
+	if len(acts) == 0 {
+		m.setFlash("nothing to do", true)
+		return
+	}
+	if len(acts) == 1 {
+		m.modal = &modal{kind: modalConfirm, action: acts[0]}
+		return
+	}
+	sum := &longhorn.Action{Title: title, Destructive: true, Verb: longhorn.VerbDelete, GVR: acts[0].GVR, Name: fmt.Sprintf("%d objects", len(acts))}
+	seen := map[string]bool{}
+	for _, a := range acts {
+		for _, w := range a.Warnings {
+			if !seen[w] {
+				seen[w] = true
+				sum.Warnings = append(sum.Warnings, w)
+			}
+		}
+		sum.Lines = append(sum.Lines, a.Summary())
+	}
+	m.modal = &modal{kind: modalConfirm, action: sum, batch: acts}
+}
+
+func (m *model) runBatch(acts []*longhorn.Action, title string, mode longhorn.DryRun) tea.Cmd {
+	c, ctx := m.client, m.ctx
+	return func() tea.Msg {
+		var failed []string
+		for _, a := range acts {
+			if err := c.Apply(ctx, a, mode); err != nil {
+				failed = append(failed, a.Name+": "+err.Error())
+			}
+		}
+		var err error
+		if len(failed) > 0 {
+			err = fmt.Errorf("%d of %d failed – %s", len(failed), len(acts), failed[0])
+		}
+		return actionDoneMsg{title: fmt.Sprintf("%s (%d)", title, len(acts)-len(failed)), dry: mode == longhorn.DryRunServer, err: err}
+	}
 }
 
 func (m *model) runAction(a *longhorn.Action, mode longhorn.DryRun) tea.Cmd {
@@ -390,7 +467,7 @@ func (m *model) viewModal(bodyHeight int) string {
 			lines = append(lines[:maxLines], "  …")
 		}
 		for _, l := range lines {
-			b.WriteString(sDim.Render(fit(l, w-4)) + "\n")
+			b.WriteString(sDim.Render(fit(l, w-8)) + "\n")
 		}
 		if len(a.Warnings) > 0 {
 			b.WriteString("\n")

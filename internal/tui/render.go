@@ -65,6 +65,13 @@ func (m *model) viewHeader() string {
 			key   string
 			label string
 		}{{pVolumes, "1", vol}, {pNodes, "2", nodes}, {pActivity, "3", act}, {pSettings, "4", "Settings"}, {pHealth, "5", m.healthBadge()}}
+		if len(m.orphans) > 0 {
+			tabs = append(tabs, struct {
+				k     pageKind
+				key   string
+				label string
+			}{pOrphans, "6", fg(cWarn, fmt.Sprintf("Orphans %d", len(m.orphans)))})
+		}
 		for _, t := range tabs {
 			if t.k == root {
 				l += " " + sTabActive.Render(t.key+" "+t.label)
@@ -122,6 +129,10 @@ func (m *model) viewFooter() string {
 		}
 	case m.rw && p.kind == pNodes:
 		keys = [][2]string{{"C", "scheduling on/off"}, {"E", "evict on/off"}, {"i", "drain check"}, {"enter", "open"}, {"W", "write mode off"}}
+	case p.kind == pOrphans && m.rw:
+		keys = [][2]string{{"X", "delete"}, {"ctrl+x", "delete all cleanable"}, {"enter", "open volume"}, {"/", "filter"}, {"W", "write mode off"}}
+	case p.kind == pOrphans:
+		keys = [][2]string{{"enter", "open volume"}, {"/", "filter"}, {"W", "write mode"}, {"1-6", "views"}, {"?", "help"}}
 	case p.kind == pNodes:
 		keys = [][2]string{{"enter", "open"}, {"i", "drain check"}, {"/", "filter"}, {"1-5", "views"}, {"c", "context"}, {"?", "help"}, {"q", "quit"}}
 	case !m.rw && p.kind == pVolumes:
@@ -368,6 +379,7 @@ func (m *model) viewHelp() string {
 
  Views
    1  Volumes   2  Nodes → disks → replicas   3  Activity   4  Settings   5  Health
+   6  Orphans (only shown when there are any)
 
  Navigation
    ↑/k ↓/j        move              g/G       top / bottom
@@ -386,6 +398,7 @@ func (m *model) viewHelp() string {
    S snapshot   B backup (snapshot + backup)   R replica count
    X delete replica ([ ] selects in volume details)   D delete snapshot (in panel)
    C scheduling on/off, E eviction on/off (nodes view)   enter edit (settings)
+   X delete orphan, ctrl+x delete all cleanable orphans (orphans tab)
    Every action shows the request first: y apply (Y for destructive ones),
    d server dry run (validated by Longhorn, nothing changed), esc cancel.
 

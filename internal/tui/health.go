@@ -68,6 +68,9 @@ func (m *model) computeFindings() []longhorn.Finding {
 	if x := m.health; x != nil {
 		in.Targets, in.Jobs, in.Orphans, in.Snapshots = x.targets, x.jobs, x.orphans, x.snapshots
 	}
+	if len(m.orphans) > 0 || in.Orphans == 0 {
+		in.Orphans = len(m.orphans) // live from the store
+	}
 	return longhorn.Diagnose(in)
 }
 
@@ -200,4 +203,55 @@ func (m *model) drainTitle(p *page) string {
 		verdict = fg(cWarn, fmt.Sprintf("⚠ %d warning(s)", warn))
 	}
 	return " " + sBold.Render("Drain check "+p.node) + sDim.Render("  what happens if this node goes away · ") + verdict
+}
+
+// ---------------------------------------------------------------- orphans tab (6)
+
+func (m *model) orphanViews() []longhorn.OrphanView { return m.orphans }
+
+func (m *model) orphanRows() []row {
+	rows := make([]row, 0, len(m.orphans))
+	for _, ov := range m.orphans {
+		vol := sDim.Render("deleted")
+		if ov.VolExists {
+			vol = dash(ov.PVC)
+			if ov.PVC == "" {
+				vol = ov.Volume
+			}
+		}
+		clean := fg(cOK, "yes")
+		switch {
+		case ov.InUse:
+			clean = sErr.Render("IN USE")
+		case !ov.Cleanable:
+			clean = fg(cWarn, "no")
+		}
+		r := row{
+			cells: []string{ov.Node, ov.Type, dash(ov.DiskPath), sDim.Render(dash(ov.DataName)), vol, format.Age(ov.Created, time.Now()), clean},
+			ref:   ov,
+		}
+		if ov.VolExists {
+			name := ov.Volume
+			r.open = func() tea.Cmd { return m.openDetail(name) }
+		}
+		rows = append(rows, r)
+	}
+	return rows
+}
+
+func (m *model) orphansTitle() string {
+	cleanable := 0
+	for _, ov := range m.orphans {
+		if ov.Cleanable && !ov.InUse {
+			cleanable++
+		}
+	}
+	t := " " + sBold.Render(fmt.Sprintf("Orphans %d", len(m.orphans))) +
+		sDim.Render(fmt.Sprintf("  data/instances no replica or engine owns · %d cleanable", cleanable))
+	if m.rw {
+		t += sDim.Render(" · X delete · ctrl+x delete all cleanable")
+	} else {
+		t += sDim.Render(" · W: write mode to delete")
+	}
+	return t
 }

@@ -50,6 +50,7 @@ const (
 	pDetail
 	pSettings
 	pHealth
+	pOrphans
 	pDrain
 	pContexts
 	pHelp
@@ -136,6 +137,7 @@ type model struct {
 	health        *healthExtra
 	healthLoading bool
 	fcache        []longhorn.Finding
+	orphans       []longhorn.OrphanView
 	backupLate    map[string]bool // volume -> last backup is late (needs jobs)
 
 	width, height int
@@ -395,6 +397,10 @@ func (m *model) refresh() {
 	m.views = longhorn.Build(m.state)
 	m.nodes = longhorn.BuildNodes(m.state)
 	m.acts = longhorn.BuildActivities(m.views, m.state.Engines, m.store.ActiveBackups())
+	m.orphans = longhorn.BuildOrphans(m.store.Orphans(), m.state.Volumes, m.state.Replicas)
+	if len(m.orphans) == 0 && m.top().kind == pOrphans {
+		m.root(pVolumes) // all cleaned up: the tab disappears
+	}
 	m.fcache = m.computeFindings()
 	m.backupLate = m.computeBackupLate()
 
@@ -550,6 +556,13 @@ func (m *model) handleKey(k tea.KeyPressMsg) tea.Cmd {
 			return m.loadSettings()
 		}
 		return nil
+	case "6":
+		if len(m.orphans) == 0 {
+			m.setFlash("no orphans", false)
+			return nil
+		}
+		m.root(pOrphans)
+		return nil
 	case "i":
 		if p.kind == pNodes || p.kind == pDisk {
 			node := p.node
@@ -701,7 +714,7 @@ func (m *model) listHeight() int {
 		h--
 	}
 	switch p.kind {
-	case pDisk, pActivity, pSettings, pHealth, pDrain:
+	case pDisk, pActivity, pSettings, pHealth, pDrain, pOrphans:
 		h -= 2 // title + rule
 	case pDetail:
 		h -= m.detailTopHeight()

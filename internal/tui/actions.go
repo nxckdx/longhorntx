@@ -22,21 +22,32 @@ const (
 	modalConfirm modalKind = iota
 	modalPrompt
 	modalBusy
+	modalPick
 )
+
+type pickOption struct {
+	label, value string
+	disabled     string // reason, empty if selectable
+}
 
 type modal struct {
 	kind   modalKind
 	action *longhorn.Action
 
-	// composite "snapshot + backup" (not a single request)
-	backupVol *longhorn.Volume
+	// composite "snapshot + backup" (not a single request), one or more volumes
+	backupVols []*longhorn.Volume
 	// several independent actions confirmed at once (e.g. orphans)
 	batch []*longhorn.Action
 
-	// prompt
+	// prompt (onSubmit opens the next dialog itself)
 	label    string
 	input    string
-	onSubmit func(string) (*longhorn.Action, error)
+	onSubmit func(string) error
+
+	// picker
+	options []pickOption
+	pick    int
+	onPick  func(string)
 
 	busyText string
 }
@@ -74,7 +85,7 @@ func (m *model) confirm(a *longhorn.Action, err error) {
 	m.modal = &modal{kind: modalConfirm, action: a}
 }
 
-func (m *model) prompt(label, initial string, submit func(string) (*longhorn.Action, error)) {
+func (m *model) prompt(label, initial string, submit func(string) error) {
 	m.modal = &modal{kind: modalPrompt, label: label, input: initial, onSubmit: submit}
 }
 
@@ -118,7 +129,7 @@ func (m *model) actionKey(p *page, key string) (tea.Cmd, bool) {
 		}
 		return nil, true
 	}
-	if !strings.Contains("SBRXDCE", key) || len(key) != 1 {
+	if !strings.Contains("SBRXDCEU", key) || len(key) != 1 {
 		return nil, false
 	}
 	rows := m.rowsFor(p)
@@ -133,7 +144,7 @@ func (m *model) actionKey(p *page, key string) (tea.Cmd, bool) {
 		if !ok {
 			return nil, false
 		}
-		return m.volumeAction(string(name), key, nil), true
+		return m.volumeAction(m.targetVolumes(string(name), p), key, nil), true
 
 	case pDetail:
 		if key == "D" || (key == "B" && p.panel == panelSnapshots) {
@@ -149,7 +160,7 @@ func (m *model) actionKey(p *page, key string) (tea.Cmd, bool) {
 				return nil, true
 			}
 		}
-		return m.volumeAction(p.vol, key, p), true
+		return m.volumeAction([]string{p.vol}, key, p), true
 
 	case pDisk:
 		if name, ok := ref.(replicaRef); ok && key == "X" {
@@ -189,50 +200,239 @@ func (m *model) actionKey(p *page, key string) (tea.Cmd, bool) {
 	return nil, false
 }
 
-// volumeAction: S snapshot, B backup, R replica count, X delete selected replica.
-func (m *model) volumeAction(vol, key string, detail *page) tea.Cmd {
-	vv := m.findView(vol)
-	if vv == nil || !strings.Contains("SBRX", key) {
+// targetVolumes: the marked volumes (volume list) or just cur.
+func (m *model) targetVolumes(cur string, p *page) []string {
+	if p.kind != pVolumes || len(m.marked) == 0 {
+		return []string{cur}
+	}
+	var out []string
+	for i := range m.views {
+		if m.marked[m.views[i].Name] {
+			out = append(out, m.views[i].Name)
+		}
+	}
+	return out
+}
+
+// volumeAction: S snapshot, B backup, R replica count, U engine image,
+// X delete selected replica (details only). Works on one or many volumes.
+func (m *model) volumeAction(vols []string, key string, detail *page) tea.Cmd {
+	if !strings.Contains("SBRXU", key) {
 		return nil
 	}
-	if !m.requireRW() {
+	var views []*longhorn.VolumeView
+	for _, n := range vols {
+		if vv := m.findView(n); vv != nil {
+			views = append(views, vv)
+		}
+	}
+	if len(views) == 0 || !m.requireRW() {
 		return nil
 	}
-	v := vv.Volume
+	label := dash(views[0].PVC)
+	if label == "-" {
+		label = views[0].Name
+	}
+	if len(views) > 1 {
+		label = fmt.Sprintf("%d volumes", len(views))
+	}
 	switch key {
 	case "S":
-		m.confirm(longhorn.CreateSnapshot(v, ""))
-	case "B":
-		snapA, err := longhorn.CreateSnapshot(v, "")
-		if err == nil {
-			_, err = longhorn.CreateBackup(v, snapA.Name)
+		var acts []*longhorn.Action
+		var skipped []string
+		for _, vv := range views {
+			if a, err := longhorn.CreateSnapshot(vv.Volume, ""); err != nil {
+				skipped = append(skipped, err.Error())
+			} else {
+				acts = append(acts, a)
+			}
 		}
-		if err != nil {
-			m.setFlash(err.Error(), true)
+		m.confirmBatch("Create a snapshot of "+label, acts, skipped)
+	case "B":
+		var bvols []*longhorn.Volume
+		var skipped, lines []string
+		var warns []string
+		for _, vv := range views {
+			snapA, err := longhorn.CreateSnapshot(vv.Volume, "")
+			if err == nil {
+				_, err = longhorn.CreateBackup(vv.Volume, snapA.Name)
+			}
+			if err != nil {
+				skipped = append(skipped, err.Error())
+				continue
+			}
+			bvols = append(bvols, vv.Volume)
+			lines = append(lines, fmt.Sprintf("%-40s → target %q", dash(vv.PVC), vv.Volume.Spec.BackupTargetName))
+			warns = append(warns, snapA.Warnings...)
+		}
+		if len(bvols) == 0 {
+			m.setFlash(firstOr(skipped, "nothing to back up"), true)
 			return nil
 		}
-		m.modal = &modal{kind: modalConfirm, backupVol: v, action: &longhorn.Action{
-			Title: fmt.Sprintf("Back up %s: create a snapshot, wait until ready, then back it up to %q", dash(vv.PVC), v.Spec.BackupTargetName),
-			Verb:  longhorn.VerbCreate, GVR: longhorn.GVRSnapshot, Name: snapA.Name, Object: snapA.Object,
-			Warnings: append(snapA.Warnings, "server dry run checks only the snapshot step"),
-		}}
+		sum := &longhorn.Action{
+			Title: "Back up " + label + ": snapshot, wait until ready, then back up",
+			Verb:  longhorn.VerbCreate, GVR: longhorn.GVRBackup, Name: fmt.Sprintf("%d backup(s)", len(bvols)),
+			Lines: lines, Warnings: append(uniq(warns), skippedWarnings(skipped)...),
+		}
+		m.modal = &modal{kind: modalConfirm, backupVols: bvols, action: sum}
 	case "R":
-		m.prompt(fmt.Sprintf("Number of replicas for %s (now %d)", dash(vv.PVC), v.Spec.NumberOfReplicas),
-			strconv.Itoa(v.Spec.NumberOfReplicas), func(s string) (*longhorn.Action, error) {
-				n, err := strconv.Atoi(strings.TrimSpace(s))
-				if err != nil {
-					return nil, fmt.Errorf("not a number: %q", s)
+		initial := ""
+		if len(views) == 1 {
+			initial = strconv.Itoa(views[0].Volume.Spec.NumberOfReplicas)
+		}
+		m.prompt("Number of replicas for "+label, initial, func(s string) error {
+			n, err := strconv.Atoi(strings.TrimSpace(s))
+			if err != nil {
+				return fmt.Errorf("not a number: %q", s)
+			}
+			var acts []*longhorn.Action
+			var skipped []string
+			for _, vv := range views {
+				if a, err := longhorn.SetReplicaCount(vv.Volume, n); err != nil {
+					skipped = append(skipped, dash(vv.PVC)+": "+err.Error())
+				} else {
+					acts = append(acts, a)
 				}
-				return longhorn.SetReplicaCount(v, n)
-			})
+			}
+			if w := longhorn.ReplicaCountWarning(n, m.state.Nodes); w != "" {
+				for _, a := range acts {
+					a.Warnings = append(a.Warnings, w)
+				}
+			}
+			m.confirmBatch(fmt.Sprintf("Set replica count of %s to %d", label, n), acts, skipped)
+			return nil
+		})
+	case "U":
+		m.modal = &modal{kind: modalBusy, busyText: "loading engine images …"}
+		return m.loadEngineEnv(views)
 	case "X":
-		if detail == nil || len(vv.Replicas) == 0 {
+		if detail == nil || len(views[0].Replicas) == 0 {
 			m.setFlash("open the volume and select a replica with [ and ]", true)
 			return nil
 		}
-		m.deleteReplica(vv.Replicas[min(detail.sel, len(vv.Replicas)-1)].Name)
+		m.deleteReplica(views[0].Replicas[min(detail.sel, len(views[0].Replicas)-1)].Name)
 	}
 	return nil
+}
+
+type engineEnvMsg struct {
+	vols []string
+	env  longhorn.EngineUpgradeEnv
+	err  error
+}
+
+func (m *model) loadEngineEnv(views []*longhorn.VolumeView) tea.Cmd {
+	c, ctx := m.client, m.ctx
+	names := make([]string, len(views))
+	for i, v := range views {
+		names[i] = v.Name
+	}
+	return func() tea.Msg {
+		env, err := c.LoadEngineUpgradeEnv(ctx)
+		return engineEnvMsg{vols: names, env: env, err: err}
+	}
+}
+
+// openEnginePicker lists the engine images; picking one builds the
+// upgrade actions for all target volumes.
+func (m *model) openEnginePicker(msg engineEnvMsg) {
+	m.modal = nil
+	if msg.err != nil {
+		m.setFlash("engine images: "+msg.err.Error(), true)
+		return
+	}
+	current := map[string]int{}
+	for _, n := range msg.vols {
+		if vv := m.findView(n); vv != nil {
+			current[vv.Volume.Spec.Image]++
+		}
+	}
+	var opts []pickOption
+	for _, ei := range msg.env.Images {
+		l := fmt.Sprintf("%-10s %-55s %-10s %3d refs", dash(ei.Status.Version), ei.Spec.Image, ei.Status.State, ei.Status.RefCount)
+		if ei.Spec.Image == msg.env.DefaultImage {
+			l += "  default"
+		}
+		if n := current[ei.Spec.Image]; n > 0 {
+			l += fmt.Sprintf("  ← current (%d)", n)
+		}
+		o := pickOption{label: l, value: ei.Spec.Image}
+		switch {
+		case ei.Status.Incompatible || ei.Status.State == "incompatible":
+			o.disabled = "incompatible with this Longhorn version"
+		case ei.Status.State != "deployed":
+			o.disabled = "engine image is " + ei.Status.State
+		}
+		opts = append(opts, o)
+	}
+	if len(opts) == 0 {
+		m.setFlash("no engine images found", true)
+		return
+	}
+	label := "Engine image for " + plural(len(msg.vols), "volume")
+	if msg.env.AutoLimit > 0 {
+		label += "  (automatic engine upgrade is on: only the default image is allowed)"
+	}
+	m.modal = &modal{kind: modalPick, label: label, options: opts, onPick: func(img string) {
+		var acts []*longhorn.Action
+		var skipped []string
+		for _, n := range msg.vols {
+			vv := m.findView(n)
+			if vv == nil {
+				continue
+			}
+			var reps []*longhorn.Replica
+			for _, r := range m.state.Replicas {
+				if r.Spec.VolumeName == n {
+					reps = append(reps, r)
+				}
+			}
+			if a, err := longhorn.UpgradeEngine(vv.Volume, reps, img, msg.env); err != nil {
+				skipped = append(skipped, err.Error())
+			} else {
+				acts = append(acts, a)
+			}
+		}
+		m.confirmBatch("Upgrade engine of "+plural(len(msg.vols), "volume"), acts, skipped)
+	}}
+}
+
+func plural(n int, what string) string {
+	if n == 1 {
+		return "1 " + what
+	}
+	return fmt.Sprintf("%d %ss", n, what)
+}
+
+func firstOr(s []string, def string) string {
+	if len(s) > 0 {
+		return s[0]
+	}
+	return def
+}
+
+func uniq(s []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, x := range s {
+		if !seen[x] {
+			seen[x] = true
+			out = append(out, x)
+		}
+	}
+	return out
+}
+
+func skippedWarnings(skipped []string) []string {
+	var out []string
+	for i, s := range skipped {
+		if i == 5 {
+			out = append(out, fmt.Sprintf("… %d more skipped", len(skipped)-5))
+			break
+		}
+		out = append(out, "skipped: "+s)
+	}
+	return out
 }
 
 func (m *model) deleteReplica(name string) {
@@ -280,9 +480,10 @@ func (m *model) modalKey(k tea.KeyPressMsg) tea.Cmd {
 		case "esc":
 			m.modal = nil
 		case "enter":
-			a, err := md.onSubmit(md.input)
 			m.modal = nil
-			m.confirm(a, err)
+			if err := md.onSubmit(md.input); err != nil {
+				m.setFlash(err.Error(), true)
+			}
 		case "backspace":
 			if r := []rune(md.input); len(r) > 0 {
 				md.input = string(r[:len(r)-1])
@@ -292,6 +493,27 @@ func (m *model) modalKey(k tea.KeyPressMsg) tea.Cmd {
 		default:
 			if k.Text != "" {
 				md.input += k.Text
+			}
+		}
+		return nil
+	}
+	if md.kind == modalPick {
+		switch key {
+		case "esc", "q":
+			m.modal = nil
+		case "up", "k":
+			md.pick = max(md.pick-1, 0)
+		case "down", "j":
+			md.pick = min(md.pick+1, len(md.options)-1)
+		case "enter":
+			if md.pick < len(md.options) {
+				o := md.options[md.pick]
+				if o.disabled != "" {
+					m.setFlash(o.disabled, true)
+					return nil
+				}
+				m.modal = nil
+				md.onPick(o.value)
 			}
 		}
 		return nil
@@ -313,13 +535,22 @@ func (m *model) modalKey(k tea.KeyPressMsg) tea.Cmd {
 			m.setFlash("destructive action: press capital Y to confirm", true)
 			return nil
 		}
-		if md.backupVol != nil {
-			v := md.backupVol
-			m.modal = &modal{kind: modalBusy, busyText: "creating snapshot, waiting until ready, then starting the backup …"}
+		if len(md.backupVols) > 0 {
+			vols := md.backupVols
+			m.modal = &modal{kind: modalBusy, busyText: fmt.Sprintf("creating snapshots, waiting until ready, then starting %d backup(s) …", len(vols))}
 			c, ctx := m.client, m.ctx
 			return func() tea.Msg {
-				name, err := c.SnapshotAndBackup(ctx, v, func(string) {})
-				return actionDoneMsg{title: "backup " + name + " started (see 3 Activity)", err: err}
+				var failed []string
+				for _, v := range vols {
+					if _, err := c.SnapshotAndBackup(ctx, v, func(string) {}); err != nil {
+						failed = append(failed, v.Name+": "+err.Error())
+					}
+				}
+				var err error
+				if len(failed) > 0 {
+					err = fmt.Errorf("%d of %d failed – %s", len(failed), len(vols), failed[0])
+				}
+				return actionDoneMsg{title: fmt.Sprintf("%d backup(s) started (see 3 Activity)", len(vols)-len(failed)), err: err}
 			}
 		}
 		m.modal = &modal{kind: modalBusy, busyText: "applying …"}
@@ -334,26 +565,27 @@ func (m *model) modalKey(k tea.KeyPressMsg) tea.Cmd {
 // confirmBatch shows one dialog for several actions. The summary action
 // carries title, warnings and the destructive flag; its preview lists the
 // individual requests.
-func (m *model) confirmBatch(title string, acts []*longhorn.Action) {
+func (m *model) confirmBatch(title string, acts []*longhorn.Action, skipped ...[]string) {
+	var skip []string
+	for _, sk := range skipped {
+		skip = append(skip, sk...)
+	}
 	if len(acts) == 0 {
-		m.setFlash("nothing to do", true)
+		m.setFlash(firstOr(skip, "nothing to do"), true)
 		return
 	}
-	if len(acts) == 1 {
+	if len(acts) == 1 && len(skip) == 0 {
 		m.modal = &modal{kind: modalConfirm, action: acts[0]}
 		return
 	}
-	sum := &longhorn.Action{Title: title, Destructive: true, Verb: longhorn.VerbDelete, GVR: acts[0].GVR, Name: fmt.Sprintf("%d objects", len(acts))}
-	seen := map[string]bool{}
+	sum := &longhorn.Action{Title: title, Verb: acts[0].Verb, GVR: acts[0].GVR, Name: fmt.Sprintf("%d objects", len(acts))}
+	var warns []string
 	for _, a := range acts {
-		for _, w := range a.Warnings {
-			if !seen[w] {
-				seen[w] = true
-				sum.Warnings = append(sum.Warnings, w)
-			}
-		}
+		sum.Destructive = sum.Destructive || a.Destructive
+		warns = append(warns, a.Warnings...)
 		sum.Lines = append(sum.Lines, a.Summary())
 	}
+	sum.Warnings = append(uniq(warns), skippedWarnings(skip)...)
 	m.modal = &modal{kind: modalConfirm, action: sum, batch: acts}
 }
 
@@ -430,8 +662,9 @@ func (m *model) settingsRows() []row {
 				if !m.requireRW() {
 					return nil
 				}
-				m.prompt("New value for "+s.Name, s.Value, func(v string) (*longhorn.Action, error) {
-					return longhorn.SetSetting(s, v)
+				m.prompt("New value for "+s.Name, s.Value, func(v string) error {
+					m.confirm(longhorn.SetSetting(s, v))
+					return nil
 				})
 				return nil
 			},
@@ -449,6 +682,23 @@ func (m *model) viewModal(bodyHeight int) string {
 	switch md.kind {
 	case modalBusy:
 		b.WriteString(fg(cInfo, spinner(time.Since(m.flashAt))+" "+md.busyText))
+	case modalPick:
+		b.WriteString(sBold.Render(md.label) + "\n\n")
+		for i, o := range md.options {
+			l := fit(o.label, w-10)
+			switch {
+			case o.disabled != "":
+				l = sDim.Render(l + "  (" + o.disabled + ")")
+			case i == md.pick:
+				l = sKey.Render(l)
+			}
+			mark := "  "
+			if i == md.pick {
+				mark = sKey.Render("▶ ")
+			}
+			b.WriteString(mark + l + "\n")
+		}
+		b.WriteString("\n" + sDim.Render("[↑↓] select  [enter] continue  [esc] cancel"))
 	case modalPrompt:
 		b.WriteString(sBold.Render(md.label) + "\n\n")
 		b.WriteString("> " + md.input + "█\n\n")

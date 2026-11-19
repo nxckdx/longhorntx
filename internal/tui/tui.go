@@ -102,7 +102,8 @@ type model struct {
 	acts  []longhorn.Activity
 
 	// navigation
-	problemsFirst bool // volume list: faulted/degraded/active first
+	problemsFirst bool            // volume list: faulted/degraded/active first
+	marked        map[string]bool // volume list: multi-selection (volume names)
 	stack         []*page
 	filter        string
 	filtering     bool
@@ -280,6 +281,7 @@ func (m *model) switchContext(name string) tea.Cmd {
 	m.shown = map[string]float64{}
 	m.rates = longhorn.NewRateTracker()
 	m.modal, m.settings, m.settingsErr = nil, nil, nil
+	m.marked = nil
 	m.health, m.healthLoading, m.fcache = nil, false, nil
 	return connect(m.ctx, m.opts, name)
 }
@@ -364,6 +366,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case actionDoneMsg:
 		return m, m.applyActionDone(msg)
 
+	case engineEnvMsg:
+		m.openEnginePicker(msg)
+		return m, nil
+
 	case healthMsg:
 		if msg.client != m.client {
 			return m, nil
@@ -403,6 +409,11 @@ func (m *model) refresh() {
 	}
 	m.fcache = m.computeFindings()
 	m.backupLate = m.computeBackupLate()
+	for name := range m.marked {
+		if m.findView(name) == nil {
+			delete(m.marked, name)
+		}
+	}
 
 	now := time.Now()
 	keep := map[string]bool{}
@@ -521,6 +532,44 @@ func (m *model) handleKey(k tea.KeyPressMsg) tea.Cmd {
 
 	if cmd, ok := m.actionKey(p, key); ok {
 		return cmd
+	}
+	if p.kind == pVolumes {
+		switch key {
+		case "space":
+			rows := m.rowsFor(p)
+			if p.cursor < len(rows) {
+				if name, ok := rows[p.cursor].ref.(volRef); ok {
+					m.toggleMark(string(name))
+				}
+				p.cursor = min(p.cursor+1, len(rows)-1)
+				m.clamp()
+			}
+			return nil
+		case "ctrl+a":
+			rows := m.rowsFor(p) // the filtered rows
+			all := true
+			for _, r := range rows {
+				if name, ok := r.ref.(volRef); ok && !m.marked[string(name)] {
+					all = false
+				}
+			}
+			for _, r := range rows {
+				if name, ok := r.ref.(volRef); ok {
+					if all {
+						delete(m.marked, string(name))
+					} else {
+						m.setMark(string(name))
+					}
+				}
+			}
+			return nil
+		case "esc":
+			if m.filter == "" && len(m.marked) > 0 {
+				m.marked = nil
+				m.setFlash("selection cleared", false)
+				return nil
+			}
+		}
 	}
 
 	// global keys
@@ -779,4 +828,19 @@ func (m *model) ctxLabel() string {
 		return "(current context)"
 	}
 	return m.kctx
+}
+
+func (m *model) setMark(vol string) {
+	if m.marked == nil {
+		m.marked = map[string]bool{}
+	}
+	m.marked[vol] = true
+}
+
+func (m *model) toggleMark(vol string) {
+	if m.marked[vol] {
+		delete(m.marked, vol)
+		return
+	}
+	m.setMark(vol)
 }

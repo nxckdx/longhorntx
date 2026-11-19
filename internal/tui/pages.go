@@ -111,7 +111,7 @@ func (m *model) rowsFor(p *page) []row {
 func (m *model) colsFor(p *page) []col {
 	switch p.kind {
 	case pVolumes:
-		return []col{{"PVC", 0, 3}, {"STATE", 9, 0}, {"ROBUSTNESS", 10, 0}, {"REPL", 5, 0},
+		return []col{{"", 1, 0}, {"PVC", 0, 3}, {"STATE", 9, 0}, {"ROBUSTNESS", 10, 0}, {"REPL", 5, 0},
 			{"SIZE", 9, 0}, {"ACTUAL", 9, 0}, {"NODE", 12, 0}, {"ACTIVITY", 21, 0}, {"BACKUP", 7, 0}, {"VOLUME", 0, 2}}
 	case pNodes:
 		return []col{{"NODE / DISK", 0, 1}, {"STATUS", 14, 0}, {"USED", 25, 0}, {"SIZE", 10, 0},
@@ -281,6 +281,7 @@ func (m *model) volumeRows() []row {
 		name := v.Name
 		rows = append(rows, row{
 			cells: []string{
+				m.markCell(v.Name),
 				dash(v.PVC),
 				fg(stateColor(v.State), v.State),
 				fg(robustnessColor(v.Health), v.Health),
@@ -563,4 +564,11 @@ func (m *model) backupCell(v *longhorn.VolumeView) string {
 		return fg(cErr, age)
 	}
 	return sDim.Render(age)
+}
+
+func (m *model) markCell(vol string) string {
+	if m.marked[vol] {
+		return sKey.Render("✓")
+	}
+	return " "
 }

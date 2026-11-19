@@ -73,3 +73,34 @@ func TestCronPeriod(t *testing.T) {
 		}
 	}
 }
+
+func TestBackupOverview(t *testing.T) {
+	now := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
+	vol := func(name, last string, grp bool) *Volume {
+		v := &Volume{}
+		v.Name, v.Status.LastBackupAt = name, last
+		if grp {
+			v.Labels = map[string]string{"recurring-job-group.longhorn.io/default": "enabled"}
+		}
+		return v
+	}
+	job := &RecurringJob{}
+	job.Name, job.Spec.Task, job.Spec.Cron, job.Spec.Groups = "daily", "backup", "0 1 * * *", []string{"default"}
+	vols := []*Volume{vol("ok", "2026-11-19T01:00:00Z", true), vol("late", "2026-11-16T01:00:00Z", true),
+		vol("never", "", true), vol("nojob", "2026-11-10T01:00:00Z", false)}
+	got := map[string]string{}
+	for _, b := range BackupOverview(vols, []*RecurringJob{job}, now, 0) {
+		got[b.Volume] = b.Status
+	}
+	want := map[string]string{"ok": "ok", "late": "late", "never": "never", "nojob": "unchecked"}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s: %s, want %s", k, got[k], v)
+		}
+	}
+	for _, b := range BackupOverview(vols, nil, now, 36*time.Hour) {
+		if b.Volume == "nojob" && b.Status != "late" {
+			t.Errorf("max-age: %s", b.Status)
+		}
+	}
+}

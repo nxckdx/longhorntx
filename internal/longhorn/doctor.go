@@ -264,40 +264,78 @@ func removalText(n int, purging bool) string {
 	return strings.Join(p, " and ")
 }
 
-// backupAgeFindings compares volume.status.lastBackupAt with the schedule of
-// the backup jobs that apply to the volume (or BackupMaxAge).
-func backupAgeFindings(in DoctorInput, views []VolumeView) []Finding {
-	var f []Finding
-	for i := range views {
-		v := &views[i]
-		if v.Volume.Status.State == "" {
-			continue
-		}
-		var maxAge time.Duration
-		var jobName string
-		for _, j := range VolumeRecurringJobs(v.Volume, in.Jobs) {
+// BackupStatus is the backup state of one volume.
+type BackupStatus struct {
+	Volume   string        `json:"volume"`
+	PVC      string        `json:"pvc,omitempty"`
+	Last     string        `json:"lastBackupAt,omitempty"`
+	Age      time.Duration `json:"ageNs,omitempty"`
+	Job      string        `json:"job,omitempty"`        // backup job that applies, or "--backup-max-age"
+	Interval time.Duration `json:"intervalNs,omitempty"` // schedule interval of the job
+	MaxAge   time.Duration `json:"maxAgeNs,omitempty"`
+	Status   string        `json:"status"` // ok | late | never | unchecked
+}
+
+// BackupOverview evaluates every volume: the expected maximum age is twice
+// the interval of the most frequent backup job that applies (+1h slack), or
+// maxAge for volumes without such a job (0: unchecked).
+func BackupOverview(vols []*Volume, jobs []*RecurringJob, now time.Time, maxAge time.Duration) []BackupStatus {
+	out := make([]BackupStatus, 0, len(vols))
+	for _, v := range vols {
+		bs := BackupStatus{Volume: v.Name, PVC: v.PVC(), Last: v.Status.LastBackupAt}
+		for _, j := range VolumeRecurringJobs(v, jobs) {
 			if j.Spec.Task != "backup" && j.Spec.Task != "backup-force-create" {
 				continue
 			}
-			if p, ok := cronPeriod(j.Spec.Cron, in.Now); ok && (maxAge == 0 || 2*p < maxAge) {
-				maxAge, jobName = 2*p+time.Hour, j.Name
+			if p, ok := cronPeriod(j.Spec.Cron, now); ok && (bs.Interval == 0 || p < bs.Interval) {
+				bs.Interval, bs.Job = p, j.Name
 			}
 		}
-		source := "job " + jobName
-		if maxAge == 0 {
-			if in.BackupMaxAge == 0 {
-				continue
-			}
-			maxAge, source = in.BackupMaxAge, "--backup-max-age"
-		}
-		last, ok := parseTime(v.Volume.Status.LastBackupAt)
-		obj := volObj(v)
 		switch {
+		case bs.Interval > 0:
+			bs.MaxAge = 2*bs.Interval + time.Hour
+		case maxAge > 0:
+			bs.MaxAge, bs.Job = maxAge, "--backup-max-age"
+		}
+		last, ok := parseTime(v.Status.LastBackupAt)
+		if ok {
+			bs.Age = now.Sub(last)
+		}
+		switch {
+		case bs.MaxAge == 0:
+			bs.Status = "unchecked"
 		case !ok:
-			f = append(f, Finding{SevWarning, "backup-age", obj, "never backed up (expected by " + source + ")", ""})
-		case in.Now.Sub(last) > maxAge:
+			bs.Status = "never"
+		case bs.Age > bs.MaxAge:
+			bs.Status = "late"
+		default:
+			bs.Status = "ok"
+		}
+		out = append(out, bs)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		if a.PVC != b.PVC {
+			return a.PVC < b.PVC
+		}
+		return a.Volume < b.Volume
+	})
+	return out
+}
+
+func backupAgeFindings(in DoctorInput, views []VolumeView) []Finding {
+	var f []Finding
+	for _, bs := range BackupOverview(in.Volumes, in.Jobs, in.Now, in.BackupMaxAge) {
+		obj := bs.PVC
+		if obj == "" {
+			obj = bs.Volume
+		}
+		switch bs.Status {
+		case "never":
+			f = append(f, Finding{SevWarning, "backup-age", obj, "never backed up (expected by " + bs.Job + ")", ""})
+		case "late":
 			f = append(f, Finding{SevWarning, "backup-age", obj,
-				fmt.Sprintf("last backup %s ago, expected within %s (%s)", roundDur(in.Now.Sub(last)), roundDur(maxAge), source),
+				fmt.Sprintf("last backup %s ago, expected within %s (%s)", roundDur(bs.Age), roundDur(bs.MaxAge), bs.Job),
 				"check the recurring job and the backup target"})
 		}
 	}

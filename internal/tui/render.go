@@ -64,7 +64,7 @@ func (m *model) viewHeader() string {
 			k     pageKind
 			key   string
 			label string
-		}{{pVolumes, "1", vol}, {pNodes, "2", nodes}, {pActivity, "3", act}, {pSettings, "4", "Settings"}}
+		}{{pVolumes, "1", vol}, {pNodes, "2", nodes}, {pActivity, "3", act}, {pSettings, "4", "Settings"}, {pHealth, "5", m.healthBadge()}}
 		for _, t := range tabs {
 			if t.k == root {
 				l += " " + sTabActive.Render(t.key+" "+t.label)
@@ -127,7 +127,7 @@ func (m *model) viewFooter() string {
 	case m.rw && p.kind == pDisk:
 		keys = [][2]string{{"X", "delete replica"}, {"enter", "open"}, {"esc", "back"}, {"W", "write mode off"}}
 	default:
-		keys = [][2]string{{"enter", "open"}, {"/", "filter"}, {"1-3", "views"}, {"c", "context"}, {"?", "help"}}
+		keys = [][2]string{{"enter", "open"}, {"/", "filter"}, {"1-5", "views"}, {"c", "context"}, {"?", "help"}}
 		if len(m.stack) > 1 {
 			keys = append(keys, [2]string{"esc", "back"})
 		} else {
@@ -359,7 +359,7 @@ func (m *model) viewHelp() string {
  lhtx – low-traffic Longhorn TUI (read-only)
 
  Views
-   1  Volumes   2  Nodes → disks → replicas   3  Activity   4  Settings
+   1  Volumes   2  Nodes → disks → replicas   3  Activity   4  Settings   5  Health
 
  Navigation
    ↑/k ↓/j        move              g/G       top / bottom

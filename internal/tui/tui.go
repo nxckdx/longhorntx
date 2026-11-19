@@ -49,6 +49,7 @@ const (
 	pDisk
 	pDetail
 	pSettings
+	pHealth
 	pContexts
 	pHelp
 )
@@ -128,6 +129,11 @@ type model struct {
 	settings        []*longhorn.Setting
 	settingsLoading bool
 	settingsErr     error
+
+	// health tab extras (loaded on demand)
+	health        *healthExtra
+	healthLoading bool
+	fcache        []longhorn.Finding
 
 	width, height int
 }
@@ -269,6 +275,7 @@ func (m *model) switchContext(name string) tea.Cmd {
 	m.shown = map[string]float64{}
 	m.rates = longhorn.NewRateTracker()
 	m.modal, m.settings, m.settingsErr = nil, nil, nil
+	m.health, m.healthLoading, m.fcache = nil, false, nil
 	return connect(m.ctx, m.opts, name)
 }
 
@@ -352,6 +359,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case actionDoneMsg:
 		return m, m.applyActionDone(msg)
 
+	case healthMsg:
+		if msg.client != m.client {
+			return m, nil
+		}
+		m.healthLoading, m.health = false, msg.extra
+		m.fcache = m.computeFindings()
+		m.clamp()
+		return m, nil
+
 	case settingsMsg:
 		if msg.client != m.client {
 			return m, nil
@@ -375,6 +391,7 @@ func (m *model) refresh() {
 	m.views = longhorn.Build(m.state)
 	m.nodes = longhorn.BuildNodes(m.state)
 	m.acts = longhorn.BuildActivities(m.views, m.state.Engines, m.store.ActiveBackups())
+	m.fcache = m.computeFindings()
 
 	now := time.Now()
 	keep := map[string]bool{}
@@ -528,6 +545,12 @@ func (m *model) handleKey(k tea.KeyPressMsg) tea.Cmd {
 			return m.loadSettings()
 		}
 		return nil
+	case "5":
+		m.root(pHealth)
+		if m.health == nil && !m.healthLoading && m.store != nil && m.store.AllSynced() {
+			return m.loadHealth()
+		}
+		return nil
 	case "c":
 		names, _, err := m.opts.Kube.Contexts()
 		if err != nil {
@@ -566,6 +589,9 @@ func (m *model) handleKey(k tea.KeyPressMsg) tea.Cmd {
 	}
 	if p.kind == pSettings && key == "ctrl+r" {
 		return m.loadSettings()
+	}
+	if p.kind == pHealth && key == "ctrl+r" {
+		return m.loadHealth()
 	}
 	if key == "ctrl+r" && m.store != nil && p.kind != pDetail {
 		if m.store.RefreshInterval() > 0 {
@@ -643,7 +669,7 @@ func (m *model) listHeight() int {
 		h--
 	}
 	switch p.kind {
-	case pDisk, pActivity, pSettings:
+	case pDisk, pActivity, pSettings, pHealth:
 		h -= 2 // title + rule
 	case pDetail:
 		h -= m.detailTopHeight()

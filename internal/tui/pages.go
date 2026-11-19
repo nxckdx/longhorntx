@@ -65,6 +65,8 @@ func (m *model) rowsFor(p *page) []row {
 		rows = m.panelRows(p)
 	case pSettings:
 		rows = m.settingsRows()
+	case pHealth:
+		rows = m.healthRows()
 	default:
 		return nil
 	}
@@ -102,6 +104,8 @@ func (m *model) colsFor(p *page) []col {
 		return m.panelCols(p)
 	case pSettings:
 		return []col{{"NAME", 0, 2}, {"VALUE", 0, 3}}
+	case pHealth:
+		return []col{{"SEVERITY", 11, 0}, {"CHECK", 15, 0}, {"OBJECT", 0, 2}, {"MESSAGE", 0, 5}}
 	}
 	return nil
 }
@@ -128,6 +132,9 @@ func (m *model) viewPage(p *page) string {
 		}
 		b.WriteString(t + "\n")
 		b.WriteString(sDim.Render(" "+strings.Repeat("─", max(m.width-2, 0))) + "\n")
+	case pHealth:
+		b.WriteString(m.healthTitle() + "\n")
+		b.WriteString(sDim.Render(" "+strings.Repeat("─", max(m.width-2, 0))) + "\n")
 	case pActivity:
 		b.WriteString(" " + sBold.Render("Activity") + sDim.Render("  rebuilds, purges, restores, clones · backups since lhtx started (finished ones stay 2 min)") + "\n")
 		b.WriteString(sDim.Render(" "+strings.Repeat("─", max(m.width-2, 0))) + "\n")
@@ -138,6 +145,7 @@ func (m *model) viewPage(p *page) string {
 		pDisk:     "no replicas on this disk",
 		pActivity: "nothing running – rebuilds, purges and backups appear here live",
 		pSettings: "no settings loaded",
+		pHealth:   "✔ nothing to report",
 	}[p.kind]
 	b.WriteString(m.renderList(p, m.colsFor(p), m.rowsFor(p), empty))
 	return b.String()

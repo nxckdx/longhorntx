@@ -94,7 +94,7 @@ Without a subcommand it starts the interactive TUI.`,
 
 	root.AddCommand(
 		volumesCmd(g), replicasCmd(g), nodesCmd(g), diskCmd(g), rebuildsCmd(g),
-		snapshotsCmd(g), backupsCmd(g), eventsCmd(g), jobsCmd(g), settingsCmd(g), targetsCmd(g), orphansCmd(g),
+		snapshotsCmd(g), backupsCmd(g), eventsCmd(g), jobsCmd(g), settingsCmd(g), targetsCmd(g), orphansCmd(g), engineImagesCmd(g),
 		measureCmd(g), doctorCmd(g), drainCheckCmd(g), diagCmd(g), contextsCmd(g),
 	)
 	root.AddCommand(writeCmds(g)...)

@@ -416,3 +416,51 @@ func loadOrphans(ctx context.Context, c *longhorn.Client) ([]longhorn.OrphanView
 	}
 	return longhorn.BuildOrphans(ors, vols, reps), nil
 }
+
+func engineImagesCmd(g *globals) *cobra.Command {
+	return &cobra.Command{
+		Use:     "engineimages",
+		Aliases: []string{"engineimage", "ei"},
+		Short:   "List engine images with state and how many volumes use them",
+		Args:    cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := g.checkOutput(); err != nil {
+				return err
+			}
+			c, err := g.client()
+			if err != nil {
+				return err
+			}
+			defer g.reportTraffic(c)
+			env, err := c.LoadEngineUpgradeEnv(cmd.Context())
+			if err != nil {
+				return err
+			}
+			if g.output == "json" {
+				return writeJSON(os.Stdout, env)
+			}
+			w := newTab(os.Stdout)
+			fmt.Fprintln(w, "VERSION\tIMAGE\tSTATE\tREFS\tNODES\tDEFAULT")
+			for _, ei := range env.Images {
+				ready := 0
+				for _, ok := range ei.Status.NodeDeploymentMap {
+					if ok {
+						ready++
+					}
+				}
+				def := ""
+				if ei.Spec.Image == env.DefaultImage {
+					def = "yes"
+				}
+				fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%d/%d\t%s\n", dash(ei.Status.Version), ei.Spec.Image, ei.Status.State, ei.Status.RefCount, ready, len(ei.Status.NodeDeploymentMap), def)
+			}
+			if err := w.Flush(); err != nil {
+				return err
+			}
+			if env.AutoLimit > 0 {
+				fmt.Printf("\nautomatic engine upgrade is on (%d per node): volumes move to the default image by themselves\n", env.AutoLimit)
+			}
+			return nil
+		},
+	}
+}

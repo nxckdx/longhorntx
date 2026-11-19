@@ -355,6 +355,11 @@ func setCmd(g *globals) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if nodes, err := c.Nodes(cmd.Context()); err == nil {
+				if w := longhorn.ReplicaCountWarning(n, nodes); w != "" {
+					a.Warnings = append(a.Warnings, w)
+				}
+			}
 			return g.runAction(cmd.Context(), c, a)
 		},
 	}
@@ -426,9 +431,66 @@ DISK may be the disk name (disk-1) or its path (/var/lib/longhorn).`,
 	return cmd
 }
 
+func upgradeEngineCmd(g *globals) *cobra.Command {
+	var image string
+	cmd := &cobra.Command{
+		Use:   "upgrade-engine VOLUME... --image IMAGE",
+		Short: "Switch volumes to another engine image (needs --rw)",
+		Long: `Switch one or more volumes to another engine image, like "Upgrade Engine" in
+the web UI. Same checks as Longhorn's API: image deployed on all involved
+nodes and compatible, no upgrade in progress (except a rollback), live
+upgrade only for healthy, non-strict-local volumes, only the default image
+while automatic engine upgrade is enabled. See lhtx engineimages.`,
+		Args:              cobra.MinimumNArgs(1),
+		ValidArgsFunction: g.completeVolumes,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if image == "" {
+				return fmt.Errorf("--image is required (see lhtx engineimages)")
+			}
+			ctx := cmd.Context()
+			c, err := g.client()
+			if err != nil {
+				return err
+			}
+			env, err := c.LoadEngineUpgradeEnv(ctx)
+			if err != nil {
+				return err
+			}
+			// accept a version ("v1.12.1") as well as the full image
+			for _, ei := range env.Images {
+				if ei.Status.Version == image {
+					image = ei.Spec.Image
+				}
+			}
+			var acts []*longhorn.Action
+			for _, ref := range args {
+				v, err := resolveVolume(ctx, c, ref)
+				if err != nil {
+					return err
+				}
+				reps, err := c.Replicas(ctx, v.Name)
+				if err != nil {
+					return err
+				}
+				a, err := longhorn.UpgradeEngine(v, reps, image, env)
+				if err != nil {
+					return err
+				}
+				acts = append(acts, a)
+			}
+			if len(acts) == 1 {
+				return g.runAction(ctx, c, acts[0])
+			}
+			return g.runBatch(ctx, c, fmt.Sprintf("Upgrade engine of %d volumes", len(acts)), acts)
+		},
+	}
+	cmd.Flags().StringVar(&image, "image", "", "engine image or its version (e.g. v1.12.1)")
+	return cmd
+}
+
 func writeCmds(g *globals) []*cobra.Command {
 	return []*cobra.Command{
-		createCmd(g), deleteCmd(g), setCmd(g),
+		createCmd(g), deleteCmd(g), setCmd(g), upgradeEngineCmd(g),
 		nodeDiskCmd(g, "cordon", "Disable replica scheduling on a node or disk (needs --rw)",
 			func(n *longhorn.Node, d string, _ bool) (*longhorn.Action, error) {
 				return longhorn.SetScheduling(n, d, false)

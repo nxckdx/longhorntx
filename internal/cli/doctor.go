@@ -174,3 +174,84 @@ func printFindings(ctxName string, vols, nodes int, all, shown []longhorn.Findin
 		}
 	}
 }
+
+func drainCheckCmd(g *globals) *cobra.Command {
+	var minSev string
+	cmd := &cobra.Command{
+		Use:     "drain-check NODE",
+		Aliases: []string{"drain"},
+		Short:   "What happens to volumes if NODE goes away (reboot, drain, replacement)",
+		Long: `Read-only check before node maintenance: volumes that lose their last
+healthy replica (critical), are left with a single healthy replica or have a
+rebuild running elsewhere (warning), and volumes attached on the node (info).
+Also shows Longhorn's node-drain-policy setting.
+
+Exit codes like doctor: 0 ok, 1 warning, 2 critical, 3 error.`,
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: g.completeNodeDisk,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			err := runDrainCheck(cmd, g, strings.SplitN(args[0], ":", 2)[0], minSev)
+			var ee exitError
+			if err != nil && !errors.As(err, &ee) {
+				fmt.Fprintln(os.Stderr, "error:", err)
+				return exitError{3}
+			}
+			return err
+		},
+	}
+	cmd.Flags().StringVar(&minSev, "min", "info", "lowest severity to show: info|warning|critical")
+	_ = cmd.RegisterFlagCompletionFunc("min", cobra.FixedCompletions([]string{"info", "warning", "critical"}, cobra.ShellCompDirectiveNoFileComp))
+	return cmd
+}
+
+func filterSeverity(fs []longhorn.Finding, floor longhorn.Severity) []longhorn.Finding {
+	var out []longhorn.Finding
+	for _, f := range fs {
+		if f.Severity >= floor {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+func runDrainCheck(cmd *cobra.Command, g *globals, node, minSev string) error {
+	if err := g.checkOutput(); err != nil {
+		return err
+	}
+	floor, err := parseSeverity(minSev)
+	if err != nil {
+		return err
+	}
+	c, err := g.client()
+	if err != nil {
+		return err
+	}
+	defer g.reportTraffic(c)
+	ctx := cmd.Context()
+	if _, err = c.Node(ctx, node); err != nil {
+		return err
+	}
+	st, err := loadState(cmd, c)
+	if err != nil {
+		return err
+	}
+	policy, _ := c.Setting(ctx, "node-drain-policy")
+	fs := longhorn.DrainCheck(st, node)
+	if g.output == "json" {
+		if err := writeJSON(os.Stdout, map[string]any{"node": node, "nodeDrainPolicy": policy, "worst": longhorn.Worst(fs), "findings": filterSeverity(fs, floor)}); err != nil {
+			return err
+		}
+	} else {
+		printFindings(c.Cluster.Context+" · drain check "+node, len(st.Volumes), len(st.Nodes), fs, filterSeverity(fs, floor), g.output == "wide")
+		if policy != "" {
+			fmt.Printf("\nLonghorn node-drain-policy: %s\n", policy)
+		}
+	}
+	switch longhorn.Worst(fs) {
+	case longhorn.SevCritical:
+		return exitError{2}
+	case longhorn.SevWarning:
+		return exitError{1}
+	}
+	return nil
+}

@@ -14,6 +14,8 @@ also usable as kubectl plugin (`kubectl-lhtx`). See README.md for user docs.
 - **Read-only by default.** Writes only with `--rw` (CLI) or `W` (TUI), always
   with preview + confirmation; support `--dry-run[=client|server]`.
 - Supported Longhorn ≥ 1.6 (`longhorn.MinVersion`); verified against v1.12.1.
+  **v1 data engine only** – the user has no v2/SPDK setup and does not plan one.
+- License: MIT.
 - Do not reference specific clusters, customers or the homelab in code/docs.
 
 ## Layout

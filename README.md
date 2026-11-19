@@ -17,6 +17,10 @@ CRDs and uses watches instead of polling.
 
 Requires Longhorn ≥ 1.6 (`longhorn.io/v1beta2`). Tested with v1.12.1.
 
+**Only the v1 data engine is supported and tested.** Volumes on the v2 data
+engine (SPDK, block disks) may be shown, but nothing is verified for them, and
+write actions are not tested.
+
 ## Usage
 
 ```
@@ -32,6 +36,7 @@ lhtx backups [VOLUME] [--max-age 36h] # backup age per volume, or the backups of
 lhtx events VOLUME                   # events of volume, engine, replicas and PVC
 lhtx jobs [VOLUME]                   # recurring jobs (that apply to the volume)
 lhtx settings [FILTER]               # Longhorn settings
+lhtx orphans                         # orphaned replica data / instances
 lhtx targets                         # backup targets
 lhtx contexts                        # kubeconfig contexts
 lhtx doctor [--backup-max-age 36h]   # health check, exit code 0/1/2/3 (ok/warn/crit/error)
@@ -102,6 +107,7 @@ lhtx create snapshot VOLUME [--name N]
 lhtx create backup VOLUME [--snapshot S]   # without --snapshot: snapshot, wait, back up
 lhtx delete snapshot NAME
 lhtx delete replica NAME                   # refused for the only healthy replica
+lhtx delete orphan NAME|--all-cleanable    # Longhorn deletes the data dir if cleanable
 lhtx set replicas VOLUME COUNT             # volume must be attached
 lhtx set setting NAME VALUE
 lhtx cordon|uncordon NODE[:DISK]           # replica scheduling off/on
@@ -124,7 +130,7 @@ TUI:
 
 | Key | |
 |---|---|
-| `1` … `5` | Volumes · Nodes → disks → replicas · Activity · Settings · Health |
+| `1` … `6` | Volumes · Nodes → disks → replicas · Activity · Settings · Health · Orphans (only if there are any) |
 | `↑↓`/`jk`, `g`/`G` | move |
 | `enter` | open (volume detail, disk, …) |
 | `esc` / `q` | back (quit on the top level) |
@@ -139,6 +145,7 @@ TUI:
 | `X`, `[` `]` | delete replica (selected with `[` `]` in details, or in the disk view) |
 | `D` | delete snapshot (snapshots panel); `B` there backs up the selected snapshot |
 | `C` `E` | replica scheduling / eviction on/off (nodes view, node or disk row) |
+| `X`, `ctrl+x` | orphans tab: delete one / all cleanable orphans |
 | `enter` (Settings) | change value |
 
 Every action opens a dialog with the request: `y` applies (`Y` for
@@ -207,8 +214,8 @@ keyed by **replica address** (`tcp://ip:port`), not by replica name.
 `engine.status.currentReplicaAddressMap` (name → `ip:port`) is used to look
 them up, with `replica.status.storageIP:port` as fallback.
 
-v2 data engine: `diskType: block`, and `diskPath` is the block device. lhtx
-shows it as is.
+v2 data engine (not supported, see above): disks would have `diskType: block`
+with the block device as `diskPath`; lhtx shows that as is.
 
 ## Traffic
 
@@ -332,3 +339,7 @@ engines     24      22ms        20.8 KiB     5              34.8 KiB      69.6 K
 4. **Health** ✔ `lhtx doctor` / Health tab · open: rebuild/snapshot deadlock
    workaround as a guided action, diagnostics bundle, backup age overview
 5. Multi-cluster overview, more traffic statistics
+
+## License
+
+MIT, see [LICENSE](LICENSE).

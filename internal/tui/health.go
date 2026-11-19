@@ -149,3 +149,16 @@ func (m *model) healthBadge() string {
 	}
 	return "Health " + strings.Join(b, " ")
 }
+
+func (m *model) computeBackupLate() map[string]bool {
+	if m.health == nil {
+		return nil
+	}
+	out := map[string]bool{}
+	for _, b := range longhorn.BackupOverview(m.state.Volumes, m.health.jobs, time.Now(), 0) {
+		if b.Status == "late" || b.Status == "never" {
+			out[b.Volume] = true
+		}
+	}
+	return out
+}

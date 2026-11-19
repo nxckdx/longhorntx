@@ -135,6 +135,7 @@ type model struct {
 	health        *healthExtra
 	healthLoading bool
 	fcache        []longhorn.Finding
+	backupLate    map[string]bool // volume -> last backup is late (needs jobs)
 
 	width, height int
 }
@@ -366,6 +367,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.healthLoading, m.health = false, msg.extra
 		m.fcache = m.computeFindings()
+		m.backupLate = m.computeBackupLate()
 		m.clamp()
 		return m, nil
 
@@ -393,6 +395,7 @@ func (m *model) refresh() {
 	m.nodes = longhorn.BuildNodes(m.state)
 	m.acts = longhorn.BuildActivities(m.views, m.state.Engines, m.store.ActiveBackups())
 	m.fcache = m.computeFindings()
+	m.backupLate = m.computeBackupLate()
 
 	now := time.Now()
 	keep := map[string]bool{}

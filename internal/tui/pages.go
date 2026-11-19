@@ -5,6 +5,7 @@ import (
 	"image/color"
 	"sort"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -88,7 +89,7 @@ func (m *model) colsFor(p *page) []col {
 	switch p.kind {
 	case pVolumes:
 		return []col{{"PVC", 0, 3}, {"STATE", 9, 0}, {"ROBUSTNESS", 10, 0}, {"REPL", 5, 0},
-			{"SIZE", 9, 0}, {"ACTUAL", 9, 0}, {"NODE", 12, 0}, {"ACTIVITY", 21, 0}, {"VOLUME", 0, 2}}
+			{"SIZE", 9, 0}, {"ACTUAL", 9, 0}, {"NODE", 12, 0}, {"ACTIVITY", 21, 0}, {"BACKUP", 7, 0}, {"VOLUME", 0, 2}}
 	case pNodes:
 		return []col{{"NODE / DISK", 0, 1}, {"STATUS", 14, 0}, {"USED", 25, 0}, {"SIZE", 10, 0},
 			{"SCHEDULED", 25, 0}, {"REPLICAS", 8, 0}, {"SMART", 22, 0}}
@@ -251,6 +252,7 @@ func (m *model) volumeRows() []row {
 				format.Bytes(v.Actual),
 				dash(v.Node),
 				m.volumeActivity(v),
+				m.backupCell(v),
 				sDim.Render(v.Name),
 			},
 			open: func() tea.Cmd { return m.openDetail(name) },
@@ -510,4 +512,18 @@ func nrepCellDisk(have bool, n int) string {
 		return sDim.Render("…")
 	}
 	return fmt.Sprint(n)
+}
+
+// backupCell shows the age of the last backup; red when the backup job's
+// schedule says it is late (jobs are known once the Health tab was loaded).
+func (m *model) backupCell(v *longhorn.VolumeView) string {
+	last := v.Volume.Status.LastBackupAt
+	if last == "" {
+		return sDim.Render("-")
+	}
+	age := format.Age(last, time.Now())
+	if m.backupLate[v.Name] {
+		return fg(cErr, age)
+	}
+	return sDim.Render(age)
 }

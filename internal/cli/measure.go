@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/watch"
 
 	"github.com/nxckdx/longhorntx/internal/format"
@@ -27,7 +28,7 @@ type measurement struct {
 
 func measureCmd(g *globals) *cobra.Command {
 	var dur time.Duration
-	var withBackups bool
+	var withBackups, diff bool
 	cmd := &cobra.Command{
 		Use:   "measure",
 		Short: "Measure startup time and watch traffic per resource",
@@ -50,6 +51,7 @@ backups are always included in the watch phase.`,
 			ctx := cmd.Context()
 			res := []string{"volumes", "replicas", "nodes", "engines", "settings", "snapshots", "backups"}
 			ms := make([]*measurement, len(res))
+			stats := make([]*longhorn.FieldStats, len(res))
 			rvs := make([]string, len(res))
 			clients := make([]*longhorn.Client, len(res))
 
@@ -99,6 +101,8 @@ backups are always included in the watch phase.`,
 						return
 					}
 					defer w.Stop()
+					last := map[string]map[string]any{} // for --diff
+					stats[i] = &longhorn.FieldStats{}
 					for {
 						select {
 						case <-wctx.Done():
@@ -112,6 +116,19 @@ backups are always included in the watch phase.`,
 							if ev.Type != watch.Bookmark {
 								ms[i].WatchEvents++
 							}
+							if u, ok := ev.Object.(*unstructured.Unstructured); diff && ok {
+								switch ev.Type {
+								case watch.Modified:
+									if prev := last[u.GetName()]; prev != nil {
+										stats[i].Add(longhorn.ChangedPaths(prev, u.Object))
+									}
+									last[u.GetName()] = u.Object
+								case watch.Added:
+									last[u.GetName()] = u.Object
+								case watch.Deleted:
+									delete(last, u.GetName())
+								}
+							}
 						}
 					}
 				}(i)
@@ -121,9 +138,17 @@ backups are always included in the watch phase.`,
 			elapsed := time.Since(start)
 
 			if g.output == "json" {
-				return writeJSON(os.Stdout, map[string]any{
-					"context": clients[0].Cluster.Context, "watchSeconds": elapsed.Seconds(), "resources": ms,
-				})
+				out := map[string]any{"context": clients[0].Cluster.Context, "watchSeconds": elapsed.Seconds(), "resources": ms}
+				if diff {
+					d := map[string]any{}
+					for i, r := range res {
+						if stats[i] != nil && stats[i].Updates > 0 {
+							d[r] = stats[i]
+						}
+					}
+					out["changedFields"] = d
+				}
+				return writeJSON(os.Stdout, out)
 			}
 			perMin := func(b int64) string {
 				return format.Bytes(int64(float64(b) / elapsed.Minutes()))
@@ -158,11 +183,25 @@ backups are always included in the watch phase.`,
 			fmt.Printf("\nlhtx TUI estimate: startup %s (lists of volumes, replicas, nodes; longest %s),\n", format.Bytes(startBytes), startTime.Round(time.Millisecond))
 			fmt.Printf("idle %s/min (volume list). Engines add up to %s/min while watched\n", perMin(idle), perMin(engineBytes(ms)))
 			fmt.Println("(lhtx only watches engines for an open detail view or a rebuilding volume).")
+			if diff {
+				fmt.Println("\nFields changed per update (compared with the previous version of the same object;")
+				fmt.Println("objects need at least two updates during the watch to count):")
+				for i, r := range res {
+					if stats[i] == nil || stats[i].Updates == 0 {
+						continue
+					}
+					fmt.Printf("\n%s – %d updates compared\n", r, stats[i].Updates)
+					for _, l := range stats[i].Top(12) {
+						fmt.Println("  " + l)
+					}
+				}
+			}
 			return nil
 		},
 	}
 	cmd.Flags().DurationVarP(&dur, "duration", "d", time.Minute, "how long to watch")
 	cmd.Flags().BoolVar(&withBackups, "backups", false, "also LIST all backups (can be several MB)")
+	cmd.Flags().BoolVar(&diff, "diff", false, "show which fields change in watch events (compares consecutive versions)")
 	return cmd
 }
 

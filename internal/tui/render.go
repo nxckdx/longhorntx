@@ -97,6 +97,9 @@ func (m *model) viewHeader() string {
 			}
 		}
 	}
+	if m.newVersion != "" {
+		r = fg(cOK, "↑ "+m.newVersion+" (lhtx update)") + "  " + r
+	}
 	gap := m.width - lipgloss.Width(l) - lipgloss.Width(r) - 1
 	if gap < 1 {
 		return fit(l, m.width)

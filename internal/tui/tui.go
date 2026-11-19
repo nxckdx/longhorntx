@@ -13,6 +13,7 @@ import (
 
 	"github.com/nxckdx/longhorntx/internal/kube"
 	"github.com/nxckdx/longhorntx/internal/longhorn"
+	"github.com/nxckdx/longhorntx/internal/update"
 )
 
 type Options struct {
@@ -141,6 +142,8 @@ type model struct {
 	orphans       []longhorn.OrphanView
 	backupLate    map[string]bool // volume -> last backup is late (needs jobs)
 
+	newVersion string // newer lhtx release, if any
+
 	width, height int
 }
 
@@ -253,7 +256,21 @@ func anim() tea.Cmd {
 // ---------------------------------------------------------------- lifecycle
 
 func (m *model) Init() tea.Cmd {
-	return tea.Batch(connect(m.ctx, m.opts, m.kctx), tick())
+	return tea.Batch(connect(m.ctx, m.opts, m.kctx), tick(), checkUpdate(m.ctx, m.opts.Version))
+}
+
+type updateMsg struct{ latest string }
+
+// checkUpdate asks GitHub at most once a day (cached) whether a newer
+// release exists; silent on errors, off for dev and Nix builds.
+func checkUpdate(ctx context.Context, current string) tea.Cmd {
+	return func() tea.Msg {
+		latest, _, newer := update.Check(ctx, current)
+		if !newer {
+			return nil
+		}
+		return updateMsg{latest: latest}
+	}
 }
 
 func (m *model) shutdown() {
@@ -365,6 +382,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case actionDoneMsg:
 		return m, m.applyActionDone(msg)
+
+	case updateMsg:
+		m.newVersion = msg.latest
+		return m, nil
 
 	case engineEnvMsg:
 		m.openEnginePicker(msg)

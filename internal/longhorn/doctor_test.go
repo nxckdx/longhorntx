@@ -2,6 +2,7 @@ package longhorn
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -102,5 +103,40 @@ func TestBackupOverview(t *testing.T) {
 		if b.Volume == "nojob" && b.Status != "late" {
 			t.Errorf("max-age: %s", b.Status)
 		}
+	}
+}
+
+func TestDrainCheck(t *testing.T) {
+	healthy := `"healthyAt":"2026-01-01T00:00:00Z"`
+	rep := func(name, vol, node string, ok bool) *Replica {
+		h := ""
+		if ok {
+			h = "," + healthy
+		}
+		return must[Replica](t, `{"metadata":{"name":"`+name+`"},"spec":{"volumeName":"`+vol+`","nodeID":"`+node+`"`+h+`},"status":{"currentState":"running"}}`)
+	}
+	vol := func(name, node string, n int) *Volume {
+		return must[Volume](t, `{"metadata":{"name":"`+name+`"},"spec":{"numberOfReplicas":`+fmt.Sprint(n)+`},"status":{"state":"attached","currentNodeID":"`+node+`"}}`)
+	}
+	st := State{
+		Volumes: []*Volume{vol("single", "n2", 1), vol("two", "n1", 2), vol("three", "n2", 3)},
+		Replicas: []*Replica{
+			rep("single-r-1", "single", "n1", true),
+			rep("two-r-1", "two", "n1", true), rep("two-r-2", "two", "n2", true),
+			rep("three-r-1", "three", "n1", true), rep("three-r-2", "three", "n2", true), rep("three-r-3", "three", "n3", true),
+		},
+	}
+	got := map[string]Severity{}
+	for _, f := range DrainCheck(st, "n1") {
+		got[f.Object+"/"+f.Check] = f.Severity
+	}
+	if got["single/last-replica"] != SevCritical {
+		t.Errorf("single: %v", got)
+	}
+	if got["two/redundancy"] != SevInfo || got["two/attached"] != SevInfo {
+		t.Errorf("two: %v", got)
+	}
+	if _, ok := got["three/redundancy"]; ok {
+		t.Errorf("three keeps 2 healthy replicas: %v", got)
 	}
 }

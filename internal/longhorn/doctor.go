@@ -409,3 +409,61 @@ func Worst(fs []Finding) Severity {
 	}
 	return w
 }
+
+// DrainCheck reports what happens to volumes if node goes away (reboot,
+// drain, replacement). Read-only; based on the current state.
+func DrainCheck(st State, node string) []Finding {
+	var f []Finding
+	for _, v := range Build(st) {
+		obj := volObj(&v)
+		var here, healthyHere, healthyElsewhere, rebuildingElsewhere int
+		for _, r := range v.Replicas {
+			if r.Node == node {
+				here++
+				if r.Health == HealthHealthy {
+					healthyHere++
+				}
+				continue
+			}
+			switch r.Health {
+			case HealthHealthy:
+				healthyElsewhere++
+			case HealthRebuilding:
+				rebuildingElsewhere++
+			}
+		}
+		attachedHere := v.State == "attached" && v.Node == node
+		if here == 0 && !attachedHere {
+			continue
+		}
+		switch {
+		case healthyHere > 0 && healthyElsewhere == 0:
+			msg := fmt.Sprintf("the only healthy replica is on %s – the volume is unavailable while it is away", node)
+			if v.Desired == 1 {
+				msg += " (volume has 1 replica by design)"
+			}
+			f = append(f, Finding{SevCritical, "last-replica", obj, msg,
+				"evict first (lhtx evict " + node + ") or raise the replica count and wait for the rebuild"})
+		case here > 0 && healthyElsewhere == 1 && v.Desired > 2:
+			f = append(f, Finding{SevWarning, "redundancy", obj,
+				fmt.Sprintf("only 1 of %d replicas healthy while %s is away", v.Desired, node), ""})
+		case here > 0 && healthyElsewhere == 1:
+			f = append(f, Finding{SevInfo, "redundancy", obj,
+				fmt.Sprintf("degraded while %s is away (1 of %d replicas)", node, v.Desired), ""})
+		}
+		if here > 0 && rebuildingElsewhere > 0 {
+			f = append(f, Finding{SevWarning, "rebuilding", obj, "a replica on another node is still rebuilding – wait for it", ""})
+		}
+		if attachedHere {
+			f = append(f, Finding{SevInfo, "attached", obj,
+				fmt.Sprintf("attached on %s – the workload must move; the volume is re-attached elsewhere", node), ""})
+		}
+	}
+	sort.SliceStable(f, func(i, j int) bool {
+		if f[i].Severity != f[j].Severity {
+			return f[i].Severity > f[j].Severity
+		}
+		return f[i].Object < f[j].Object
+	})
+	return f
+}

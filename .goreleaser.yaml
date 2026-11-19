@@ -1,0 +1,42 @@
+version: 2
+
+project_name: lhtx
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - main: ./cmd/lhtx
+    binary: lhtx
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ignore:
+      - goos: windows
+        goarch: arm64
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X github.com/nxckdx/longhorntx/internal/cli.Version={{ .Version }}
+
+archives:
+  # lhtx self-update relies on these names: lhtx_<version>_<os>_<arch>.tar.gz|zip
+  - name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  disable: true # release-please writes the release notes
+
+release:
+  # the release already exists (created by release-please): add the assets
+  mode: keep-existing

@@ -6,12 +6,14 @@ require (
 	charm.land/bubbletea/v2 v2.1.1
 	charm.land/lipgloss/v2 v2.1.1
 	github.com/charmbracelet/x/ansi v0.11.9
+	github.com/robfig/cron/v3 v3.0.1
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/term v0.45.0
 	k8s.io/api v0.37.2
 	k8s.io/apimachinery v0.37.2
 	k8s.io/client-go v0.37.2
 	k8s.io/klog/v2 v2.140.0
+	sigs.k8s.io/yaml v1.6.0
 )
 
 require (
@@ -52,7 +54,6 @@ require (
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
-	github.com/robfig/cron/v3 v3.0.1 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	github.com/xo/terminfo v1.0.0 // indirect
@@ -72,5 +73,4 @@ require (
 	sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.4.2 // indirect
-	sigs.k8s.io/yaml v1.6.0 // indirect
 )

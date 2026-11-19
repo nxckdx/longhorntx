@@ -3,6 +3,7 @@ package longhorn
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -17,8 +18,10 @@ import (
 // Store keeps live caches of Longhorn objects via watches (no polling).
 //
 // Traffic strategy:
-//   - volumes, replicas, nodes are watched permanently. Replicas and nodes
-//     are quiet; volumes update on writes (status.actualSize).
+//   - replicas and nodes are watched permanently (quiet).
+//   - volumes are watched on small clusters; on large ones they are re-listed
+//     periodically (see volumes_poll.go), because every write updates
+//     status.actualSize and the watch then costs MiB per minute.
 //   - engines are the chattiest objects (every write updates the volume-head
 //     snapshot size) and are only watched per volume, on demand:
 //     while a caller holds a reference (e.g. the TUI detail view) or while a
@@ -39,6 +42,20 @@ type Store struct {
 	// WatchBackups enables the watch-from-now on backups (see activity.go).
 	// Set before Start.
 	WatchBackups bool
+	// Refresh selects how volumes are kept up to date: RefreshAuto (default),
+	// RefreshWatch or a poll interval. Set before Start.
+	Refresh time.Duration
+	// MaxAutoEngines caps the engines watched automatically for rebuilding
+	// volumes (a node failure can make hundreds of volumes rebuild).
+	MaxAutoEngines int
+
+	refresh     time.Duration // effective mode, once decided
+	decided     bool
+	volStore    cache.Store // poll mode
+	lastPoll    time.Time
+	pollNow     chan struct{}
+	pendingGets map[string]bool
+	autoSkipped int
 
 	ctx     context.Context
 	cancel  context.CancelFunc
@@ -50,6 +67,8 @@ type engineWatch struct {
 	cancel context.CancelFunc
 	refs   int  // explicit references
 	auto   bool // held because of a rebuild
+
+	volCancel context.CancelFunc // poll mode: single-volume watch while referenced
 }
 
 func NewStore(c *Client) *Store {
@@ -59,6 +78,11 @@ func NewStore(c *Client) *Store {
 		backups: map[string]*trackedBackup{},
 		synced:  map[string]time.Duration{},
 		changed: make(chan struct{}, 1),
+		pollNow: make(chan struct{}, 1),
+
+		Refresh:        RefreshAuto,
+		MaxAutoEngines: 10,
+		volStore:       cache.NewStore(cache.MetaNamespaceKeyFunc),
 	}
 	s.volumes = newInformer[Volume](s, GVRVolume, "")
 	s.replicas = newInformer[Replica](s, GVRReplica, "")
@@ -122,13 +146,29 @@ func (s *Store) Start(ctx context.Context) {
 		}
 		s.notify()
 	}
-	go run(ResVolumes, s.volumes, nil, volumesDone)
+	go func() {
+		r := s.decideRefresh(s.ctx)
+		s.mu.Lock()
+		s.refresh, s.decided = r, true
+		s.mu.Unlock()
+		if r == RefreshWatch {
+			run(ResVolumes, s.volumes, nil, volumesDone)
+		} else {
+			s.runVolumePoll(r, volumesDone)
+		}
+	}()
 	go run(ResNodes, s.nodes, nil, nil)
 	go run(ResReplicas, s.replicas, volumesDone, nil)
 }
 
-func (s *Store) informers() map[string]cache.SharedIndexInformer {
-	return map[string]cache.SharedIndexInformer{ResVolumes: s.volumes, ResReplicas: s.replicas, ResNodes: s.nodes}
+// volumeStore returns the cache holding the volumes for the current mode.
+func (s *Store) volumeStore() cache.Store {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.decided && s.refresh == RefreshWatch {
+		return s.volumes.GetStore()
+	}
+	return s.volStore
 }
 
 // Synced reports whether the initial list of a resource has completed and
@@ -194,12 +234,21 @@ func (s *Store) AcquireEngine(volume string) (release func()) {
 	defer s.mu.Unlock()
 	w := s.engineLocked(volume)
 	w.refs++
+	if s.refresh != RefreshWatch && w.volCancel == nil {
+		ctx, cancel := context.WithCancel(s.ctx)
+		w.volCancel = cancel
+		s.startSingleVolumeWatch(ctx, volume)
+	}
 	var once sync.Once
 	return func() {
 		once.Do(func() {
 			s.mu.Lock()
 			defer s.mu.Unlock()
 			w.refs--
+			if w.refs <= 0 && w.volCancel != nil {
+				w.volCancel()
+				w.volCancel = nil
+			}
 			s.maybeStopLocked(volume, w)
 		})
 	}
@@ -243,12 +292,25 @@ func (s *Store) reconcileAutoEngines() {
 			want[r.Spec.VolumeName] = true
 		}
 	}
+	names := make([]string, 0, len(want))
+	for v := range want {
+		names = append(names, v)
+	}
+	sort.Strings(names)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.ctx == nil {
 		return
 	}
-	for v := range want {
+	s.autoSkipped = 0
+	if s.MaxAutoEngines > 0 && len(names) > s.MaxAutoEngines {
+		s.autoSkipped = len(names) - s.MaxAutoEngines
+		for _, v := range names[s.MaxAutoEngines:] {
+			delete(want, v)
+		}
+		names = names[:s.MaxAutoEngines]
+	}
+	for _, v := range names {
 		w := s.engineLocked(v)
 		w.auto = true
 	}
@@ -260,10 +322,18 @@ func (s *Store) reconcileAutoEngines() {
 	}
 }
 
+// AutoEnginesSkipped is the number of rebuilding volumes whose engine is not
+// watched because of MaxAutoEngines (their rebuild shows without progress).
+func (s *Store) AutoEnginesSkipped() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.autoSkipped
+}
+
 // State returns the current cache contents.
 func (s *Store) State() State {
 	snap := State{
-		Volumes:  listStore[Volume](s.volumes),
+		Volumes:  listCache[Volume](s.volumeStore()),
 		Replicas: listStore[Replica](s.replicas),
 		Nodes:    listStore[Node](s.nodes),
 	}
@@ -275,8 +345,10 @@ func (s *Store) State() State {
 	return snap
 }
 
-func listStore[T any](inf cache.SharedIndexInformer) []*T {
-	items := inf.GetStore().List()
+func listStore[T any](inf cache.SharedIndexInformer) []*T { return listCache[T](inf.GetStore()) }
+
+func listCache[T any](st cache.Store) []*T {
+	items := st.List()
 	out := make([]*T, 0, len(items))
 	for _, o := range items {
 		if t, ok := o.(*T); ok {
@@ -287,14 +359,18 @@ func listStore[T any](inf cache.SharedIndexInformer) []*T {
 }
 
 func newInformer[T any](s *Store, g schema.GroupVersionResource, selector string) cache.SharedIndexInformer {
+	return newInformerSel[T](s, g, selector, "")
+}
+
+func newInformerSel[T any](s *Store, g schema.GroupVersionResource, selector, fieldSelector string) cache.SharedIndexInformer {
 	res := s.c.res(g)
 	lw := &cache.ListWatch{
 		ListWithContextFunc: func(ctx context.Context, o metav1.ListOptions) (runtime.Object, error) {
-			o.LabelSelector = selector
+			o.LabelSelector, o.FieldSelector = selector, fieldSelector
 			return res.List(ctx, o)
 		},
 		WatchFuncWithContext: func(ctx context.Context, o metav1.ListOptions) (watch.Interface, error) {
-			o.LabelSelector = selector
+			o.LabelSelector, o.FieldSelector = selector, fieldSelector
 			return res.Watch(ctx, o)
 		},
 	}
@@ -310,20 +386,25 @@ func newInformer[T any](s *Store, g schema.GroupVersionResource, selector string
 	_ = inf.SetWatchErrorHandler(func(_ *cache.Reflector, err error) {
 		s.setErr(fmt.Errorf("watch %s: %w", g.Resource, err))
 	})
-	isReplica := g == GVRReplica
-	onChange := func() {
+	isReplica := g == GVRReplica && fieldSelector == "" && selector == ""
+	onChange := func(obj any) {
 		s.mu.Lock()
 		s.lastErr = nil // events flow again
+		_, replicasSynced := s.synced[ResReplicas]
 		s.mu.Unlock()
 		if isReplica {
 			s.reconcileAutoEngines()
+			// poll mode: a replica changed → refresh just its volume
+			if r, ok := obj.(*Replica); ok && replicasSynced {
+				s.queueVolumeGet(r.Spec.VolumeName)
+			}
 		}
 		s.notify()
 	}
 	_, _ = inf.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc:    func(any) { onChange() },
-		UpdateFunc: func(any, any) { onChange() },
-		DeleteFunc: func(any) { onChange() },
+		AddFunc:    onChange,
+		UpdateFunc: func(_, n any) { onChange(n) },
+		DeleteFunc: onChange,
 	})
 	return inf
 }

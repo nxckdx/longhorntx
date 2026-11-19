@@ -34,12 +34,36 @@ lhtx jobs [VOLUME]                   # recurring jobs (that apply to the volume)
 lhtx settings [FILTER]               # Longhorn settings
 lhtx targets                         # backup targets
 lhtx contexts                        # kubeconfig contexts
+lhtx doctor [--backup-max-age 36h]   # health check, exit code 0/1/2/3 (ok/warn/crit/error)
 lhtx measure [-d 60s] [--backups]    # measure startup + watch traffic per resource
 
 VOLUME = Longhorn volume / PV name, namespace/pvc, or a bare PVC name if unique
 --context NAME  --kubeconfig PATH  -n longhorn-system  -v (print wire bytes)
 --refresh auto|watch|30s (volume updates, env LHTX_REFRESH)
 ```
+
+### Health check
+
+`lhtx doctor` (and tab `5` in the TUI) reports what is wrong right now:
+
+- faulted/degraded volumes, volumes with only one healthy replica left
+- replicas of one volume on the same disk (or node)
+- nodes/disks not ready, disks ≥ 80 % / 90 % full, disks Longhorn no longer
+  schedules on (with Longhorn's reason)
+- SMART: status not PASSED, SSD life below 20 % / 10 %, reallocated/pending sectors
+- unavailable backup targets
+- backup age: last backup older than twice the interval of the backup recurring
+  job that applies to the volume (`--backup-max-age` also covers volumes
+  backed up by other means)
+- rebuilds running for hours, and a suspected deadlock: a replica rebuilds for
+  more than 30 minutes while a snapshot of the same volume waits for removal or
+  a purge runs (hint: the known workaround is lowering the replica count until
+  the snapshot is purged)
+- orphans
+
+Engines and snapshots are only read for volumes that are rebuilding. Exit codes
+follow Nagios (0 ok, 1 warning, 2 critical, 3 error), so `lhtx doctor --min warning`
+fits cron or a monitoring check. `-o wide` shows hints, `-o json` is for scripts.
 
 ### Changes (write mode)
 
@@ -77,7 +101,7 @@ TUI:
 
 | Key | |
 |---|---|
-| `1` `2` `3` `4` | Volumes · Nodes → disks → replicas · Activity · Settings |
+| `1` … `5` | Volumes · Nodes → disks → replicas · Activity · Settings · Health |
 | `↑↓`/`jk`, `g`/`G` | move |
 | `enter` | open (volume detail, disk, …) |
 | `esc` / `q` | back (quit on the top level) |
@@ -280,4 +304,6 @@ engines     24      22ms        20.8 KiB     5              34.8 KiB      69.6 K
 3. **Actions** ✔ snapshot/backup create, snapshot/replica delete, replica count,
    scheduling/eviction for nodes and disks, settings – with preview, confirmation,
    client and server dry run · open: attach/detach, volume expansion, recurring jobs
-4. Multi-cluster overview, more traffic statistics
+4. **Health** ✔ `lhtx doctor` / Health tab · open: rebuild/snapshot deadlock
+   workaround as a guided action, diagnostics bundle, backup age overview
+5. Multi-cluster overview, more traffic statistics

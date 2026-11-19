@@ -24,13 +24,14 @@ internal/kube       kubeconfig/contexts; rest.Config with TCP-level byte counter
                     (LHTX_THROTTLE_KBPS simulates slow links)
 internal/longhorn   slim CRD structs (no longhorn-manager import), Client (one-shot),
                     Store (informers), joins (view.go, nodes.go, activity.go),
-                    write actions (actions.go)
+                    write actions (actions.go), health checks (doctor.go),
+                    volume poll mode (volumes_poll.go)
 internal/cli        cobra commands (read: volumes.go, nodes.go, data.go, activity.go,
-                    measure.go; write: write.go)
+                    measure.go, doctor.go; write: write.go; complete.go)
 internal/tui        Bubble Tea v2 (charm.land/*): tui.go model/update/keys,
                     pages.go list pages, render.go header/footer/detail,
                     panels.go detail panels, actions.go write mode/dialogs,
-                    loading.go async startup
+                    loading.go async startup, health.go tab 5
 ```
 
 ## Traffic design (why things are the way they are)

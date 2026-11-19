@@ -162,3 +162,42 @@ func (m *model) computeBackupLate() map[string]bool {
 	}
 	return out
 }
+
+func (m *model) drainRows(p *page) []row {
+	fs := longhorn.DrainCheck(m.state, p.node)
+	rows := make([]row, 0, len(fs))
+	for _, f := range fs {
+		msg := f.Message
+		if f.Hint != "" {
+			msg += sDim.Render("  → " + f.Hint)
+		}
+		r := row{cells: []string{sevCell(f.Severity), f.Check, f.Object, msg}}
+		if vv := m.viewByObject(f.Object); vv != nil {
+			name := vv.Name
+			r.open = func() tea.Cmd { return m.openDetail(name) }
+			r.ref = volRef(name)
+		}
+		rows = append(rows, r)
+	}
+	return rows
+}
+
+func (m *model) drainTitle(p *page) string {
+	var crit, warn int
+	for _, f := range longhorn.DrainCheck(m.state, p.node) {
+		switch f.Severity {
+		case longhorn.SevCritical:
+			crit++
+		case longhorn.SevWarning:
+			warn++
+		}
+	}
+	verdict := fg(cOK, "✔ safe to take down")
+	switch {
+	case crit > 0:
+		verdict = sErr.Render(fmt.Sprintf("✖ %d volume(s) become unavailable", crit))
+	case warn > 0:
+		verdict = fg(cWarn, fmt.Sprintf("⚠ %d warning(s)", warn))
+	}
+	return " " + sBold.Render("Drain check "+p.node) + sDim.Render("  what happens if this node goes away · ") + verdict
+}

@@ -69,6 +69,8 @@ func (m *model) rowsFor(p *page) []row {
 		rows = m.settingsRows()
 	case pHealth:
 		rows = m.healthRows()
+	case pDrain:
+		rows = m.drainRows(p)
 	default:
 		return nil
 	}
@@ -106,7 +108,7 @@ func (m *model) colsFor(p *page) []col {
 		return m.panelCols(p)
 	case pSettings:
 		return []col{{"NAME", 0, 2}, {"VALUE", 0, 3}}
-	case pHealth:
+	case pHealth, pDrain:
 		return []col{{"SEVERITY", 11, 0}, {"CHECK", 15, 0}, {"OBJECT", 0, 2}, {"MESSAGE", 0, 5}}
 	}
 	return nil
@@ -134,6 +136,9 @@ func (m *model) viewPage(p *page) string {
 		}
 		b.WriteString(t + "\n")
 		b.WriteString(sDim.Render(" "+strings.Repeat("─", max(m.width-2, 0))) + "\n")
+	case pDrain:
+		b.WriteString(m.drainTitle(p) + "\n")
+		b.WriteString(sDim.Render(" "+strings.Repeat("─", max(m.width-2, 0))) + "\n")
 	case pHealth:
 		b.WriteString(m.healthTitle() + "\n")
 		b.WriteString(sDim.Render(" "+strings.Repeat("─", max(m.width-2, 0))) + "\n")
@@ -148,6 +153,7 @@ func (m *model) viewPage(p *page) string {
 		pActivity: "nothing running – rebuilds, purges and backups appear here live",
 		pSettings: "no settings loaded",
 		pHealth:   "✔ nothing to report",
+		pDrain:    "✔ no volume is affected",
 	}[p.kind]
 	b.WriteString(m.renderList(p, m.colsFor(p), m.rowsFor(p), empty))
 	return b.String()

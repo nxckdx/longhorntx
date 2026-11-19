@@ -50,6 +50,7 @@ const (
 	pDetail
 	pSettings
 	pHealth
+	pDrain
 	pContexts
 	pHelp
 )
@@ -549,6 +550,22 @@ func (m *model) handleKey(k tea.KeyPressMsg) tea.Cmd {
 			return m.loadSettings()
 		}
 		return nil
+	case "i":
+		if p.kind == pNodes || p.kind == pDisk {
+			node := p.node
+			if p.kind == pNodes {
+				rows := m.rowsFor(p)
+				if p.cursor < len(rows) {
+					if nr, ok := rows[p.cursor].ref.(nodeRef); ok {
+						node = nr.node
+					}
+				}
+			}
+			if node != "" {
+				m.push(&page{kind: pDrain, node: node})
+			}
+			return nil
+		}
 	case "p":
 		if p.kind == pVolumes {
 			m.problemsFirst = !m.problemsFirst
@@ -684,7 +701,7 @@ func (m *model) listHeight() int {
 		h--
 	}
 	switch p.kind {
-	case pDisk, pActivity, pSettings, pHealth:
+	case pDisk, pActivity, pSettings, pHealth, pDrain:
 		h -= 2 // title + rule
 	case pDetail:
 		h -= m.detailTopHeight()

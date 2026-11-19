@@ -121,7 +121,9 @@ func (m *model) viewFooter() string {
 			}
 		}
 	case m.rw && p.kind == pNodes:
-		keys = [][2]string{{"C", "scheduling on/off"}, {"E", "evict on/off"}, {"enter", "open"}, {"W", "write mode off"}}
+		keys = [][2]string{{"C", "scheduling on/off"}, {"E", "evict on/off"}, {"i", "drain check"}, {"enter", "open"}, {"W", "write mode off"}}
+	case p.kind == pNodes:
+		keys = [][2]string{{"enter", "open"}, {"i", "drain check"}, {"/", "filter"}, {"1-5", "views"}, {"c", "context"}, {"?", "help"}, {"q", "quit"}}
 	case !m.rw && p.kind == pVolumes:
 		sortLbl := "problems first"
 		if m.problemsFirst {
@@ -372,6 +374,7 @@ func (m *model) viewHelp() string {
    enter / l      open              esc / h   back
    /              filter            c         switch context
    p              volume list: problems & activity first (toggle)
+   i              nodes: drain check (what happens if the node goes away)
    q              back / quit       ?         this help
 
  Volume details

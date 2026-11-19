@@ -53,11 +53,18 @@ func snapshotsCmd(g *globals) *cobra.Command {
 }
 
 func backupsCmd(g *globals) *cobra.Command {
-	return &cobra.Command{
-		Use:     "backups VOLUME",
+	var maxAge time.Duration
+	cmd := &cobra.Command{
+		Use:     "backups [VOLUME]",
 		Aliases: []string{"backup", "bk"},
-		Short:   "List the backups of a volume",
-		Args:    cobra.ExactArgs(1),
+		Short:   "Backup age per volume, or the backups of one volume",
+		Long: `Without VOLUME: the age of the last backup of every volume, compared
+with the schedule of the backup recurring job that applies to it (late =
+older than twice the job's interval). Reads only volumes and recurring jobs.
+--max-age also checks volumes that are backed up without a recurring job.
+
+With VOLUME: the backups of that volume.`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := g.checkOutput(); err != nil {
 				return err
@@ -65,6 +72,10 @@ func backupsCmd(g *globals) *cobra.Command {
 			c, err := g.client()
 			if err != nil {
 				return err
+			}
+			if len(args) == 0 {
+				defer g.reportTraffic(c)
+				return backupOverview(cmd, g, c, maxAge)
 			}
 			defer g.reportTraffic(c)
 			v, err := resolveVolume(cmd.Context(), c, args[0])
@@ -90,6 +101,8 @@ func backupsCmd(g *globals) *cobra.Command {
 			return w.Flush()
 		},
 	}
+	cmd.Flags().DurationVar(&maxAge, "max-age", 0, "expected max age for volumes without a backup job (e.g. 36h)")
+	return cmd
 }
 
 func eventsCmd(g *globals) *cobra.Command {
@@ -277,4 +290,52 @@ func targetsCmd(g *globals) *cobra.Command {
 			return w.Flush()
 		},
 	}
+}
+
+func backupOverview(cmd *cobra.Command, g *globals, c *longhorn.Client, maxAge time.Duration) error {
+	ctx := cmd.Context()
+	vols, err := c.Volumes(ctx)
+	if err != nil {
+		return err
+	}
+	jobs, err := c.RecurringJobs(ctx)
+	if err != nil {
+		return err
+	}
+	list := longhorn.BackupOverview(vols, jobs, time.Now(), maxAge)
+	rank := map[string]int{"never": 0, "late": 1, "ok": 2, "unchecked": 3}
+	sort.SliceStable(list, func(i, j int) bool { return rank[list[i].Status] < rank[list[j].Status] })
+	if g.output == "json" {
+		return writeJSON(os.Stdout, list)
+	}
+	count := map[string]int{}
+	w := newTab(os.Stdout)
+	fmt.Fprintln(w, "STATUS\tPVC\tLAST BACKUP\tJOB\tINTERVAL\tEXPECTED WITHIN")
+	for _, b := range list {
+		count[b.Status]++
+		age, iv, exp := "-", "-", "-"
+		if b.Last != "" {
+			age = format.Age(b.Last, time.Now()) + " ago"
+		}
+		if b.Interval > 0 {
+			iv = b.Interval.String()
+		}
+		if b.MaxAge > 0 {
+			exp = b.MaxAge.String()
+		}
+		pvc := b.PVC
+		if pvc == "" {
+			pvc = b.Volume
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", strings.ToUpper(b.Status), pvc, age, dash(b.Job), iv, exp)
+	}
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	fmt.Printf("\n%d ok, %d late, %d never, %d unchecked (no backup job", count["ok"], count["late"], count["never"], count["unchecked"])
+	if maxAge == 0 {
+		fmt.Print("; use --max-age to check those too")
+	}
+	fmt.Println(")")
+	return nil
 }

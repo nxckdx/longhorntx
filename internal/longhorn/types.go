@@ -76,6 +76,7 @@ type VolumeSpec struct {
 	Encrypted        bool     `json:"encrypted"`
 	BackupTargetName string   `json:"backupTargetName"`
 	MigrationNodeID  string   `json:"migrationNodeID"`
+	Image            string   `json:"image"` // desired engine image
 }
 
 type VolumeStatus struct {
@@ -89,6 +90,7 @@ type VolumeStatus struct {
 	LastDegradedAt   string           `json:"lastDegradedAt"`
 	ShareState       string           `json:"shareState"`
 	IsStandby        bool             `json:"isStandby"`
+	CurrentImage     string           `json:"currentImage"` // engine image in use
 	Conditions       []Condition      `json:"conditions"`
 }
 

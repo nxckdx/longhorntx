@@ -518,3 +518,19 @@ func humanBytes(n int64) string {
 	}
 	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
 }
+
+// ReplicaCountWarning warns when a replica count exceeds the number of
+// nodes that accept replicas (Longhorn then needs soft anti-affinity or
+// leaves replicas unscheduled).
+func ReplicaCountWarning(n int, nodes []*Node) string {
+	sched := 0
+	for _, nd := range nodes {
+		if nd.Spec.AllowScheduling && nd.Ready() && !nd.Spec.EvictionRequested {
+			sched++
+		}
+	}
+	if len(nodes) > 0 && n > sched {
+		return fmt.Sprintf("only %d node(s) accept replicas: %d replicas need replica-soft-anti-affinity, otherwise some stay unscheduled", sched, n)
+	}
+	return ""
+}

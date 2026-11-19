@@ -83,7 +83,7 @@ func (m *model) viewHeader() string {
 
 	r := ""
 	if m.client != nil {
-		r = m.loadingHint() + fmt.Sprintf("↓ %s  %s", format.Bytes(m.client.Cluster.Traffic.RX()), format.Rate(m.rxRate))
+		r = m.loadingHint() + m.refreshHint() + fmt.Sprintf("↓ %s  %s", format.Bytes(m.client.Cluster.Traffic.RX()), format.Rate(m.rxRate))
 		if m.store != nil {
 			if n := len(m.store.WatchedEngines()); n > 0 {
 				r = sDim.Render(fmt.Sprintf("engines ⦿%d  ", n)) + r
@@ -392,4 +392,19 @@ func dash(s string) string {
 		return "-"
 	}
 	return s
+}
+
+// refreshHint shows whether volumes are live or polled.
+func (m *model) refreshHint() string {
+	if m.store == nil || !m.synced(longhorn.ResVolumes) {
+		return ""
+	}
+	s := "live"
+	if iv := m.store.RefreshInterval(); iv > 0 {
+		s = fmt.Sprintf("⟳ %s · %s ago", iv, time.Since(m.store.LastRefresh()).Round(time.Second))
+	}
+	if n := m.store.AutoEnginesSkipped(); n > 0 {
+		s = fg(cWarn, fmt.Sprintf("%d rebuilds w/o progress", n)) + sDim.Render(" · "+s)
+	}
+	return sDim.Render(s + "  ")
 }

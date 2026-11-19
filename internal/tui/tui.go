@@ -19,7 +19,8 @@ type Options struct {
 	Kube      kube.Options
 	Namespace string
 	Version   string
-	RW        bool // start in write mode
+	RW        bool          // start in write mode
+	Refresh   time.Duration // longhorn.RefreshAuto, RefreshWatch or poll interval
 }
 
 func Run(ctx context.Context, o Options) error {
@@ -199,6 +200,7 @@ func connect(ctx context.Context, o Options, kctx string) tea.Cmd {
 		}
 		s := longhorn.NewStore(c)
 		s.WatchBackups = true
+		s.Refresh = o.Refresh
 		s.Start(ctx)
 		return connectedMsg{kctx: cl.Context, store: s, client: c}
 	}
@@ -564,6 +566,15 @@ func (m *model) handleKey(k tea.KeyPressMsg) tea.Cmd {
 	}
 	if p.kind == pSettings && key == "ctrl+r" {
 		return m.loadSettings()
+	}
+	if key == "ctrl+r" && m.store != nil && p.kind != pDetail {
+		if m.store.RefreshInterval() > 0 {
+			m.store.RefreshNow()
+			m.setFlash("reloading volumes …", false)
+		} else {
+			m.setFlash("volumes are live (watch mode)", false)
+		}
+		return nil
 	}
 
 	// list navigation

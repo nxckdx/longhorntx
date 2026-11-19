@@ -40,7 +40,11 @@ update.`,
 			}
 			defer g.reportTraffic(c)
 			if watchFlag {
-				return watchActivity(cmd.Context(), c, g.output == "json")
+				r, err := g.refreshMode()
+				if err != nil {
+					return err
+				}
+				return watchActivity(cmd.Context(), c, g.output == "json", r)
 			}
 			acts, err := oneShotActivity(cmd.Context(), c)
 			if err != nil {
@@ -86,9 +90,10 @@ func oneShotActivity(ctx context.Context, c *longhorn.Client) ([]longhorn.Activi
 	return longhorn.BuildActivities(longhorn.Build(st), st.Engines, nil), nil
 }
 
-func watchActivity(ctx context.Context, c *longhorn.Client, jsonOut bool) error {
+func watchActivity(ctx context.Context, c *longhorn.Client, jsonOut bool, refresh time.Duration) error {
 	s := longhorn.NewStore(c)
 	s.WatchBackups = true
+	s.Refresh = refresh
 	s.Start(ctx)
 	defer s.Stop()
 	if err := s.WaitSynced(ctx, 2*time.Minute); err != nil {

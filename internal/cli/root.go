@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -30,7 +31,10 @@ type globals struct {
 	rw         bool
 	yes        bool
 	dryRunFlag string
+	refresh    string
 }
+
+func (g *globals) refreshMode() (time.Duration, error) { return longhorn.ParseRefresh(g.refresh) }
 
 func (g *globals) client() (*longhorn.Client, error) {
 	cl, err := kube.Connect(g.kube)
@@ -64,7 +68,11 @@ Without a subcommand it starts the interactive TUI.`,
 		SilenceErrors: true,
 		Args:          cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return tui.Run(cmd.Context(), tui.Options{Kube: g.kube, Namespace: g.namespace, Version: Version, RW: g.rw})
+			r, err := g.refreshMode()
+			if err != nil {
+				return err
+			}
+			return tui.Run(cmd.Context(), tui.Options{Kube: g.kube, Namespace: g.namespace, Version: Version, RW: g.rw, Refresh: r})
 		},
 	}
 	f := root.PersistentFlags()
@@ -77,6 +85,11 @@ Without a subcommand it starts the interactive TUI.`,
 	f.BoolVarP(&g.yes, "yes", "y", false, "do not ask for confirmation (with --rw)")
 	f.StringVar(&g.dryRunFlag, "dry-run", "", "show (client) or validate on the server (server) without changing anything")
 	f.Lookup("dry-run").NoOptDefVal = "client"
+	defRefresh := os.Getenv("LHTX_REFRESH")
+	if defRefresh == "" {
+		defRefresh = "auto"
+	}
+	f.StringVar(&g.refresh, "refresh", defRefresh, "volume updates: auto, watch (live) or a poll interval like 30s (env LHTX_REFRESH)")
 
 	root.AddCommand(
 		volumesCmd(g), replicasCmd(g), nodesCmd(g), diskCmd(g), rebuildsCmd(g),

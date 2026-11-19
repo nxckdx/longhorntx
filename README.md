@@ -28,13 +28,15 @@ lhtx nodes [-o wide]                 # nodes → disks: usage, scheduled, replic
 lhtx disk NODE[:PATH]                # all replicas on a disk (reverse view)
 lhtx rebuilds [-w]                   # rebuilds/purges/restores (+ backups with -w), speed + ETA
 lhtx snapshots VOLUME                # snapshots of a volume
-lhtx backups VOLUME                  # backups of a volume
+lhtx backups [VOLUME] [--max-age 36h] # backup age per volume, or the backups of one volume
 lhtx events VOLUME                   # events of volume, engine, replicas and PVC
 lhtx jobs [VOLUME]                   # recurring jobs (that apply to the volume)
 lhtx settings [FILTER]               # Longhorn settings
 lhtx targets                         # backup targets
 lhtx contexts                        # kubeconfig contexts
 lhtx doctor [--backup-max-age 36h]   # health check, exit code 0/1/2/3 (ok/warn/crit/error)
+lhtx drain-check NODE                # what happens if NODE goes away (reboot/drain)
+lhtx diag VOLUME                     # diagnostics bundle (tar.gz) for a bug report
 lhtx measure [-d 60s] [--backups]    # measure startup + watch traffic per resource
 
 VOLUME = Longhorn volume / PV name, namespace/pvc, or a bare PVC name if unique
@@ -64,6 +66,26 @@ VOLUME = Longhorn volume / PV name, namespace/pvc, or a bare PVC name if unique
 Engines and snapshots are only read for volumes that are rebuilding. Exit codes
 follow Nagios (0 ok, 1 warning, 2 critical, 3 error), so `lhtx doctor --min warning`
 fits cron or a monitoring check. `-o wide` shows hints, `-o json` is for scripts.
+
+### Node maintenance
+
+`lhtx drain-check NODE` (or `i` on a node in the TUI) shows, before a reboot,
+drain or replacement, what happens if the node goes away: volumes whose only
+healthy replica is there (critical, they become unavailable), volumes with ≥ 3
+replicas left with a single healthy one or with a rebuild running elsewhere
+(warning), degraded 2-replica volumes and volumes attached on the node (info),
+plus Longhorn's `node-drain-policy`. Same exit codes as `doctor`.
+
+### Diagnostics bundle
+
+`lhtx diag VOLUME` writes `lhtx-diag-<pvc>-<time>.tar.gz` with a summary
+(replicas, engine rebuild/purge status, replica mode change times, snapshots
+incl. pending removals, findings), the YAML of volume, engines, replicas,
+snapshots and the nodes involved (without managedFields), events, and
+instance-manager/longhorn-manager logs from those nodes, filtered to lines that
+mention the volume. Logs are limited (`--since 6h`, `--log-limit 5MiB` per
+container, `--no-logs`, `--full-logs`). Use it to capture a stuck rebuild or
+snapshot removal before trying to fix it.
 
 ### Changes (write mode)
 
@@ -106,6 +128,8 @@ TUI:
 | `enter` | open (volume detail, disk, …) |
 | `esc` / `q` | back (quit on the top level) |
 | `/` | filter |
+| `p` | volume list: problems and activity first (toggle) |
+| `i` | nodes view: drain check for the node |
 | `s` `b` `e` `J`, `tab` | detail panels: snapshots, backups, events, recurring jobs |
 | `ctrl+r` | reload panel (details) or reload volumes (poll mode) |
 | `c` | switch kubeconfig context |

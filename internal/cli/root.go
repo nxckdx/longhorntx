@@ -97,6 +97,7 @@ Without a subcommand it starts the interactive TUI.`,
 		measureCmd(g), contextsCmd(g),
 	)
 	root.AddCommand(writeCmds(g)...)
+	registerCompletions(root, g)
 	return root
 }
 

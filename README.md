@@ -39,7 +39,8 @@ lhtx drain-check NODE                # what happens if NODE goes away (reboot/dr
 lhtx diag VOLUME                     # diagnostics bundle (tar.gz) for a bug report
 lhtx measure [-d 60s] [--backups]    # measure startup + watch traffic per resource
 
-VOLUME = Longhorn volume / PV name, namespace/pvc, or a bare PVC name if unique
+VOLUME = Longhorn volume / PV name, namespace/pvc, a bare PVC name if unique,
+         or a fuzzy query if it matches exactly one volume ("imm valk")
 --context NAME  --kubeconfig PATH  -n longhorn-system  -v (print wire bytes)
 --refresh auto|watch|30s (volume updates, env LHTX_REFRESH)
 ```
@@ -127,7 +128,7 @@ TUI:
 | `↑↓`/`jk`, `g`/`G` | move |
 | `enter` | open (volume detail, disk, …) |
 | `esc` / `q` | back (quit on the top level) |
-| `/` | filter |
+| `/` | fuzzy filter like fzf: `valk data` finds `valkey-data`; space = and, `'exact`, `!not`, `^start`, `end$` |
 | `p` | volume list: problems and activity first (toggle) |
 | `i` | nodes view: drain check for the node |
 | `s` `b` `e` `J`, `tab` | detail panels: snapshots, backups, events, recurring jobs |

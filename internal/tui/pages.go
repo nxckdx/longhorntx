@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/nxckdx/longhorntx/internal/format"
+	"github.com/nxckdx/longhorntx/internal/fuzzy"
 	"github.com/nxckdx/longhorntx/internal/longhorn"
 )
 
@@ -74,15 +75,33 @@ func (m *model) rowsFor(p *page) []row {
 	default:
 		return nil
 	}
-	if m.filter == "" {
+	pat := fuzzy.Parse(m.filter)
+	if pat.Empty() {
 		return rows
 	}
-	f := strings.ToLower(m.filter)
-	var out []row
+	// fzf-style: every term must match within one column; best matches first
+	type scored struct {
+		r     row
+		score int
+	}
+	var hits []scored
+	fields := make([]string, 0, 8)
 	for _, r := range rows {
-		if strings.Contains(strings.ToLower(ansi.Strip(strings.Join(r.cells, " "))), f) {
-			out = append(out, r)
+		if r.header {
+			continue
 		}
+		fields = fields[:0]
+		for _, c := range r.cells {
+			fields = append(fields, ansi.Strip(c))
+		}
+		if s, ok := pat.Match(fields); ok {
+			hits = append(hits, scored{r, s})
+		}
+	}
+	sort.SliceStable(hits, func(i, j int) bool { return hits[i].score > hits[j].score })
+	out := make([]row, len(hits))
+	for i := range hits {
+		out[i] = hits[i].r
 	}
 	return out
 }
@@ -167,7 +186,11 @@ func (m *model) renderList(p *page, cols []col, rows []row, empty string) string
 		if m.filtering {
 			cur = "█"
 		}
-		b.WriteString(" " + sKey.Render("/") + m.filter + cur + sDim.Render(fmt.Sprintf("  %d matches", len(rows))) + "\n")
+		b.WriteString(" " + sKey.Render("/") + m.filter + cur + sDim.Render(fmt.Sprintf("  %d matches", len(rows))))
+		if m.filtering {
+			b.WriteString(sDim.Render("   fuzzy · space = and · 'exact · !not · ^start · end$"))
+		}
+		b.WriteString("\n")
 	}
 	var hdr []string
 	for _, c := range cols {

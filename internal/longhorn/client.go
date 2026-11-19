@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,6 +16,7 @@ import (
 	"k8s.io/client-go/dynamic"
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 
+	"github.com/nxckdx/longhorntx/internal/fuzzy"
 	"github.com/nxckdx/longhorntx/internal/kube"
 )
 
@@ -150,7 +152,7 @@ func ResolveVolume(vols []*Volume, ref string) (*Volume, error) {
 	}
 	switch len(matches) {
 	case 0:
-		return nil, fmt.Errorf("volume %q not found", ref)
+		return resolveFuzzy(vols, ref)
 	case 1:
 		return matches[0], nil
 	}
@@ -215,4 +217,41 @@ func (c *Client) LatestResourceVersion(ctx context.Context, resource string) (st
 		return "", err
 	}
 	return ul.GetResourceVersion(), nil
+}
+
+// resolveFuzzy is the fallback when nothing matches exactly: fzf-style
+// matching on namespace/pvc and volume name ("valk data" → valkey-data).
+// Only a unique hit is accepted.
+func resolveFuzzy(vols []*Volume, ref string) (*Volume, error) {
+	pat := fuzzy.Parse(ref)
+	type hit struct {
+		v     *Volume
+		score int
+	}
+	var hits []hit
+	for _, v := range vols {
+		if s, ok := pat.Match([]string{v.PVC(), v.Name}); ok {
+			hits = append(hits, hit{v, s})
+		}
+	}
+	switch len(hits) {
+	case 0:
+		return nil, fmt.Errorf("volume %q not found", ref)
+	case 1:
+		return hits[0].v, nil
+	}
+	sort.SliceStable(hits, func(i, j int) bool { return hits[i].score > hits[j].score })
+	var cands []string
+	for i, h := range hits {
+		if i == 8 {
+			cands = append(cands, fmt.Sprintf("… (%d more)", len(hits)-8))
+			break
+		}
+		name := h.v.PVC()
+		if name == "" {
+			name = h.v.Name
+		}
+		cands = append(cands, name)
+	}
+	return nil, fmt.Errorf("%q matches %d volumes, be more specific: %s", ref, len(hits), strings.Join(cands, ", "))
 }

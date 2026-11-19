@@ -136,6 +136,12 @@ func TestResolveVolume(t *testing.T) {
 	if _, err := ResolveVolume(vols, "data"); err == nil {
 		t.Error("ambiguous name must fail")
 	}
+	if v, err := ResolveVolume(vols, "c cf"); err != nil || v.Name != "pvc-3" {
+		t.Errorf("fuzzy fallback: %v %v", v, err)
+	}
+	if _, err := ResolveVolume(vols, "dat"); err == nil {
+		t.Error("ambiguous fuzzy match must fail")
+	}
 }
 
 func TestVersionAtLeast(t *testing.T) {

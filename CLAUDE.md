@@ -27,6 +27,7 @@ internal/longhorn   slim CRD structs (no longhorn-manager import), Client (one-s
                     write actions (actions.go), health/drain/backup-age checks
                     (doctor.go), diagnostics bundle (diag.go),
                     volume poll mode (volumes_poll.go)
+internal/fuzzy      fzf-style matching (TUI filter, CLI volume fallback)
 internal/cli        cobra commands (read: volumes.go, nodes.go, data.go, activity.go,
                     measure.go, doctor.go incl. drain-check, diag.go;
                     write: write.go; complete.go)

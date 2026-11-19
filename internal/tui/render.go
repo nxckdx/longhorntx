@@ -372,7 +372,8 @@ func (m *model) viewHelp() string {
  Navigation
    ↑/k ↓/j        move              g/G       top / bottom
    enter / l      open              esc / h   back
-   /              filter            c         switch context
+   /              fuzzy filter      c         switch context
+                  (fzf syntax: space = and, 'exact, !not, ^start, end$)
    p              volume list: problems & activity first (toggle)
    i              nodes: drain check (what happens if the node goes away)
    q              back / quit       ?         this help

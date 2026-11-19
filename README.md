@@ -38,6 +38,7 @@ lhtx measure [-d 60s] [--backups]    # measure startup + watch traffic per resou
 
 VOLUME = Longhorn volume / PV name, namespace/pvc, or a bare PVC name if unique
 --context NAME  --kubeconfig PATH  -n longhorn-system  -v (print wire bytes)
+--refresh auto|watch|30s (volume updates, env LHTX_REFRESH)
 ```
 
 ### Changes (write mode)
@@ -82,7 +83,7 @@ TUI:
 | `esc` / `q` | back (quit on the top level) |
 | `/` | filter |
 | `s` `b` `e` `J`, `tab` | detail panels: snapshots, backups, events, recurring jobs |
-| `ctrl+r` | reload panel |
+| `ctrl+r` | reload panel (details) or reload volumes (poll mode) |
 | `c` | switch kubeconfig context |
 | `W` | write mode on/off (red **RW** badge; or start with `lhtx --rw`) |
 | `S` `B` `R` | snapshot · backup · replica count (volume list / details) |
@@ -99,9 +100,13 @@ destructive ones), `d` runs a server-side dry run, `esc` cancels.
 
 ```
 nix run github:nxckdx/longhorntx           # or: nix build → result/bin/{lhtx,kubectl-lhtx}
+nix run github:nxckdx/longhorntx -- --context prod volumes   # flags after --
 nix develop                                # go, gopls, kubectl, pv
 go build -o lhtx ./cmd/lhtx && go test ./...
 ```
+
+With `nix run`, arguments for lhtx must come after `--`; otherwise nix itself
+parses flags like `--context`.
 
 After changing `go.mod`, update `vendorHash` in `flake.nix` (set it to
 `pkgs.lib.fakeHash`, run `nix build`, copy the `got:` hash).
@@ -152,39 +157,58 @@ shows it as is.
 
 ## Traffic
 
-Example: a small cluster (2 nodes, 24 volumes, 42 replicas), idle, measured
-with `kubectl … --watch-only -o json` over 60 s:
+Measured with `lhtx measure` (1 minute watch, wire bytes incl. TLS, gzip and
+managedFields):
 
-| Resource | per minute |
-|---|---|
-| engines | ~100 KB |
-| volumes | ~90 KB |
-| replicas | 0 |
-| nodes | ~15 KB |
-| settings | 0 |
+| Resource | Small cluster: objects | per minute | Large cluster: objects | List (gzip) | Watch per minute |
+|---|---|---|---|---|---|
+| volumes | 24 | ~55 KiB | 878 | 433 KiB | **10.3 MiB** (1859 events) |
+| engines | 24 | ~70 KiB | 878 | 744 KiB | **11.7 MiB** (1736 events) |
+| nodes | 2 | ~0 | 39 | 82 KiB | 124 KiB |
+| replicas | 42 | 0 | 1754 | 678 KiB | ~0 |
+| snapshots | 48 | 0 | 881 | 169 KiB | ~0 |
+| settings | 116 | 0 | 116 | 103 KiB | ~0 |
 
-Measure your own cluster with `lhtx measure` (see below).
+(small cluster: 2 nodes; large cluster: 39 nodes)
 
 Findings:
 
-- **Volumes and engines change on every write.** Volumes update
-  `status.actualSize`; engines update the size of the `volume-head` snapshot.
-  Their traffic grows with the write load, not just with the number of volumes.
+- **Volumes and engines change on every write.** Volumes update only
+  `status.actualSize` (plus the managedFields timestamp), engines only the size
+  of the `volume-head` snapshot (`lhtx measure --diff` shows this per field).
+  Each event carries the whole object (~6 KiB, uncompressed), so the traffic
+  grows with the write load. On the large cluster the volume watch alone costs
+  ~10 MiB/min, ~620 MiB/hour. That is why lhtx polls volumes on large clusters
+  (see below).
+- **Replicas, snapshots, settings and backups are practically silent**; their
+  watches cost almost nothing.
+- **Startup is cheap**: ~1.2 MiB and ~1 s on the large cluster.
 - **`kubectl` hides `managedFields`, but they do go over the wire:** +63 % for
-  volumes and +80 % for engines. The measurement command above therefore shows
-  less than lhtx (or any client) actually receives.
+  volumes and +80 % for engines.
 - **LISTs are gzip-compressed, watch streams are not.** `lhtx volumes`
-  (one LIST, ~130 KB of JSON) costs ~15 KB on the wire.
+  (one LIST, ~130 KB of JSON) costs ~15 KB on the wire on the small cluster.
 - **client-go ≥ 1.35 sends the initial sync over the watch stream by default**
   (WatchListClient), and that stream is uncompressed. lhtx turns this off per
   informer. The TUI's startup traffic dropped from 309 KiB to 59 KiB.
 
 Strategy:
 
-- Watched all the time: volumes, replicas, nodes.
+- **Volumes: `--refresh` (env `LHTX_REFRESH`)**
+  - `auto` (default): live watch below 150 volumes, otherwise poll every 30 s.
+    The count comes from one `LIST limit=1` (`remainingItemCount`).
+  - `watch`: always live. `30s`, `2m`, …: always poll with that interval.
+  - Poll mode re-lists with gzip (large cluster: ~0.85 MiB/min instead of
+    10.3 MiB/min) but still reacts immediately to what matters: replicas stay
+    watched, and a replica change triggers a GET of just that volume. The volume
+    open in the detail view gets its own watch (name field selector).
+  - The header shows `live` or `⟳ 30s · 12s ago`; `ctrl+r` reloads at once.
+- Watched all the time: replicas, nodes.
 - Engines are only watched per volume (label selector), and only while the
   detail view of that volume is open or while one of its replicas looks like
   it is rebuilding (`running` without `healthyAt`; the replica watch is free).
+  At most 10 engines are watched automatically. If more volumes rebuild at
+  once (e.g. after a node failure), the header says how many rebuilds show no
+  progress.
 - Backups (one CR per backup over the whole retention: 696 backups = 2.4 MB here)
   are watched **from now on**: a LIST with `limit=1` yields the resourceVersion,
   and the watch starting there sends only changes, without an initial list.
@@ -194,8 +218,9 @@ Strategy:
   open a panel (label or field selector), not watched. Events go through
   core/v1 using protobuf.
 - Redraws happen at most ~5 times per second, however busy the cluster is.
-- Result on the small cluster above: startup ~50–60 KiB, then **~60 KiB/min (~1 KiB/s)**
-  idle in the volume list, compared with up to MB/s for the web UI.
+- Result: small cluster, startup ~50–60 KiB, then ~60 KiB/min idle (live).
+  Large cluster, startup ~1.2 MiB, then roughly 1 MiB/min idle (poll mode,
+  estimated from the measurement). For comparison, the web UI uses up to ~8 MB/s.
 - The header shows the bytes lhtx has received on the wire (measured at the
   TCP level, after TLS) and the current rate.
 
@@ -222,6 +247,7 @@ To simulate a slow link: `LHTX_THROTTLE_KBPS=50 lhtx` (limits the download).
 
 ```
 lhtx measure            # 60 s; lhtx measure -d 5m --context prod
+lhtx measure --diff     # also show which fields change per update
 ```
 
 Lists every resource once (like the TUI at startup: time and bytes on the
@@ -244,7 +270,7 @@ engines     24      22ms        20.8 KiB     5              34.8 KiB      69.6 K
    rebuild progress with speed/ETA, nodes/disks (node → disk → replicas, SMART),
    events, `lhtx rebuilds -w`, context switching
 2. **Read more data** ✔ snapshots, backups, settings, recurring jobs, backup targets
-   · open: settings and backup-volume view in the TUI, snapshot tree
+   · open: backup-volume view in the TUI, snapshot tree
 3. **Actions** ✔ snapshot/backup create, snapshot/replica delete, replica count,
    scheduling/eviction for nodes and disks, settings – with preview, confirmation,
    client and server dry run · open: attach/detach, volume expansion, recurring jobs

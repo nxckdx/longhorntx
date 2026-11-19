@@ -35,9 +35,15 @@ internal/tui        Bubble Tea v2 (charm.land/*): tui.go model/update/keys,
 
 ## Traffic design (why things are the way they are)
 
-- Volumes, replicas, nodes: permanent informers. Engines are chatty (update on
-  every write) → watched per volume only (detail view open, or a replica looks
-  like it is rebuilding: running without `healthyAt`).
+- Measured on a large cluster (878 volumes): volume watch ~10 MiB/min, engines
+  ~12 MiB/min (only `status.actualSize` / volume-head size change; full object
+  per event). Replicas, snapshots, settings, backups are silent.
+- Replicas, nodes: permanent informers. Volumes: `--refresh` auto (watch below
+  150 volumes, else gzip re-list every 30 s), watch, or interval
+  (volumes_poll.go). In poll mode a replica change triggers a GET of its
+  volume; the volume in the detail view has its own name-selected watch.
+- Engines are chatty → watched per volume only (detail view open, or a replica
+  looks like it is rebuilding: running without `healthyAt`), max 10 automatic.
 - Informers opt out of WatchList (`plainListWatch`): watch streams are not
   gzip-compressed, LISTs are (apiserver compresses only responses > 128 KB).
 - `Store.Start` is non-blocking; volumes+nodes load first, replicas after

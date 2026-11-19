@@ -30,6 +30,7 @@ internal/longhorn   slim CRD structs (no longhorn-manager import), Client (one-s
                     (doctor.go), diagnostics bundle (diag.go),
                     volume poll mode (volumes_poll.go)
 internal/fuzzy      fzf-style matching (TUI filter, CLI volume fallback)
+internal/update     release check (daily, cached) and self-update from GitHub releases
 internal/cli        cobra commands (read: volumes.go, nodes.go, data.go, activity.go,
                     measure.go, doctor.go incl. drain-check, diag.go;
                     write: write.go; complete.go)
@@ -92,4 +93,10 @@ internal/tui        Bubble Tea v2 (charm.land/*): tui.go model/update/keys,
   a write action, never `--rw` without `--dry-run`, and no `--dry-run=server`
   unless the user explicitly allows it.
 - Commit in small logical steps, each building on its own; do not push unless asked.
+- **Commit messages: Conventional Commits** (`feat:`, `fix:`, `docs:`, `ci:`,
+  `refactor:`, `test:`, `chore:`), optionally with scope (`feat(tui): …`).
+  release-please builds releases and the changelog from them; `VERSION` and
+  `.release-please-manifest.json` are bumped by the release PR, never by hand.
+- Release binaries: goreleaser (`.goreleaser.yaml`); archive names
+  `lhtx_<ver>_<os>_<arch>.tar.gz|zip` are relied on by `lhtx update`.
 - Keep README.md in sync with features (usage, keys, data model, traffic notes).

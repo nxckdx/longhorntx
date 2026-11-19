@@ -155,6 +155,34 @@ Every action opens a dialog with the request: `y` applies (`Y` for
 destructive ones), `d` runs a server-side dry run, `esc` cancels.
 | `?` | help |
 
+## Install
+
+**Release binaries** (Linux, macOS, Windows; amd64/arm64): download the archive
+for your platform from the [GitHub releases](https://github.com/nxckdx/longhorntx/releases),
+put `lhtx` into your `PATH`, and for the kubectl plugin also link it as
+`kubectl-lhtx`. Update later with:
+
+```
+lhtx update          # downloads the latest release, verifies the SHA256, replaces the binary
+lhtx update --check  # only check
+lhtx version
+```
+
+lhtx checks for new releases at most once a day (one small request to the
+GitHub API, cached in `~/.cache/lhtx`) and shows `↑ vX.Y.Z` in the TUI header.
+Turn it off with `LHTX_NO_UPDATE_CHECK=1`. Nix installs and development builds
+never check and are updated through Nix.
+
+**Go:** `go install github.com/nxckdx/longhorntx/cmd/lhtx@latest`
+
+## Releases
+
+Commits on `main` follow [Conventional Commits](https://www.conventionalcommits.org/)
+(`feat:`, `fix:`, `docs:`, …). release-please keeps a release PR open with the
+changelog and the `VERSION` bump; merging it creates the tag `vX.Y.Z` and the
+GitHub release, and goreleaser attaches the binaries and `checksums.txt`. CI
+runs gofmt, vet, tests and the Nix build on every push and pull request.
+
 ## Install / develop (Nix)
 
 ```

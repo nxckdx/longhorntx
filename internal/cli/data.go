@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"sort"
@@ -338,4 +339,80 @@ func backupOverview(cmd *cobra.Command, g *globals, c *longhorn.Client, maxAge t
 	}
 	fmt.Println(")")
 	return nil
+}
+
+func orphansCmd(g *globals) *cobra.Command {
+	return &cobra.Command{
+		Use:     "orphans",
+		Aliases: []string{"orphan"},
+		Short:   "List orphaned replica data and instances",
+		Args:    cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := g.checkOutput(); err != nil {
+				return err
+			}
+			c, err := g.client()
+			if err != nil {
+				return err
+			}
+			defer g.reportTraffic(c)
+			ovs, err := loadOrphans(cmd.Context(), c)
+			if err != nil {
+				return err
+			}
+			if g.output == "json" {
+				return writeJSON(os.Stdout, ovs)
+			}
+			if len(ovs) == 0 {
+				fmt.Println("no orphans")
+				return nil
+			}
+			now := time.Now()
+			w := newTab(os.Stdout)
+			hdr := "NODE\tTYPE\tPATH\tVOLUME\tAGE\tCLEANABLE"
+			if g.output == "wide" {
+				hdr += "\tNAME"
+			}
+			fmt.Fprintln(w, hdr)
+			for _, ov := range ovs {
+				path := ov.DiskPath + "/replicas/" + ov.DataName
+				if ov.DataName == "" {
+					path = "-"
+				}
+				vol := "deleted"
+				if ov.VolExists {
+					vol = ov.PVC
+					if vol == "" {
+						vol = ov.Volume
+					}
+				}
+				clean := fmt.Sprint(ov.Cleanable)
+				if ov.InUse {
+					clean = "IN USE"
+				}
+				line := fmt.Sprintf("%s\t%s\t%s\t%s\t%s\t%s", ov.Node, ov.Type, path, vol, format.Age(ov.Created, now), clean)
+				if g.output == "wide" {
+					line += "\t" + ov.Name
+				}
+				fmt.Fprintln(w, line)
+			}
+			return w.Flush()
+		},
+	}
+}
+
+func loadOrphans(ctx context.Context, c *longhorn.Client) ([]longhorn.OrphanView, error) {
+	ors, err := c.Orphans(ctx)
+	if err != nil {
+		return nil, err
+	}
+	vols, err := c.Volumes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	reps, err := c.Replicas(ctx, "")
+	if err != nil {
+		return nil, err
+	}
+	return longhorn.BuildOrphans(ors, vols, reps), nil
 }

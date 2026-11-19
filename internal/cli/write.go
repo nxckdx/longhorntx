@@ -231,8 +231,105 @@ func deleteCmd(g *globals) *cobra.Command {
 			return g.runAction(ctx, c, a)
 		},
 	}
-	cmd.AddCommand(snap, rep)
+	var allCleanable bool
+	orph := &cobra.Command{
+		Use:   "orphan [NAME]",
+		Short: "Delete an orphan (Longhorn removes its data directory if cleanable)",
+		Long: `Delete orphan CRs. For replica data that Longhorn marks DataCleanable,
+Longhorn deletes <disk>/replicas/<dir> on the node. --all-cleanable deletes
+every cleanable orphan; you confirm by typing their number.`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			if (len(args) == 1) == allCleanable {
+				return fmt.Errorf("give an orphan NAME or --all-cleanable")
+			}
+			c, err := g.client()
+			if err != nil {
+				return err
+			}
+			ovs, err := loadOrphans(ctx, c)
+			if err != nil {
+				return err
+			}
+			var acts []*longhorn.Action
+			for _, ov := range ovs {
+				if len(args) == 1 && ov.Name != args[0] {
+					continue
+				}
+				if allCleanable && (!ov.Cleanable || ov.InUse) {
+					continue
+				}
+				a, err := longhorn.DeleteOrphan(ov)
+				if err != nil {
+					return err
+				}
+				acts = append(acts, a)
+			}
+			switch len(acts) {
+			case 0:
+				return fmt.Errorf("no matching orphan")
+			case 1:
+				return g.runAction(ctx, c, acts[0])
+			}
+			return g.runBatch(ctx, c, fmt.Sprintf("Delete %d cleanable orphans", len(acts)), acts)
+		},
+	}
+	orph.Flags().BoolVar(&allCleanable, "all-cleanable", false, "delete all orphans Longhorn marks as cleanable")
+	cmd.AddCommand(snap, rep, orph)
 	return cmd
+}
+
+// runBatch previews and applies several actions with one confirmation
+// (type their number).
+func (g *globals) runBatch(ctx context.Context, c *longhorn.Client, title string, acts []*longhorn.Action) error {
+	mode, err := g.dryRun()
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%s · %s\n\n", title, c.Cluster.Context)
+	var warns []string
+	seen := map[string]bool{}
+	for _, a := range acts {
+		fmt.Printf("  %s %s/%s  %s\n", a.Verb, a.GVR.Resource, a.Name, a.Summary())
+		for _, w := range a.Warnings {
+			if !seen[w] {
+				seen[w] = true
+				warns = append(warns, w)
+			}
+		}
+	}
+	for _, w := range warns {
+		fmt.Println("⚠ " + w)
+	}
+	switch mode {
+	case longhorn.DryRunClient:
+		fmt.Println("\n(dry run: nothing sent)")
+		return nil
+	case longhorn.DryRunServer:
+		for _, a := range acts {
+			if err := c.Apply(ctx, a, longhorn.DryRunServer); err != nil {
+				return fmt.Errorf("server dry run rejected %s: %w", a.Name, err)
+			}
+		}
+		fmt.Printf("\n✔ all %d accepted by the server (dry run, nothing changed)\n", len(acts))
+		return nil
+	}
+	if err := g.confirm(true, fmt.Sprint(len(acts))); err != nil {
+		return err
+	}
+	failed := 0
+	for _, a := range acts {
+		if err := c.Apply(ctx, a, longhorn.DryRunNone); err != nil {
+			failed++
+			fmt.Printf("✖ %s: %v\n", a.Name, err)
+		}
+	}
+	if failed > 0 {
+		return fmt.Errorf("%d of %d failed", failed, len(acts))
+	}
+	fmt.Printf("✔ %d done\n", len(acts))
+	return nil
 }
 
 func setCmd(g *globals) *cobra.Command {

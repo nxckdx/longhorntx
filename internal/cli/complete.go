@@ -237,3 +237,21 @@ func registerCompletions(root *cobra.Command, g *globals) {
 	}
 	walk(root, "")
 }
+
+func (g *globals) completeOrphans(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	if len(args) > 0 {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	names := g.cachedNames("orphans", func(ctx context.Context, c *longhorn.Client) ([]string, error) {
+		ors, err := c.Orphans(ctx)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]string, 0, len(ors))
+		for _, o := range ors {
+			out = append(out, o.Name)
+		}
+		return out, nil
+	})
+	return filterPrefix(names, toComplete), cobra.ShellCompDirectiveNoFileComp
+}

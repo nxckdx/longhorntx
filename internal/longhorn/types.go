@@ -171,7 +171,8 @@ type EngineSpec struct {
 type EngineStatus struct {
 	CurrentState             string                         `json:"currentState"`
 	CurrentReplicaAddressMap map[string]string              `json:"currentReplicaAddressMap"`
-	ReplicaModeMap           map[string]string              `json:"replicaModeMap"` // name -> RW | WO | ERR
+	ReplicaModeMap           map[string]string              `json:"replicaModeMap"`           // name -> RW | WO | ERR
+	ReplicaTransitionTimeMap map[string]string              `json:"replicaTransitionTimeMap"` // name -> RFC3339 of last mode change
 	RebuildStatus            map[string]RebuildStatus       `json:"rebuildStatus"`
 	PurgeStatus              map[string]PurgeStatus         `json:"purgeStatus"`
 	RestoreStatus            map[string]RestoreStatus       `json:"restoreStatus"`

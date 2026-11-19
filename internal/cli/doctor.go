@@ -1,0 +1,176 @@
+package cli
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/spf13/cobra"
+
+	"github.com/nxckdx/longhorntx/internal/longhorn"
+)
+
+// exitError carries a process exit code without printing an error.
+type exitError struct{ code int }
+
+func (e exitError) Error() string { return fmt.Sprintf("exit %d", e.code) }
+
+func doctorCmd(g *globals) *cobra.Command {
+	var backupMaxAge time.Duration
+	var minSev string
+	cmd := &cobra.Command{
+		Use:     "doctor",
+		Aliases: []string{"health", "check"},
+		Short:   "Check volumes, replicas, disks, backups for problems",
+		Long: `Read-only health check. Reports what is wrong right now:
+faulted/degraded volumes, single healthy replica, replicas sharing a disk,
+nodes/disks not ready or full, SMART warnings, unavailable backup targets,
+backups older than their recurring job schedule, slow rebuilds and a
+suspected rebuild/snapshot-removal deadlock, orphans.
+
+Engines and snapshots are only read for volumes that are rebuilding.
+
+Exit codes (Nagios style): 0 ok, 1 warning, 2 critical, 3 error.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			// any error means UNKNOWN (3) for monitoring
+			err := runDoctor(cmd, g, backupMaxAge, minSev)
+			var ee exitError
+			if err != nil && !errors.As(err, &ee) {
+				fmt.Fprintln(os.Stderr, "error:", err)
+				return exitError{3}
+			}
+			return err
+		},
+	}
+	cmd.Flags().DurationVar(&backupMaxAge, "backup-max-age", 0, "also flag volumes without a backup job whose last backup is older (e.g. 36h)")
+	cmd.Flags().StringVar(&minSev, "min", "info", "lowest severity to show: info|warning|critical")
+	return cmd
+}
+
+func runDoctor(cmd *cobra.Command, g *globals, backupMaxAge time.Duration, minSev string) error {
+	if err := g.checkOutput(); err != nil {
+		return err
+	}
+	floor, err := parseSeverity(minSev)
+	if err != nil {
+		return err
+	}
+	c, err := g.client()
+	if err != nil {
+		return err
+	}
+	defer g.reportTraffic(c)
+	in, err := loadDoctorInput(cmd.Context(), c)
+	if err != nil {
+		return err
+	}
+	in.BackupMaxAge = backupMaxAge
+	all := longhorn.Diagnose(in)
+	var fs []longhorn.Finding
+	for _, f := range all {
+		if f.Severity >= floor {
+			fs = append(fs, f)
+		}
+	}
+
+	if g.output == "json" {
+		if err := writeJSON(os.Stdout, map[string]any{
+			"context": c.Cluster.Context, "worst": longhorn.Worst(all), "findings": fs,
+		}); err != nil {
+			return err
+		}
+	} else {
+		printFindings(c.Cluster.Context, len(in.Volumes), len(in.Nodes), all, fs, g.output == "wide")
+	}
+	switch longhorn.Worst(all) {
+	case longhorn.SevCritical:
+		return exitError{2}
+	case longhorn.SevWarning:
+		return exitError{1}
+	}
+	return nil
+}
+
+func parseSeverity(s string) (longhorn.Severity, error) {
+	switch strings.ToLower(s) {
+	case "", "info":
+		return longhorn.SevInfo, nil
+	case "warning", "warn":
+		return longhorn.SevWarning, nil
+	case "critical", "crit":
+		return longhorn.SevCritical, nil
+	}
+	return 0, fmt.Errorf("invalid --min %q (info|warning|critical)", s)
+}
+
+// loadDoctorInput reads what Diagnose needs; engines and snapshots only for
+// rebuilding volumes.
+func loadDoctorInput(ctx context.Context, c *longhorn.Client) (longhorn.DoctorInput, error) {
+	var in longhorn.DoctorInput
+	var err error
+	if in.Volumes, err = c.Volumes(ctx); err != nil {
+		return in, err
+	}
+	if in.Replicas, err = c.Replicas(ctx, ""); err != nil {
+		return in, err
+	}
+	if in.Nodes, err = c.Nodes(ctx); err != nil {
+		return in, err
+	}
+	for _, v := range longhorn.RebuildingVolumes(in.Replicas) {
+		engs, err := c.Engines(ctx, v)
+		if err != nil {
+			return in, err
+		}
+		in.Engines = append(in.Engines, engs...)
+		snaps, err := c.Snapshots(ctx, v)
+		if err != nil {
+			return in, err
+		}
+		in.Snapshots = append(in.Snapshots, snaps...)
+	}
+	// small collections; failures here should not hide the other checks
+	in.Targets, _ = c.BackupTargets(ctx)
+	in.Jobs, _ = c.RecurringJobs(ctx)
+	in.Orphans, _, _ = c.ListCount(ctx, "orphans")
+	in.Now = time.Now()
+	return in, nil
+}
+
+func printFindings(ctxName string, vols, nodes int, all, shown []longhorn.Finding, wide bool) {
+	count := map[longhorn.Severity]int{}
+	for _, f := range all {
+		count[f.Severity]++
+	}
+	status := "OK"
+	if w := longhorn.Worst(all); w > longhorn.SevInfo {
+		status = w.String()
+	}
+	fmt.Printf("%s · %d volumes, %d nodes · %s (%d critical, %d warnings, %d info)\n",
+		ctxName, vols, nodes, status, count[longhorn.SevCritical], count[longhorn.SevWarning], count[longhorn.SevInfo])
+	if len(shown) == 0 {
+		return
+	}
+	fmt.Println()
+	w := newTab(os.Stdout)
+	fmt.Fprintln(w, "SEVERITY\tCHECK\tOBJECT\tMESSAGE")
+	for _, f := range shown {
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", f.Severity, f.Check, f.Object, f.Message)
+		if wide && f.Hint != "" {
+			fmt.Fprintf(w, "\t\t\t→ %s\n", f.Hint)
+		}
+	}
+	_ = w.Flush()
+	if !wide {
+		for _, f := range shown {
+			if f.Hint != "" {
+				fmt.Println("\n(-o wide shows hints)")
+				break
+			}
+		}
+	}
+}

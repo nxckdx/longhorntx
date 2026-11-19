@@ -4,6 +4,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -94,7 +95,7 @@ Without a subcommand it starts the interactive TUI.`,
 	root.AddCommand(
 		volumesCmd(g), replicasCmd(g), nodesCmd(g), diskCmd(g), rebuildsCmd(g),
 		snapshotsCmd(g), backupsCmd(g), eventsCmd(g), jobsCmd(g), settingsCmd(g), targetsCmd(g),
-		measureCmd(g), contextsCmd(g),
+		measureCmd(g), doctorCmd(g), contextsCmd(g),
 	)
 	root.AddCommand(writeCmds(g)...)
 	registerCompletions(root, g)
@@ -103,6 +104,10 @@ Without a subcommand it starts the interactive TUI.`,
 
 func Execute(ctx context.Context) int {
 	if err := NewRoot().ExecuteContext(ctx); err != nil {
+		var ee exitError
+		if errors.As(err, &ee) {
+			return ee.code
+		}
 		fmt.Fprintln(os.Stderr, "error:", err)
 		return 1
 	}

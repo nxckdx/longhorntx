@@ -202,6 +202,12 @@ func registerCompletions(root *cobra.Command, g *globals) {
 	_ = root.RegisterFlagCompletionFunc("refresh", cobra.FixedCompletions([]string{"auto", "watch", "30s", "1m", "2m"}, cobra.ShellCompDirectiveNoFileComp))
 	_ = root.RegisterFlagCompletionFunc("dry-run", cobra.FixedCompletions([]string{"client", "server"}, cobra.ShellCompDirectiveNoFileComp))
 
+	for _, c := range root.Commands() {
+		if c.Name() == "doctor" {
+			_ = c.RegisterFlagCompletionFunc("min", cobra.FixedCompletions([]string{"info", "warning", "critical"}, cobra.ShellCompDirectiveNoFileComp))
+		}
+	}
+
 	byPath := map[string]cobra.CompletionFunc{
 		"replicas":        g.completeVolumes,
 		"snapshots":       g.completeVolumes,

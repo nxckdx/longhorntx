@@ -48,6 +48,7 @@ lhtx engineimages                    # engine images, state, how many volumes us
 lhtx targets                         # backup targets
 lhtx contexts                        # kubeconfig contexts
 lhtx doctor [--backup-max-age 36h]   # health check, exit code 0/1/2/3 (ok/warn/crit/error)
+lhtx overview [--contexts a,b]       # doctor summary for all kubeconfig contexts, one line each
 lhtx drain-check NODE                # what happens if NODE goes away (reboot/drain)
 lhtx diag VOLUME                     # diagnostics bundle (tar.gz) for a bug report
 lhtx measure [-d 60s] [--backups]    # measure startup + watch traffic per resource
@@ -80,6 +81,13 @@ VOLUME = Longhorn volume / PV name, namespace/pvc, a bare PVC name if unique,
 Engines and snapshots are only read for volumes that are rebuilding. Exit codes
 follow Nagios (0 ok, 1 warning, 2 critical, 3 error), so `lhtx doctor --min warning`
 fits cron or a monitoring check. `-o wide` shows hints, `-o json` is for scripts.
+
+`lhtx overview` runs the same checks against all kubeconfig contexts (or
+`--contexts a,b`), 4 at a time, and prints one line per cluster: Longhorn
+version, volumes, attached, degraded, faulted, rebuilding, nodes ready and the
+worst finding (`-o wide` adds traffic and duration). Unreachable clusters and
+contexts without Longhorn show the error. Exit code: worst of all clusters, 3
+if one failed.
 
 ### Node maintenance
 
@@ -410,11 +418,16 @@ engines     24      22ms        20.8 KiB     5              34.8 KiB      69.6 K
 2. **Read more data** ✔ snapshots, backups, settings, recurring jobs, backup targets
    · open: backup-volume view in the TUI, snapshot tree
 3. **Actions** ✔ snapshot/backup create, snapshot/replica delete, replica count,
-   scheduling/eviction for nodes and disks, settings – with preview, confirmation,
-   client and server dry run · open: attach/detach, volume expansion, recurring jobs
-4. **Health** ✔ `lhtx doctor` / Health tab · open: rebuild/snapshot deadlock
-   workaround as a guided action, diagnostics bundle, backup age overview
-5. Multi-cluster overview, more traffic statistics
+   scheduling/eviction for nodes and disks, settings, engine upgrade, expansion,
+   attach/detach, recurring job assignment – with preview, confirmation, client
+   and server dry run · open: restore from backup with an automatic switch of
+   the PVC to the restored volume (scale down, swap PV/PVC, scale up, keep the
+   old volume for rollback; needs a plan for GitOps-managed workloads)
+4. **Health** ✔ `lhtx doctor` / Health tab, diagnostics bundle, backup age,
+   drain check · open: rebuild/snapshot deadlock workaround as a guided action
+   (after collecting evidence with `lhtx diag`)
+5. ✔ Multi-cluster overview (`lhtx overview`) · open: overview in the TUI, more
+   traffic statistics
 
 ## License
 

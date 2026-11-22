@@ -40,3 +40,27 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # nix/release.json pins the release archives for the `lhtx-bin` flake
+  # package; it can only be written after goreleaser uploaded them.
+  nix-release-hashes:
+    needs: [release-please, binaries]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Update nix/release.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          gh release download "$TAG" --pattern checksums.txt --dir "$RUNNER_TEMP"
+          nix/update-release.sh "$TAG" "$RUNNER_TEMP/checksums.txt"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add nix/release.json
+          git diff --cached --quiet && exit 0
+          git commit -m "chore(nix): lhtx-bin ${TAG#v}"
+          git pull --rebase origin main
+          git push origin HEAD:main

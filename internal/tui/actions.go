@@ -130,6 +130,40 @@ func (m *model) actionKey(p *page, key string) (tea.Cmd, bool) {
 		}
 		return nil, true
 	}
+	if p.kind == pDetail && p.panel == panelJobs && key == "space" {
+		if !m.requireRW() {
+			return nil, true
+		}
+		rows := m.rowsFor(p)
+		vv := m.findView(p.vol)
+		if p.cursor >= len(rows) || vv == nil || p.pdata == nil {
+			return nil, true
+		}
+		ref, ok := rows[p.cursor].ref.(longhorn.JobRef)
+		if !ok {
+			return nil, true
+		}
+		if !ref.Assigned(vv.Volume) && !ref.Group {
+			for _, a := range longhorn.JobAssignments(vv.Volume, p.pdata.jobs) {
+				if a.Ref == ref && a.How != "" {
+					m.setFlash(ref.Name+" applies "+a.How+": remove the group to turn it off", true)
+					return nil, true
+				}
+			}
+		}
+		// the PVC label check needs a GET; the preview warns if the PVC
+		// is the source of the job labels
+		c, ctx, v, jobs := m.client, m.ctx, vv.Volume, p.pdata.jobs
+		m.modal = &modal{kind: modalBusy, busyText: "checking the PVC …"}
+		return func() tea.Msg {
+			var labels map[string]string
+			if info, err := c.PVCInfo(ctx, v); err == nil && info != nil {
+				labels = info.Labels
+			}
+			a, err := longhorn.SetJobAssignment(v, []longhorn.JobRef{ref}, !ref.Assigned(v), jobs, labels)
+			return confirmMsg{action: a, err: err}
+		}, true
+	}
 	if !strings.Contains("SBRXDCEUA", key) || len(key) != 1 {
 		return nil, false
 	}
@@ -335,6 +369,12 @@ func (m *model) volumeAction(vols []string, key string, detail *page) tea.Cmd {
 		m.deleteReplica(views[0].Replicas[min(detail.sel, len(views[0].Replicas)-1)].Name)
 	}
 	return nil
+}
+
+// confirmMsg opens the confirmation for an action built in the background.
+type confirmMsg struct {
+	action *longhorn.Action
+	err    error
 }
 
 type attachMsg struct {

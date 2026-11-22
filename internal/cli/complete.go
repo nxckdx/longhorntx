@@ -154,6 +154,30 @@ func (g *globals) completeReplicas(cmd *cobra.Command, args []string, toComplete
 	return filterPrefix(names, toComplete), cobra.ShellCompDirectiveNoFileComp
 }
 
+// completeJobs offers recurring job names and group:NAME.
+func (g *globals) completeJobs(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	c, err := g.client()
+	if err != nil {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	jobs, err := c.RecurringJobs(cmd.Context())
+	if err != nil {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, j := range jobs {
+		out = append(out, j.Name+"\t"+j.Spec.Task+" "+j.Spec.Cron)
+		for _, gr := range j.Spec.Groups {
+			if !seen[gr] {
+				seen[gr] = true
+				out = append(out, "group:"+gr+"\tgroup")
+			}
+		}
+	}
+	return out, cobra.ShellCompDirectiveNoFileComp
+}
+
 func (g *globals) completeSettings(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 	if len(args) > 0 {
 		return nil, cobra.ShellCompDirectiveNoFileComp

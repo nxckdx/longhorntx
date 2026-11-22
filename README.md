@@ -122,6 +122,7 @@ lhtx upgrade-engine VOLUME... --image v1.12.1   # like "Upgrade Engine" in the w
 lhtx expand VOLUME 20Gi|+5Gi               # through the PVC if bound (StorageClass must allow it)
 lhtx attach VOLUME NODE [--maintenance]    # like Attach in the web UI (ticket "longhorn-ui")
 lhtx detach VOLUME                         # removes only that ticket, never the CSI one
+lhtx jobs add|remove VOLUME JOB|group:NAME...   # recurring job labels on the volume
 lhtx cordon|uncordon NODE[:DISK]           # replica scheduling off/on
 lhtx evict NODE[:DISK] [--cancel]          # also disables scheduling (Longhorn requires it)
 
@@ -159,6 +160,7 @@ TUI:
 | `W` | write mode on/off (red **RW** badge; or start with `lhtx --rw`) |
 | `S` `B` `R` `U` `E` | snapshot · backup · replica count · engine image · expand (volume list / details) |
 | `A` | attach to a node (normal or maintenance) / detach a manually attached volume |
+| `space` (jobs panel `J`) | assign / unassign the recurring job or group; the panel lists all of them with how they apply (direct / via group) |
 | `space`, `ctrl+a` | volume list: select volumes / all filtered ones (`esc` clears); `S` `B` `R` `U` `E` then act on all selected |
 | `X`, `[` `]` | delete replica (selected with `[` `]` in details, or in the disk view) |
 | `D` | delete snapshot (snapshots panel); `B` there backs up the selected snapshot |

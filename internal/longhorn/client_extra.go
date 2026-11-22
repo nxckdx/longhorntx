@@ -231,3 +231,97 @@ func (c *Client) Orphans(ctx context.Context) ([]*Orphan, error) {
 func (c *Client) OrphanCR(ctx context.Context, name string) (*Orphan, error) {
 	return get[Orphan](ctx, c, GVROrphan, name)
 }
+
+// JobRef names a recurring job or, with Group set, a job group.
+type JobRef struct {
+	Name  string
+	Group bool
+}
+
+// ParseJobRef accepts "JOB" or "group:NAME".
+func ParseJobRef(s string) JobRef {
+	if n, ok := strings.CutPrefix(s, "group:"); ok {
+		return JobRef{Name: n, Group: true}
+	}
+	return JobRef{Name: s}
+}
+
+func (r JobRef) String() string {
+	if r.Group {
+		return "group:" + r.Name
+	}
+	return r.Name
+}
+
+func (r JobRef) label() string {
+	if r.Group {
+		return labelRecurringJobGroup + r.Name
+	}
+	return labelRecurringJob + r.Name
+}
+
+// Assigned reports whether the job or group is assigned to the volume by
+// its own label.
+func (r JobRef) Assigned(v *Volume) bool { return v.Labels[r.label()] == "enabled" }
+
+// JobAssignment lists all groups and jobs with how they apply to a volume:
+// "direct", "via group X, Y" or "".
+type JobAssignment struct {
+	Ref   JobRef
+	Job   *RecurringJob // nil for groups
+	Jobs  []string      // jobs in the group
+	How   string
+	Label string
+}
+
+func JobAssignments(v *Volume, jobs []*RecurringJob) []JobAssignment {
+	groups := map[string][]string{}
+	for _, j := range jobs {
+		for _, g := range j.Spec.Groups {
+			groups[g] = append(groups[g], j.Name)
+		}
+	}
+	// groups assigned by label even if no job is in them (yet)
+	for k, val := range v.Labels {
+		if n, ok := strings.CutPrefix(k, labelRecurringJobGroup); ok && val == "enabled" {
+			if _, ok := groups[n]; !ok {
+				groups[n] = nil
+			}
+		}
+	}
+	var out []JobAssignment
+	names := make([]string, 0, len(groups))
+	for g := range groups {
+		names = append(names, g)
+	}
+	sort.Strings(names)
+	for _, g := range names {
+		r := JobRef{Name: g, Group: true}
+		a := JobAssignment{Ref: r, Jobs: groups[g], Label: r.label()}
+		if r.Assigned(v) {
+			a.How = "direct"
+		}
+		out = append(out, a)
+	}
+	sorted := append([]*RecurringJob(nil), jobs...)
+	sort.Slice(sorted, func(i, k int) bool { return sorted[i].Name < sorted[k].Name })
+	for _, j := range sorted {
+		r := JobRef{Name: j.Name}
+		a := JobAssignment{Ref: r, Job: j, Label: r.label()}
+		if r.Assigned(v) {
+			a.How = "direct"
+		} else {
+			var via []string
+			for _, g := range j.Spec.Groups {
+				if (JobRef{Name: g, Group: true}).Assigned(v) {
+					via = append(via, g)
+				}
+			}
+			if len(via) > 0 {
+				a.How = "via group " + strings.Join(via, ", ")
+			}
+		}
+		out = append(out, a)
+	}
+	return out
+}

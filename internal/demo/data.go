@@ -332,6 +332,10 @@ func (d *data) buildRest() {
 	sj.Spec.Groups = []string{"default"}
 	sj.Status.ExecutionCount = 9480
 	add(sj)
+	wj := &lh.RecurringJob{ObjectMeta: meta("weekly-full-backup", nil, created)}
+	wj.Spec.Task, wj.Spec.Cron, wj.Spec.Retain, wj.Spec.Concurrency = "backup-force-create", "0 4 * * 0", 4, 1
+	wj.Status.ExecutionCount = 52
+	add(wj)
 
 	for vi, v := range d.volumes {
 		def := volDefs[vi]

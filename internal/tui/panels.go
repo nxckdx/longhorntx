@@ -72,10 +72,8 @@ func (m *model) loadPanel(p *page) tea.Cmd {
 	c := m.client
 	ctx := m.ctx
 	var refs []longhorn.ObjectRef
-	var volume *longhorn.Volume
 	if vv := m.findView(vol); vv != nil {
 		refs = longhorn.VolumeEventRefs(c.Namespace, vv, m.state.Engines)
-		volume = vv.Volume
 	}
 	return func() tea.Msg {
 		d := &panelData{kind: kind, loadedAt: time.Now()}
@@ -93,11 +91,9 @@ func (m *model) loadPanel(p *page) tea.Cmd {
 		case panelEvents:
 			d.events, d.err = c.Events(ctx, refs)
 		case panelJobs:
-			var jobs []*longhorn.RecurringJob
-			jobs, d.err = c.RecurringJobs(ctx)
-			if volume != nil {
-				d.jobs = longhorn.VolumeRecurringJobs(volume, jobs)
-			}
+			// all jobs: the panel shows which apply and lets write mode
+			// toggle assignments; the volume labels come from the watch
+			d.jobs, d.err = c.RecurringJobs(ctx)
 		}
 		return panelMsg{vol: vol, data: d}
 	}
@@ -121,7 +117,7 @@ func (m *model) panelCols(p *page) []col {
 	case panelEvents:
 		return []col{{"AGE", 9, 0}, {"TYPE", 8, 0}, {"REASON", 22, 0}, {"OBJECT", 0, 1}, {"MESSAGE", 0, 3}}
 	case panelJobs:
-		return []col{{"NAME", 0, 1}, {"TASK", 18, 0}, {"CRON", 14, 0}, {"RETAIN", 7, 0}, {"GROUPS", 0, 1}, {"RUNS", 6, 0}}
+		return []col{{"NAME", 0, 1}, {"ASSIGNED", 0, 1}, {"TASK", 18, 0}, {"CRON", 14, 0}, {"RETAIN", 7, 0}, {"GROUPS / JOBS", 0, 1}, {"RUNS", 6, 0}}
 	}
 	return nil
 }
@@ -176,8 +172,25 @@ func (m *model) panelRows(p *page) []row {
 			rows = append(rows, row{cells: []string{age, typ, e.Reason, sDim.Render(e.Object), e.Message}})
 		}
 	case panelJobs:
-		for _, j := range d.jobs {
-			rows = append(rows, row{cells: []string{j.Name, j.Spec.Task, j.Spec.Cron, fmt.Sprint(j.Spec.Retain),
+		vv := m.findView(p.vol)
+		if vv == nil {
+			break
+		}
+		for _, a := range longhorn.JobAssignments(vv.Volume, d.jobs) {
+			how := sDim.Render("-")
+			switch {
+			case a.How == "direct":
+				how = fg(cOK, "✔ direct")
+			case a.How != "":
+				how = fg(cOK, "✔") + " " + sDim.Render(a.How)
+			}
+			if a.Job == nil {
+				rows = append(rows, row{ref: a.Ref, cells: []string{"group:" + a.Ref.Name, how, sDim.Render("group"), "", "",
+					dash(strings.Join(a.Jobs, ",")), ""}})
+				continue
+			}
+			j := a.Job
+			rows = append(rows, row{ref: a.Ref, cells: []string{j.Name, how, j.Spec.Task, j.Spec.Cron, fmt.Sprint(j.Spec.Retain),
 				dash(strings.Join(j.Spec.Groups, ",")), fmt.Sprint(j.Status.ExecutionCount)}})
 		}
 	}

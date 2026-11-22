@@ -213,7 +213,7 @@ func settingsCmd(g *globals) *cobra.Command {
 }
 
 func jobsCmd(g *globals) *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:     "jobs [VOLUME]",
 		Aliases: []string{"recurringjobs", "recurring-jobs", "rj"},
 		Short:   "List recurring jobs (or the jobs that apply to a volume)",
@@ -251,6 +251,8 @@ func jobsCmd(g *globals) *cobra.Command {
 			return w.Flush()
 		},
 	}
+	cmd.AddCommand(jobAssignCmd(g, true), jobAssignCmd(g, false))
+	return cmd
 }
 
 func targetsCmd(g *globals) *cobra.Command {
@@ -461,6 +463,58 @@ func engineImagesCmd(g *globals) *cobra.Command {
 				fmt.Printf("\nautomatic engine upgrade is on (%d per node): volumes move to the default image by themselves\n", env.AutoLimit)
 			}
 			return nil
+		},
+	}
+}
+
+// jobAssignCmd: lhtx jobs add|remove VOLUME JOB|group:NAME...
+func jobAssignCmd(g *globals, assign bool) *cobra.Command {
+	use, short := "add", "Assign recurring jobs or groups to a volume (needs --rw)"
+	if !assign {
+		use, short = "remove", "Remove recurring jobs or groups from a volume (needs --rw)"
+	}
+	return &cobra.Command{
+		Use:   use + " VOLUME JOB|group:NAME...",
+		Short: short,
+		Long: short + `.
+
+Sets or removes the volume labels recurring-job.longhorn.io/<job> and
+recurring-job-group.longhorn.io/<group>, like the web UI. Jobs that apply
+through a group can only be removed by removing the group.`,
+		Args: cobra.MinimumNArgs(2),
+		ValidArgsFunction: func(cmd *cobra.Command, args []string, tc string) ([]string, cobra.ShellCompDirective) {
+			if len(args) == 0 {
+				return g.completeVolumes(cmd, args, tc)
+			}
+			return g.completeJobs(cmd, args, tc)
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			c, err := g.client()
+			if err != nil {
+				return err
+			}
+			v, err := resolveVolume(ctx, c, args[0])
+			if err != nil {
+				return err
+			}
+			jobs, err := c.RecurringJobs(ctx)
+			if err != nil {
+				return err
+			}
+			var pvcLabels map[string]string
+			if info, err := c.PVCInfo(ctx, v); err == nil && info != nil {
+				pvcLabels = info.Labels
+			}
+			var refs []longhorn.JobRef
+			for _, a := range args[1:] {
+				refs = append(refs, longhorn.ParseJobRef(a))
+			}
+			act, err := longhorn.SetJobAssignment(v, refs, assign, jobs, pvcLabels)
+			if err != nil {
+				return err
+			}
+			return g.runAction(ctx, c, act)
 		},
 	}
 }

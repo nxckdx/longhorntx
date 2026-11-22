@@ -406,6 +406,7 @@ func (m *model) viewHelp() string {
    S snapshot   B backup (snapshot + backup)   R replica count   U engine image
    E expand (20Gi or +5Gi; through the PVC if there is one)
    A attach to a node / detach (manual ticket, compatible with the web UI)
+   space (recurring jobs panel) assign / unassign the job or group
    space select volumes, ctrl+a select all (filtered), esc clear – S/B/R/U/E
    then act on all selected volumes
    X delete replica ([ ] selects in volume details)   D delete snapshot (in panel)

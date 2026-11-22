@@ -398,6 +398,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.openEnginePicker(msg)
 		return m, nil
 
+	case confirmMsg:
+		m.modal = nil
+		m.confirm(msg.action, msg.err)
+		return m, nil
+
 	case attachMsg:
 		m.openAttach(msg)
 		return m, nil

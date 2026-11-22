@@ -25,6 +25,7 @@ type PVCInfo struct {
 	StorageClass    string
 	AllowExpansion  bool // StorageClass allowVolumeExpansion
 	ClassMissing    bool
+	Labels          map[string]string
 }
 
 // PVCInfo reads the volume's PVC and its StorageClass (two small GETs).
@@ -50,7 +51,7 @@ func (c *Client) PVCInfo(ctx context.Context, v *Volume) (*PVCInfo, error) {
 		return nil, err
 	}
 	info := &PVCInfo{Namespace: ks.Namespace, Name: ks.PVCName, ResourceVersion: u.GetResourceVersion(),
-		StorageClass: pvc.Spec.StorageClassName}
+		StorageClass: pvc.Spec.StorageClassName, Labels: u.GetLabels()}
 	if q, err := resource.ParseQuantity(pvc.Spec.Resources.Requests["storage"]); err == nil {
 		info.Requested = q.Value()
 	}

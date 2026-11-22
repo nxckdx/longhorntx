@@ -547,3 +547,72 @@ func ReplicaCountWarning(n int, nodes []*Node) string {
 	}
 	return ""
 }
+
+// SetJobAssignment adds or removes recurring job (or group) labels on a
+// volume in one patch, like longhorn-manager's volume recurringJobAdd/Delete
+// actions. pvcLabels are the labels of the volume's PVC (nil if none): with
+// recurring-job.longhorn.io/source=enabled the PVC's labels win and Longhorn
+// overwrites changes on the volume.
+func SetJobAssignment(v *Volume, refs []JobRef, assign bool, known []*RecurringJob, pvcLabels map[string]string) (*Action, error) {
+	if len(refs) == 0 {
+		return nil, fmt.Errorf("no job given")
+	}
+	labels := map[string]any{}
+	var changes []Change
+	var names, warns []string
+	for _, ref := range refs {
+		if ref.Name == "" {
+			return nil, fmt.Errorf("empty job name")
+		}
+		if ref.Assigned(v) == assign {
+			if assign {
+				return nil, fmt.Errorf("%s is already assigned to %s", ref, volLabel(v))
+			}
+			return nil, fmt.Errorf("%s is not assigned to %s directly (jobs via a group: remove the group)", ref, volLabel(v))
+		}
+		found := false
+		for _, j := range known {
+			if (!ref.Group && j.Name == ref.Name) || (ref.Group && contains(j.Spec.Groups, ref.Name)) {
+				found = true
+			}
+		}
+		if assign && !found {
+			if ref.Group {
+				warns = append(warns, "no recurring job is in group "+ref.Name+" (yet)")
+			} else {
+				warns = append(warns, "there is no recurring job "+ref.Name)
+			}
+		}
+		if assign {
+			labels[ref.label()] = "enabled"
+			changes = append(changes, Change{"metadata.labels." + ref.label(), "", "enabled"})
+		} else {
+			labels[ref.label()] = nil
+			changes = append(changes, Change{"metadata.labels." + ref.label(), "enabled", ""})
+		}
+		names = append(names, ref.String())
+	}
+	title := fmt.Sprintf("Assign %s to %s", strings.Join(names, ", "), volLabel(v))
+	if !assign {
+		title = fmt.Sprintf("Remove %s from %s", strings.Join(names, ", "), volLabel(v))
+	}
+	a := &Action{
+		Title: title, Verb: VerbPatch, GVR: GVRVolume, Name: v.Name,
+		Patch:    map[string]any{"metadata": map[string]any{"resourceVersion": v.ResourceVersion, "labels": labels}},
+		Changes:  changes,
+		Warnings: warns,
+	}
+	if pvcLabels["recurring-job.longhorn.io/source"] == "enabled" {
+		a.Warnings = append(a.Warnings, "the PVC has recurring-job.longhorn.io/source=enabled: Longhorn syncs job labels from the PVC and will undo this – change the PVC labels instead")
+	}
+	return a, nil
+}
+
+func contains(list []string, s string) bool {
+	for _, x := range list {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}

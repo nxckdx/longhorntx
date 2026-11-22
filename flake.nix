@@ -50,6 +50,45 @@
               platforms = platforms.all;
             };
           };
+          # Prebuilt, statically linked binary from the GitHub release
+          # (no Go toolchain or module download). nix/release.json is
+          # updated by the release workflow after goreleaser ran.
+          lhtx-bin =
+            let
+              release = builtins.fromJSON (builtins.readFile ./nix/release.json);
+              platform = {
+                x86_64-linux = "linux_amd64";
+                aarch64-linux = "linux_arm64";
+                x86_64-darwin = "darwin_amd64";
+                aarch64-darwin = "darwin_arm64";
+              }.${system};
+            in
+            pkgs.stdenvNoCC.mkDerivation {
+              pname = "lhtx-bin";
+              inherit (release) version;
+              src = pkgs.fetchurl {
+                url = "https://github.com/nxckdx/longhorntx/releases/download/v${release.version}/lhtx_${release.version}_${platform}.tar.gz";
+                sha256 = release.sha256.${system};
+              };
+              sourceRoot = ".";
+              nativeBuildInputs = [ pkgs.installShellFiles ];
+              installPhase = ''
+                runHook preInstall
+                install -Dm755 lhtx $out/bin/lhtx
+                ln -s $out/bin/lhtx $out/bin/kubectl-lhtx
+                runHook postInstall
+              '';
+              postInstall = pkgs.lib.optionalString (pkgs.stdenv.buildPlatform.canExecute pkgs.stdenv.hostPlatform) ''
+                installShellCompletion --cmd lhtx \
+                  --bash <($out/bin/lhtx completion bash) \
+                  --zsh <($out/bin/lhtx completion zsh) \
+                  --fish <($out/bin/lhtx completion fish)
+              '';
+              meta = lhtx.meta // {
+                sourceProvenance = [ pkgs.lib.sourceTypes.binaryNativeCode ];
+              };
+            };
+
           default = lhtx;
         });
 

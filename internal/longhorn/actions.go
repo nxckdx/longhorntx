@@ -37,6 +37,7 @@ type Action struct {
 	Title       string
 	Verb        Verb
 	GVR         schema.GroupVersionResource
+	Namespace   string // "" = the Longhorn namespace
 	Name        string
 	UID         string         // delete precondition: never delete a recreated object
 	Object      map[string]any // create
@@ -83,7 +84,14 @@ func ParseDryRun(s string) (DryRun, error) {
 // Preview renders the request like a small HTTP/kubectl summary.
 func (a *Action) Preview(namespace string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s %s.%s/%s -n %s\n", a.Verb, a.GVR.Resource, a.GVR.Group, a.Name, namespace)
+	if a.Namespace != "" {
+		namespace = a.Namespace
+	}
+	res := a.GVR.Resource
+	if a.GVR.Group != "" {
+		res += "." + a.GVR.Group
+	}
+	fmt.Fprintf(&b, "%s %s/%s -n %s\n", a.Verb, res, a.Name, namespace)
 	if len(a.Lines) > 0 {
 		for _, l := range a.Lines {
 			b.WriteString("  " + l + "\n")
@@ -125,10 +133,15 @@ func (c *Client) Apply(ctx context.Context, a *Action, mode DryRun) error {
 		dry = []string{metav1.DryRunAll}
 	}
 	res := c.res(a.GVR)
+	if a.Namespace != "" {
+		res = c.dyn.Resource(a.GVR).Namespace(a.Namespace)
+	}
 	switch a.Verb {
 	case VerbCreate:
 		obj := &unstructured.Unstructured{Object: a.Object}
-		obj.SetNamespace(c.Namespace)
+		if obj.GetNamespace() == "" {
+			obj.SetNamespace(c.Namespace)
+		}
 		_, err := res.Create(ctx, obj, metav1.CreateOptions{DryRun: dry, FieldManager: "lhtx"})
 		return err
 	case VerbPatch:

@@ -86,8 +86,9 @@ type page struct {
 }
 
 type model struct {
-	ctx  context.Context
-	opts Options
+	afterSubmit tea.Cmd // set by a prompt's submit that must load data first
+	ctx         context.Context
+	opts        Options
 
 	// connection
 	kctx       string
@@ -395,6 +396,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case engineEnvMsg:
 		m.openEnginePicker(msg)
+		return m, nil
+
+	case expandMsg:
+		m.modal = nil
+		m.confirmBatch(msg.title, msg.acts, msg.skipped)
 		return m, nil
 
 	case healthMsg:

@@ -129,7 +129,7 @@ func (m *model) actionKey(p *page, key string) (tea.Cmd, bool) {
 		}
 		return nil, true
 	}
-	if !strings.Contains("SBRXDCEU", key) || len(key) != 1 {
+	if !strings.Contains("SBRXDCEUA", key) || len(key) != 1 {
 		return nil, false
 	}
 	rows := m.rowsFor(p)
@@ -215,9 +215,10 @@ func (m *model) targetVolumes(cur string, p *page) []string {
 }
 
 // volumeAction: S snapshot, B backup, R replica count, U engine image,
-// X delete selected replica (details only). Works on one or many volumes.
+// E expand, X delete selected replica (details only). Works on one or many
+// volumes.
 func (m *model) volumeAction(vols []string, key string, detail *page) tea.Cmd {
-	if !strings.Contains("SBRXU", key) {
+	if !strings.Contains("SBRXUE", key) {
 		return nil
 	}
 	var views []*longhorn.VolumeView
@@ -305,6 +306,15 @@ func (m *model) volumeAction(vols []string, key string, detail *page) tea.Cmd {
 	case "U":
 		m.modal = &modal{kind: modalBusy, busyText: "loading engine images …"}
 		return m.loadEngineEnv(views)
+	case "E":
+		m.prompt("New size for "+label+"  (e.g. 20Gi, or +5Gi to grow by)", "+", func(in string) error {
+			if strings.TrimSpace(in) == "+" || strings.TrimSpace(in) == "" {
+				return fmt.Errorf("no size given")
+			}
+			m.modal = &modal{kind: modalBusy, busyText: "reading PVCs and StorageClasses …"}
+			m.afterSubmit = m.loadExpand(views, in, label)
+			return nil
+		})
 	case "X":
 		if detail == nil || len(views[0].Replicas) == 0 {
 			m.setFlash("open the volume and select a replica with [ and ]", true)
@@ -313,6 +323,46 @@ func (m *model) volumeAction(vols []string, key string, detail *page) tea.Cmd {
 		m.deleteReplica(views[0].Replicas[min(detail.sel, len(views[0].Replicas)-1)].Name)
 	}
 	return nil
+}
+
+type expandMsg struct {
+	title   string
+	acts    []*longhorn.Action
+	skipped []string
+}
+
+// loadExpand reads each volume's PVC and StorageClass (needed to expand
+// through the PVC) and builds the actions.
+func (m *model) loadExpand(views []*longhorn.VolumeView, in, label string) tea.Cmd {
+	c, ctx := m.client, m.ctx
+	vols := make([]*longhorn.Volume, len(views))
+	for i, vv := range views {
+		vols[i] = vv.Volume
+	}
+	return func() tea.Msg {
+		msg := expandMsg{title: "Expand " + label + " (" + strings.TrimSpace(in) + ")"}
+		for _, v := range vols {
+			who := v.Name
+			if v.PVC() != "" {
+				who = v.PVC()
+			}
+			size, err := longhorn.ParseSize(in, int64(v.Spec.Size))
+			var pvc *longhorn.PVCInfo
+			if err == nil {
+				pvc, err = c.PVCInfo(ctx, v)
+			}
+			var a *longhorn.Action
+			if err == nil {
+				a, err = longhorn.ExpandVolume(v, pvc, size)
+			}
+			if err != nil {
+				msg.skipped = append(msg.skipped, who+": "+err.Error())
+				continue
+			}
+			msg.acts = append(msg.acts, a)
+		}
+		return msg
+	}
 }
 
 type engineEnvMsg struct {
@@ -484,6 +534,10 @@ func (m *model) modalKey(k tea.KeyPressMsg) tea.Cmd {
 			if err := md.onSubmit(md.input); err != nil {
 				m.setFlash(err.Error(), true)
 			}
+			// a submit that has to load something first leaves a command
+			cmd := m.afterSubmit
+			m.afterSubmit = nil
+			return cmd
 		case "backspace":
 			if r := []rune(md.input); len(r) > 0 {
 				md.input = string(r[:len(r)-1])
@@ -578,9 +632,12 @@ func (m *model) confirmBatch(title string, acts []*longhorn.Action, skipped ...[
 		m.modal = &modal{kind: modalConfirm, action: acts[0]}
 		return
 	}
-	sum := &longhorn.Action{Title: title, Verb: acts[0].Verb, GVR: acts[0].GVR, Name: fmt.Sprintf("%d objects", len(acts))}
+	sum := &longhorn.Action{Title: title, Verb: acts[0].Verb, GVR: acts[0].GVR, Namespace: acts[0].Namespace, Name: fmt.Sprintf("%d objects", len(acts))}
 	var warns []string
 	for _, a := range acts {
+		if a.Namespace != sum.Namespace || a.GVR != sum.GVR {
+			sum.Namespace = "(several)"
+		}
 		sum.Destructive = sum.Destructive || a.Destructive
 		warns = append(warns, a.Warnings...)
 		sum.Lines = append(sum.Lines, a.Summary())

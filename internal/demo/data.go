@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -392,6 +394,30 @@ func (d *data) objects() []runtime.Object {
 	}
 	for _, o := range d.rest {
 		out = append(out, toU(gvrOf(o), o))
+	}
+	// PVCs and the StorageClass (core objects, for expansion)
+	out = append(out, &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "storage.k8s.io/v1", "kind": "StorageClass",
+		"metadata":             map[string]any{"name": "longhorn"},
+		"provisioner":          "driver.longhorn.io",
+		"allowVolumeExpansion": true,
+	}})
+	for _, v := range d.volumes {
+		ks := v.Status.KubernetesStatus
+		mode := "ReadWriteOnce"
+		if v.Spec.AccessMode == "rwx" {
+			mode = "ReadWriteMany"
+		}
+		size := resource.NewQuantity(int64(v.Spec.Size), resource.BinarySI).String()
+		out = append(out, &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "v1", "kind": "PersistentVolumeClaim",
+			"metadata": map[string]any{"name": ks.PVCName, "namespace": ks.Namespace, "resourceVersion": "100"},
+			"spec": map[string]any{
+				"accessModes": []any{mode}, "storageClassName": "longhorn", "volumeName": v.Name,
+				"resources": map[string]any{"requests": map[string]any{"storage": size}},
+			},
+			"status": map[string]any{"phase": "Bound", "capacity": map[string]any{"storage": size}},
+		}})
 	}
 	return out
 }

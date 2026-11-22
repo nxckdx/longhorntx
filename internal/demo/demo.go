@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
@@ -47,6 +48,8 @@ func NewClient(ctx context.Context) *longhorn.Client {
 	} {
 		kinds[g] = kindOf(g) + "List"
 	}
+	kinds[longhorn.GVRPVC] = "PersistentVolumeClaimList"
+	kinds[longhorn.GVRStorageClass] = "StorageClassList"
 	dyn := dynfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), kinds, d.objects()...)
 	// The fake client ignores label selectors on watches; lhtx relies on
 	// them for the per-volume engine watches.
@@ -74,9 +77,30 @@ func NewClient(ctx context.Context) *longhorn.Client {
 		})
 	}
 
+	s := &sim{d: d, dyn: dyn}
+	// Expanding a PVC: grow the volume a moment later, like the CSI resizer.
+	dyn.PrependReactor("patch", "persistentvolumeclaims", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		pa := a.(k8stesting.PatchActionImpl)
+		if isDryRun(a) {
+			return false, nil, nil
+		}
+		var p struct {
+			Spec struct {
+				Resources struct {
+					Requests map[string]string `json:"requests"`
+				} `json:"resources"`
+			} `json:"spec"`
+		}
+		if json.Unmarshal(pa.GetPatch(), &p) == nil {
+			if q, err := resource.ParseQuantity(p.Spec.Resources.Requests["storage"]); err == nil {
+				go s.resize(ctx, pa.GetNamespace()+"/"+pa.GetName(), q.Value())
+			}
+		}
+		return false, nil, nil
+	})
+
 	cl := &kube.Cluster{Context: Context, Config: &rest.Config{Host: "demo.invalid"}, Traffic: &kube.Counter{}}
 	c := longhorn.NewClientFrom(cl, ns, dyn, &corefake.FakeCoreV1{Fake: &k8stesting.Fake{}})
-	s := &sim{d: d, c: c, dyn: dyn}
 	go s.run(ctx)
 	return c
 }
@@ -138,8 +162,22 @@ func uuid(s string) string {
 type sim struct {
 	mu  sync.Mutex
 	d   *data
-	c   *longhorn.Client
 	dyn *dynfake.FakeDynamicClient
+}
+
+func (s *sim) resize(ctx context.Context, pvc string, size int64) {
+	time.Sleep(time.Second)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, v := range s.d.volumes {
+		if v.PVC() == pvc && size > int64(v.Spec.Size) {
+			v.Spec.Size = longhorn.Quantity(size)
+			s.update(ctx, longhorn.GVRVolume, v)
+			e := s.d.engines[v.Name]
+			e.Spec.VolumeSize = v.Spec.Size
+			s.update(ctx, longhorn.GVREngine, e)
+		}
+	}
 }
 
 func (s *sim) update(ctx context.Context, g schema.GroupVersionResource, obj any) {

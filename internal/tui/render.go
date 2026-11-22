@@ -125,7 +125,7 @@ func (m *model) viewFooter() string {
 			keys = append(keys, [2]string{"ctrl+r", "reload"})
 		}
 		if m.rw {
-			keys = append(keys, [2]string{"S", "snapshot"}, [2]string{"B", "backup"}, [2]string{"R", "replicas"}, [2]string{"U", "engine"}, [2]string{"[ ]", "select"}, [2]string{"X", "del replica"})
+			keys = append(keys, [2]string{"S", "snapshot"}, [2]string{"B", "backup"}, [2]string{"R", "replicas"}, [2]string{"U", "engine"}, [2]string{"E", "expand"}, [2]string{"[ ]", "select"}, [2]string{"X", "del replica"})
 			if p.panel == panelSnapshots {
 				keys = append(keys, [2]string{"D", "del snapshot"})
 			}
@@ -141,7 +141,7 @@ func (m *model) viewFooter() string {
 	case p.kind == pVolumes && len(m.marked) > 0:
 		keys = [][2]string{{"space", "toggle"}, {"ctrl+a", "all/none"}, {"esc", "clear"}}
 		if m.rw {
-			keys = append(keys, [2]string{"S", "snapshot"}, [2]string{"B", "backup"}, [2]string{"R", "replicas"}, [2]string{"U", "engine image"})
+			keys = append(keys, [2]string{"S", "snapshot"}, [2]string{"B", "backup"}, [2]string{"R", "replicas"}, [2]string{"U", "engine image"}, [2]string{"E", "expand"})
 		} else {
 			keys = append(keys, [2]string{"W", "write mode for actions"})
 		}
@@ -157,7 +157,7 @@ func (m *model) viewFooter() string {
 		}
 		keys = [][2]string{{"enter", "open"}, {"/", "filter"}, {"p", sortLbl}, {"1-5", "views"}, {"c", "context"}, {"?", "help"}, {"q", "quit"}}
 	case m.rw && (p.kind == pVolumes || p.kind == pActivity):
-		keys = [][2]string{{"S", "snapshot"}, {"B", "backup"}, {"R", "replicas"}, {"U", "engine"}, {"space", "select"}, {"enter", "open"}, {"/", "filter"}, {"W", "write mode off"}}
+		keys = [][2]string{{"S", "snapshot"}, {"B", "backup"}, {"R", "replicas"}, {"U", "engine"}, {"E", "expand"}, {"space", "select"}, {"enter", "open"}, {"/", "filter"}, {"W", "write mode off"}}
 	case m.rw && p.kind == pDisk:
 		keys = [][2]string{{"X", "delete replica"}, {"enter", "open"}, {"esc", "back"}, {"W", "write mode off"}}
 	default:
@@ -404,7 +404,8 @@ func (m *model) viewHelp() string {
 
  Write mode (off by default; W toggles, or start with --rw)
    S snapshot   B backup (snapshot + backup)   R replica count   U engine image
-   space select volumes, ctrl+a select all (filtered), esc clear – S/B/R/U
+   E expand (20Gi or +5Gi; through the PVC if there is one)
+   space select volumes, ctrl+a select all (filtered), esc clear – S/B/R/U/E
    then act on all selected volumes
    X delete replica ([ ] selects in volume details)   D delete snapshot (in panel)
    C scheduling on/off, E eviction on/off (nodes view)   enter edit (settings)

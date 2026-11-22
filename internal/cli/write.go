@@ -488,9 +488,54 @@ while automatic engine upgrade is enabled. See lhtx engineimages.`,
 	return cmd
 }
 
+func expandCmd(g *globals) *cobra.Command {
+	return &cobra.Command{
+		Use:   "expand VOLUME SIZE",
+		Short: "Grow a volume, e.g. 20Gi or +5Gi (needs --rw)",
+		Long: `Grow a volume to SIZE (20Gi) or by SIZE (+5Gi).
+
+A volume bound to a PVC is expanded through the PVC, like longhorn-manager
+does: the CSI resizer grows the Longhorn volume and the filesystem (while the
+volume is attached), and the PVC shows the new size. The StorageClass must
+allow volume expansion. Volumes without a PVC get spec.size patched; their
+filesystem has to be grown by hand. Volumes cannot shrink.`,
+		Args: cobra.ExactArgs(2),
+		ValidArgsFunction: func(cmd *cobra.Command, args []string, tc string) ([]string, cobra.ShellCompDirective) {
+			if len(args) == 0 {
+				return g.completeVolumes(cmd, args, tc)
+			}
+			return []string{"+1Gi", "+5Gi", "+10Gi"}, cobra.ShellCompDirectiveNoFileComp
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			c, err := g.client()
+			if err != nil {
+				return err
+			}
+			v, err := resolveVolume(ctx, c, args[0])
+			if err != nil {
+				return err
+			}
+			size, err := longhorn.ParseSize(args[1], int64(v.Spec.Size))
+			if err != nil {
+				return err
+			}
+			pvc, err := c.PVCInfo(ctx, v)
+			if err != nil {
+				return err
+			}
+			a, err := longhorn.ExpandVolume(v, pvc, size)
+			if err != nil {
+				return err
+			}
+			return g.runAction(ctx, c, a)
+		},
+	}
+}
+
 func writeCmds(g *globals) []*cobra.Command {
 	return []*cobra.Command{
-		createCmd(g), deleteCmd(g), setCmd(g), upgradeEngineCmd(g),
+		createCmd(g), deleteCmd(g), setCmd(g), upgradeEngineCmd(g), expandCmd(g),
 		nodeDiskCmd(g, "cordon", "Disable replica scheduling on a node or disk (needs --rw)",
 			func(n *longhorn.Node, d string, _ bool) (*longhorn.Action, error) {
 				return longhorn.SetScheduling(n, d, false)

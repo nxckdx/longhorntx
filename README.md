@@ -119,6 +119,7 @@ lhtx delete orphan NAME|--all-cleanable    # Longhorn deletes the data dir if cl
 lhtx set replicas VOLUME COUNT             # volume must be attached
 lhtx set setting NAME VALUE
 lhtx upgrade-engine VOLUME... --image v1.12.1   # like "Upgrade Engine" in the web UI
+lhtx expand VOLUME 20Gi|+5Gi               # through the PVC if bound (StorageClass must allow it)
 lhtx cordon|uncordon NODE[:DISK]           # replica scheduling off/on
 lhtx evict NODE[:DISK] [--cancel]          # also disables scheduling (Longhorn requires it)
 
@@ -131,7 +132,9 @@ All changes go through Longhorn CRs, the same objects longhorn-manager's own
 API creates (verified against v1.12.1): Snapshot CR (`spec.volume`,
 `spec.createSnapshot`), Backup CR (`spec.snapshotName`, labels `backup-volume`
 and `backup-target`), deleting Snapshot/Replica CRs, merge patches on
-Volume/Node/Setting. Patches carry the `resourceVersion` the decision was
+Volume/Node/Setting. Volumes bound to a PVC are expanded by patching the PVC,
+like longhorn-manager does (the CSI resizer then grows volume and
+filesystem). Patches carry the `resourceVersion` the decision was
 based on, so they fail instead of overwriting a newer state. Deletes use a
 UID precondition.
 
@@ -150,8 +153,8 @@ TUI:
 | `ctrl+r` | reload panel (details) or reload volumes (poll mode) |
 | `c` | switch kubeconfig context |
 | `W` | write mode on/off (red **RW** badge; or start with `lhtx --rw`) |
-| `S` `B` `R` `U` | snapshot · backup · replica count · engine image (volume list / details) |
-| `space`, `ctrl+a` | volume list: select volumes / all filtered ones (`esc` clears); `S` `B` `R` `U` then act on all selected |
+| `S` `B` `R` `U` `E` | snapshot · backup · replica count · engine image · expand (volume list / details) |
+| `space`, `ctrl+a` | volume list: select volumes / all filtered ones (`esc` clears); `S` `B` `R` `U` `E` then act on all selected |
 | `X`, `[` `]` | delete replica (selected with `[` `]` in details, or in the disk view) |
 | `D` | delete snapshot (snapshots panel); `B` there backs up the selected snapshot |
 | `C` `E` | replica scheduling / eviction on/off (nodes view, node or disk row) |

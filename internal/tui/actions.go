@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -215,10 +216,10 @@ func (m *model) targetVolumes(cur string, p *page) []string {
 }
 
 // volumeAction: S snapshot, B backup, R replica count, U engine image,
-// E expand, X delete selected replica (details only). Works on one or many
-// volumes.
+// E expand, A attach/detach, X delete selected replica (details only).
+// Works on one or many volumes (A: one).
 func (m *model) volumeAction(vols []string, key string, detail *page) tea.Cmd {
-	if !strings.Contains("SBRXUE", key) {
+	if !strings.Contains("SBRXUEA", key) {
 		return nil
 	}
 	var views []*longhorn.VolumeView
@@ -306,6 +307,17 @@ func (m *model) volumeAction(vols []string, key string, detail *page) tea.Cmd {
 	case "U":
 		m.modal = &modal{kind: modalBusy, busyText: "loading engine images …"}
 		return m.loadEngineEnv(views)
+	case "A":
+		if len(views) > 1 {
+			m.setFlash("attach/detach works on one volume at a time", true)
+			return nil
+		}
+		m.modal = &modal{kind: modalBusy, busyText: "reading attachment tickets …"}
+		c, ctx, v := m.client, m.ctx, views[0].Volume
+		return func() tea.Msg {
+			va, err := c.VolumeAttachment(ctx, v.Name)
+			return attachMsg{vol: v, va: va, err: err}
+		}
 	case "E":
 		m.prompt("New size for "+label+"  (e.g. 20Gi, or +5Gi to grow by)", "+", func(in string) error {
 			if strings.TrimSpace(in) == "+" || strings.TrimSpace(in) == "" {
@@ -323,6 +335,62 @@ func (m *model) volumeAction(vols []string, key string, detail *page) tea.Cmd {
 		m.deleteReplica(views[0].Replicas[min(detail.sel, len(views[0].Replicas)-1)].Name)
 	}
 	return nil
+}
+
+type attachMsg struct {
+	vol *longhorn.Volume
+	va  *longhorn.VolumeAttachment
+	err error
+}
+
+// openAttach detaches a manually attached volume, or asks for the node
+// and mode to attach it to.
+func (m *model) openAttach(msg attachMsg) {
+	m.modal = nil
+	if msg.err != nil {
+		m.setFlash("volume attachment: "+msg.err.Error(), true)
+		return
+	}
+	if _, ok := msg.va.Spec.AttachmentTickets[longhorn.UITicketID]; ok {
+		m.confirm(longhorn.DetachVolume(msg.vol, msg.va))
+		return
+	}
+	var opts []pickOption
+	for _, n := range m.state.Nodes {
+		o := pickOption{label: n.Name, value: n.Name}
+		switch {
+		case !n.Ready():
+			o.disabled = "node is not ready"
+		case msg.vol.Status.CurrentNodeID != "" && msg.vol.Status.CurrentNodeID != n.Name:
+			o.disabled = "volume is attached to " + msg.vol.Status.CurrentNodeID
+		}
+		if n.Name == msg.vol.Status.CurrentNodeID {
+			o.label += "  ← attached here (" + strings.Join(msg.va.Tickets(), ", ") + ")"
+		}
+		opts = append(opts, o)
+	}
+	sort.Slice(opts, func(i, j int) bool { return (opts[i].disabled == "") && (opts[j].disabled != "") })
+	m.modal = &modal{kind: modalPick, label: "Attach " + volLabelOf(msg.vol) + " to node", options: opts, onPick: func(node string) {
+		var n *longhorn.Node
+		for _, x := range m.state.Nodes {
+			if x.Name == node {
+				n = x
+			}
+		}
+		m.modal = &modal{kind: modalPick, label: "Mode", options: []pickOption{
+			{label: "normal (block device on the node)", value: "normal"},
+			{label: "maintenance (no frontend, e.g. to revert a snapshot)", value: "maintenance"},
+		}, onPick: func(mode string) {
+			m.confirm(longhorn.AttachVolume(msg.vol, msg.va, n, mode == "maintenance"))
+		}}
+	}}
+}
+
+func volLabelOf(v *longhorn.Volume) string {
+	if p := v.PVC(); p != "" {
+		return p
+	}
+	return v.Name
 }
 
 type expandMsg struct {

@@ -533,8 +533,82 @@ filesystem has to be grown by hand. Volumes cannot shrink.`,
 	}
 }
 
+func attachCmds(g *globals) []*cobra.Command {
+	var maintenance bool
+	attach := &cobra.Command{
+		Use:   "attach VOLUME NODE",
+		Short: "Attach a volume to a node, like Attach in the web UI (needs --rw)",
+		Long: `Attach a volume to a node by adding the attachment ticket the web UI uses
+("longhorn-ui"), so it can be detached from lhtx or the UI. The volume stays
+attached until detached. --maintenance attaches without frontend (no block
+device on the node), e.g. to revert to a snapshot.`,
+		Args: cobra.ExactArgs(2),
+		ValidArgsFunction: func(cmd *cobra.Command, args []string, tc string) ([]string, cobra.ShellCompDirective) {
+			if len(args) == 0 {
+				return g.completeVolumes(cmd, args, tc)
+			}
+			return g.completeNodeDisk(cmd, nil, tc)
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			c, err := g.client()
+			if err != nil {
+				return err
+			}
+			v, err := resolveVolume(ctx, c, args[0])
+			if err != nil {
+				return err
+			}
+			va, err := c.VolumeAttachment(ctx, v.Name)
+			if err != nil {
+				return err
+			}
+			n, err := c.Node(ctx, args[1])
+			if err != nil {
+				return err
+			}
+			a, err := longhorn.AttachVolume(v, va, n, maintenance)
+			if err != nil {
+				return err
+			}
+			return g.runAction(ctx, c, a)
+		},
+	}
+	attach.Flags().BoolVar(&maintenance, "maintenance", false, "attach without frontend (maintenance mode)")
+	detach := &cobra.Command{
+		Use:   "detach VOLUME",
+		Short: "Detach a manually attached volume (needs --rw)",
+		Long: `Remove the manual attachment ticket ("longhorn-ui", from lhtx attach or the
+web UI). Tickets of other attachers – CSI for a running pod, backups – are
+not touched; the volume stays attached for them.`,
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: g.completeVolumes,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			c, err := g.client()
+			if err != nil {
+				return err
+			}
+			v, err := resolveVolume(ctx, c, args[0])
+			if err != nil {
+				return err
+			}
+			va, err := c.VolumeAttachment(ctx, v.Name)
+			if err != nil {
+				return err
+			}
+			a, err := longhorn.DetachVolume(v, va)
+			if err != nil {
+				return err
+			}
+			return g.runAction(ctx, c, a)
+		},
+	}
+	return []*cobra.Command{attach, detach}
+}
+
 func writeCmds(g *globals) []*cobra.Command {
-	return []*cobra.Command{
+	return append([]*cobra.Command{
 		createCmd(g), deleteCmd(g), setCmd(g), upgradeEngineCmd(g), expandCmd(g),
 		nodeDiskCmd(g, "cordon", "Disable replica scheduling on a node or disk (needs --rw)",
 			func(n *longhorn.Node, d string, _ bool) (*longhorn.Action, error) {
@@ -548,5 +622,5 @@ func writeCmds(g *globals) []*cobra.Command {
 			func(n *longhorn.Node, d string, cancel bool) (*longhorn.Action, error) {
 				return longhorn.SetEviction(n, d, !cancel)
 			}, true),
-	}
+	}, attachCmds(g)...)
 }

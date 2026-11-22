@@ -120,6 +120,8 @@ lhtx set replicas VOLUME COUNT             # volume must be attached
 lhtx set setting NAME VALUE
 lhtx upgrade-engine VOLUME... --image v1.12.1   # like "Upgrade Engine" in the web UI
 lhtx expand VOLUME 20Gi|+5Gi               # through the PVC if bound (StorageClass must allow it)
+lhtx attach VOLUME NODE [--maintenance]    # like Attach in the web UI (ticket "longhorn-ui")
+lhtx detach VOLUME                         # removes only that ticket, never the CSI one
 lhtx cordon|uncordon NODE[:DISK]           # replica scheduling off/on
 lhtx evict NODE[:DISK] [--cancel]          # also disables scheduling (Longhorn requires it)
 
@@ -134,7 +136,9 @@ API creates (verified against v1.12.1): Snapshot CR (`spec.volume`,
 and `backup-target`), deleting Snapshot/Replica CRs, merge patches on
 Volume/Node/Setting. Volumes bound to a PVC are expanded by patching the PVC,
 like longhorn-manager does (the CSI resizer then grows volume and
-filesystem). Patches carry the `resourceVersion` the decision was
+filesystem). Attach/detach add or remove the attachment ticket `longhorn-ui`
+in the VolumeAttachment CR, exactly like the web UI, so both can undo each
+other's attach. Patches carry the `resourceVersion` the decision was
 based on, so they fail instead of overwriting a newer state. Deletes use a
 UID precondition.
 
@@ -154,6 +158,7 @@ TUI:
 | `c` | switch kubeconfig context |
 | `W` | write mode on/off (red **RW** badge; or start with `lhtx --rw`) |
 | `S` `B` `R` `U` `E` | snapshot · backup · replica count · engine image · expand (volume list / details) |
+| `A` | attach to a node (normal or maintenance) / detach a manually attached volume |
 | `space`, `ctrl+a` | volume list: select volumes / all filtered ones (`esc` clears); `S` `B` `R` `U` `E` then act on all selected |
 | `X`, `[` `]` | delete replica (selected with `[` `]` in details, or in the disk view) |
 | `D` | delete snapshot (snapshots panel); `B` there backs up the selected snapshot |

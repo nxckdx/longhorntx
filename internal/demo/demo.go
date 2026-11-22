@@ -45,6 +45,7 @@ func NewClient(ctx context.Context) *longhorn.Client {
 		longhorn.GVRVolume, longhorn.GVRReplica, longhorn.GVREngine, longhorn.GVRNode,
 		longhorn.GVRSetting, longhorn.GVRSnapshot, longhorn.GVRBackup, longhorn.GVRBackupTarget,
 		longhorn.GVRRecurringJob, longhorn.GVREngineImage, longhorn.GVROrphan,
+		longhorn.GVRVolumeAttachment,
 	} {
 		kinds[g] = kindOf(g) + "List"
 	}
@@ -99,6 +100,14 @@ func NewClient(ctx context.Context) *longhorn.Client {
 		return false, nil, nil
 	})
 
+	// Attach/detach: follow the attachment tickets like Longhorn does.
+	dyn.PrependReactor("patch", "volumeattachments", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if !isDryRun(a) {
+			go s.reconcileAttachment(ctx, a.(k8stesting.PatchActionImpl).GetName())
+		}
+		return false, nil, nil
+	})
+
 	cl := &kube.Cluster{Context: Context, Config: &rest.Config{Host: "demo.invalid"}, Traffic: &kube.Counter{}}
 	c := longhorn.NewClientFrom(cl, ns, dyn, &corefake.FakeCoreV1{Fake: &k8stesting.Fake{}})
 	go s.run(ctx)
@@ -122,7 +131,7 @@ func kindOf(g schema.GroupVersionResource) string {
 		"volumes": "Volume", "replicas": "Replica", "engines": "Engine", "nodes": "Node",
 		"settings": "Setting", "snapshots": "Snapshot", "backups": "Backup",
 		"backuptargets": "BackupTarget", "recurringjobs": "RecurringJob",
-		"engineimages": "EngineImage", "orphans": "Orphan",
+		"engineimages": "EngineImage", "orphans": "Orphan", "volumeattachments": "VolumeAttachment",
 	}[g.Resource]
 }
 
@@ -163,6 +172,49 @@ type sim struct {
 	mu  sync.Mutex
 	d   *data
 	dyn *dynfake.FakeDynamicClient
+}
+
+func (s *sim) reconcileAttachment(ctx context.Context, name string) {
+	time.Sleep(1500 * time.Millisecond)
+	u, err := s.dyn.Resource(longhorn.GVRVolumeAttachment).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return
+	}
+	node := ""
+	tickets, _, _ := unstructured.NestedMap(u.Object, "spec", "attachmentTickets")
+	for _, t := range tickets {
+		if m, ok := t.(map[string]any); ok {
+			node, _ = m["nodeID"].(string)
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, v := range s.d.volumes {
+		if v.Name != name {
+			continue
+		}
+		e := s.d.engines[v.Name]
+		state := "stopped"
+		if node != "" {
+			v.Status.State, v.Status.Robustness, v.Status.CurrentNodeID, v.Spec.NodeID = "attached", "healthy", node, node
+			state = "running"
+		} else {
+			v.Status.State, v.Status.Robustness, v.Status.CurrentNodeID, v.Spec.NodeID = "detached", "unknown", "", ""
+		}
+		e.Status.CurrentState, e.Spec.NodeID = state, node
+		e.Status.CurrentReplicaAddressMap = map[string]string{}
+		e.Status.ReplicaModeMap = map[string]string{}
+		for _, r := range s.d.replicas[v.Name] {
+			r.Status.CurrentState, r.Spec.DesireState = state, state
+			s.update(ctx, longhorn.GVRReplica, r)
+			if node != "" {
+				e.Status.CurrentReplicaAddressMap[r.Name] = fmt.Sprintf("%s:%d", r.Status.StorageIP, r.Status.Port)
+				e.Status.ReplicaModeMap[r.Name] = "RW"
+			}
+		}
+		s.update(ctx, longhorn.GVREngine, e)
+		s.update(ctx, longhorn.GVRVolume, v)
+	}
 }
 
 func (s *sim) resize(ctx context.Context, pvc string, size int64) {

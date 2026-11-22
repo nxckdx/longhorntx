@@ -387,6 +387,15 @@ func (d *data) objects() []runtime.Object {
 		out = append(out, toU(lh.GVRNode, n))
 	}
 	for _, v := range d.volumes {
+		va := &lh.VolumeAttachment{ObjectMeta: meta(v.Name, map[string]string{lh.LabelVolume: v.Name}, v.CreationTimestamp.Time)}
+		va.Spec.Volume = v.Name
+		va.Spec.AttachmentTickets = map[string]*lh.AttachmentTicket{}
+		if n := v.Status.CurrentNodeID; n != "" {
+			id := "csi-" + hex8(v.Name+"csi") + hex8(v.Name+"csi2")
+			va.Spec.AttachmentTickets[id] = &lh.AttachmentTicket{ID: id, Type: "csi-attacher", NodeID: n,
+				Parameters: map[string]string{"disableFrontend": "false", "lastAttachedBy": ""}}
+		}
+		out = append(out, toU(lh.GVRVolumeAttachment, va))
 		out = append(out, toU(lh.GVRVolume, v), toU(lh.GVREngine, d.engines[v.Name]))
 		for _, r := range d.replicas[v.Name] {
 			out = append(out, toU(lh.GVRReplica, r))

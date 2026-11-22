@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"k8s.io/klog/v2"
 
+	"github.com/nxckdx/longhorntx/internal/demo"
 	"github.com/nxckdx/longhorntx/internal/kube"
 	"github.com/nxckdx/longhorntx/internal/longhorn"
 	"github.com/nxckdx/longhorntx/internal/update"
@@ -22,6 +23,7 @@ type Options struct {
 	Version   string
 	RW        bool          // start in write mode
 	Refresh   time.Duration // longhorn.RefreshAuto, RefreshWatch or poll interval
+	Demo      bool          // in-memory demo cluster instead of kubeconfig
 }
 
 func Run(ctx context.Context, o Options) error {
@@ -203,21 +205,25 @@ type animMsg time.Time
 // data: the UI is usable right away and fills in as lists arrive.
 func connect(ctx context.Context, o Options, kctx string) tea.Cmd {
 	return func() tea.Msg {
-		ko := o.Kube
-		ko.Context = kctx
-		cl, err := kube.Connect(ko)
-		if err != nil {
-			return connectedMsg{kctx: kctx, err: err}
-		}
-		c, err := longhorn.NewClient(cl, o.Namespace)
-		if err != nil {
-			return connectedMsg{kctx: cl.Context, err: err}
+		var c *longhorn.Client
+		if o.Demo {
+			c = demo.NewClient(ctx)
+		} else {
+			ko := o.Kube
+			ko.Context = kctx
+			cl, err := kube.Connect(ko)
+			if err != nil {
+				return connectedMsg{kctx: kctx, err: err}
+			}
+			if c, err = longhorn.NewClient(cl, o.Namespace); err != nil {
+				return connectedMsg{kctx: cl.Context, err: err}
+			}
 		}
 		s := longhorn.NewStore(c)
 		s.WatchBackups = true
 		s.Refresh = o.Refresh
 		s.Start(ctx)
-		return connectedMsg{kctx: cl.Context, store: s, client: c}
+		return connectedMsg{kctx: c.Cluster.Context, store: s, client: c}
 	}
 }
 
@@ -667,6 +673,9 @@ func (m *model) handleKey(k tea.KeyPressMsg) tea.Cmd {
 		}
 		return nil
 	case "c":
+		if m.opts.Demo {
+			return nil
+		}
 		names, _, err := m.opts.Kube.Contexts()
 		if err != nil {
 			m.connErr = err

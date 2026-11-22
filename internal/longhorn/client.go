@@ -59,6 +59,13 @@ func NewClient(c *kube.Cluster, namespace string) (*Client, error) {
 	return &Client{Cluster: c, Namespace: namespace, dyn: dyn}, nil
 }
 
+// NewClientFrom builds a client on given API clients (demo mode, tests).
+func NewClientFrom(c *kube.Cluster, namespace string, dyn dynamic.Interface, core corev1client.CoreV1Interface) *Client {
+	cl := &Client{Cluster: c, Namespace: namespace, dyn: dyn, coreClient: core}
+	cl.coreOnce.Do(func() {})
+	return cl
+}
+
 func (c *Client) res(g schema.GroupVersionResource) dynamic.ResourceInterface {
 	return c.dyn.Resource(g).Namespace(c.Namespace)
 }

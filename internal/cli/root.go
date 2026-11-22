@@ -15,6 +15,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/nxckdx/longhorntx/internal/demo"
 	"github.com/nxckdx/longhorntx/internal/kube"
 	"github.com/nxckdx/longhorntx/internal/longhorn"
 	"github.com/nxckdx/longhorntx/internal/tui"
@@ -33,11 +34,15 @@ type globals struct {
 	yes        bool
 	dryRunFlag string
 	refresh    string
+	demo       bool
 }
 
 func (g *globals) refreshMode() (time.Duration, error) { return longhorn.ParseRefresh(g.refresh) }
 
 func (g *globals) client() (*longhorn.Client, error) {
+	if g.demo {
+		return demo.NewClient(context.Background()), nil
+	}
 	cl, err := kube.Connect(g.kube)
 	if err != nil {
 		return nil, err
@@ -73,7 +78,7 @@ Without a subcommand it starts the interactive TUI.`,
 			if err != nil {
 				return err
 			}
-			return tui.Run(cmd.Context(), tui.Options{Kube: g.kube, Namespace: g.namespace, Version: Version, RW: g.rw, Refresh: r})
+			return tui.Run(cmd.Context(), tui.Options{Kube: g.kube, Namespace: g.namespace, Version: Version, RW: g.rw, Refresh: r, Demo: g.demo})
 		},
 	}
 	f := root.PersistentFlags()
@@ -82,6 +87,7 @@ Without a subcommand it starts the interactive TUI.`,
 	f.StringVarP(&g.namespace, "namespace", "n", longhorn.DefaultNamespace, "Longhorn namespace")
 	f.StringVarP(&g.output, "output", "o", "table", "output format: table|wide|json")
 	f.BoolVarP(&g.verbose, "verbose", "v", false, "print network traffic used to stderr")
+	f.BoolVar(&g.demo, "demo", false, "use a simulated in-memory cluster with made-up data (try lhtx without a cluster)")
 	f.BoolVar(&g.rw, "rw", false, "allow changes (lhtx is read-only by default)")
 	f.BoolVarP(&g.yes, "yes", "y", false, "do not ask for confirmation (with --rw)")
 	f.StringVar(&g.dryRunFlag, "dry-run", "", "show (client) or validate on the server (server) without changing anything")

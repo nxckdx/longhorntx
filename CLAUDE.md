@@ -98,5 +98,8 @@ internal/tui        Bubble Tea v2 (charm.land/*): tui.go model/update/keys,
   release-please builds releases and the changelog from them; `VERSION` and
   `.release-please-manifest.json` are bumped by the release PR, never by hand.
 - Release binaries: goreleaser (`.goreleaser.yaml`); archive names
-  `lhtx_<ver>_<os>_<arch>.tar.gz|zip` are relied on by `lhtx update`.
+  `lhtx_<ver>_<os>_<arch>.tar.gz|zip` are relied on by `lhtx update` and the
+  `lhtx-bin` flake package. `nix/release.json` (version + SHA256 per system)
+  is committed by the release workflow after goreleaser
+  (`nix/update-release.sh`); do not edit by hand.
 - Keep README.md in sync with features (usage, keys, data model, traffic notes).

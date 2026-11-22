@@ -192,6 +192,21 @@ nix develop                                # go, gopls, kubectl, pv
 go build -o lhtx ./cmd/lhtx && go test ./...
 ```
 
+Two flake packages:
+
+- `lhtx` (default): built from source.
+- `lhtx-bin`: the prebuilt, statically linked binary from the latest GitHub
+  release (no Go toolchain, no module download – useful on slow links).
+  `nix/release.json` pins its version and hashes; the release workflow updates
+  it after each release. Example NixOS module:
+
+  ```nix
+  # flake inputs: lhtx.url = "github:nxckdx/longhorntx";
+  environment.systemPackages = [
+    inputs.lhtx.packages.${pkgs.stdenv.hostPlatform.system}.lhtx-bin
+  ];
+  ```
+
 Shell completion (commands, flags, contexts, volume/PVC, node:disk, replica,
 snapshot and setting names) is installed by the Nix package. Otherwise:
 `source <(lhtx completion zsh)` (or bash/fish). Names are cached for 10 minutes

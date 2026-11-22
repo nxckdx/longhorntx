@@ -77,7 +77,9 @@
                 runHook preInstall
                 install -Dm755 lhtx $out/bin/lhtx
                 ln -s $out/bin/lhtx $out/bin/kubectl-lhtx
+              '' + pkgs.lib.optionalString (pkgs.lib.versionAtLeast release.version "0.3.0") ''
                 ln -s $out/bin/lhtx $out/bin/kubectl_complete-lhtx
+              '' + ''
                 runHook postInstall
               '';
               postInstall = pkgs.lib.optionalString (pkgs.stdenv.buildPlatform.canExecute pkgs.stdenv.hostPlatform) ''

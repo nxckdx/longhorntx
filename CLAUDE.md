@@ -30,6 +30,8 @@ internal/longhorn   slim CRD structs (no longhorn-manager import), Client (one-s
                     (doctor.go), diagnostics bundle (diag.go),
                     volume poll mode (volumes_poll.go)
 internal/fuzzy      fzf-style matching (TUI filter, CLI volume fallback)
+internal/demo       --demo: fake dynamic client with made-up data and a
+                    simulated rebuild loop (README GIF: docs/demo.tape, vhs)
 internal/update     release check (daily, cached) and self-update from GitHub releases
 internal/cli        cobra commands (read: volumes.go, nodes.go, data.go, activity.go,
                     measure.go, doctor.go incl. drain-check, diag.go;

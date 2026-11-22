@@ -8,6 +8,12 @@ several MB/s (longhorn/longhorn#2372, #4211, #11134). lhtx talks **only to the
 Kubernetes API** (your kubeconfig, like kubectl), reads the `*.longhorn.io`
 CRDs and uses watches instead of polling.
 
+![lhtx demo: volume list with a running rebuild, volume detail, nodes, health checks and a write action preview](docs/demo.gif)
+
+Try it without a cluster: `lhtx --demo` (or `nix run github:nxckdx/longhorntx -- --demo`)
+starts the TUI on a simulated in-memory cluster with made-up volumes and a
+rebuild that keeps running. Every command accepts `--demo`.
+
 - read-only by default; changes only with `--rw` (or `W` in the TUI), always
   with a preview and confirmation, plus `--dry-run` / server-side dry run
 - multiple clusters through kubeconfig contexts (`--context`, `c` in the TUI)
@@ -25,6 +31,7 @@ write actions are not tested.
 
 ```
 lhtx                                 # interactive TUI
+lhtx --demo                          # TUI/CLI on a simulated cluster (no kubeconfig needed)
 
 lhtx volumes [-o table|wide|json]    # volumes (table reads only volumes)
 lhtx replicas [VOLUME]               # replicas with node + disk path, mode, rebuild %
@@ -207,11 +214,22 @@ Two flake packages:
   ];
   ```
 
-Shell completion (commands, flags, contexts, volume/PVC, node:disk, replica,
-snapshot and setting names) is installed by the Nix package. Otherwise:
-`source <(lhtx completion zsh)` (or bash/fish). Names are cached for 10 minutes
-in `~/.cache/lhtx/` per context, so pressing TAB does not list all volumes
-every time.
+### Shell completion
+
+Completes commands, flags, contexts, volume/PVC, node:disk, replica, snapshot
+and setting names. Names are cached for 10 minutes in `~/.cache/lhtx/` per
+context, so pressing TAB does not list all volumes every time.
+
+- **Nix packages** install the completion files for bash, zsh and fish. On
+  NixOS with the package in `environment.systemPackages` and
+  `programs.zsh.enable = true` nothing else is needed (open a new shell; with
+  a stale cache run `rm ~/.zcompdump*`). With home-manager packages, make sure
+  the shell's completion is enabled (`programs.zsh.enableCompletion`, default).
+- **Release binaries:** add to `~/.zshrc` (or bash/fish equivalent):
+  `source <(lhtx completion zsh)`
+- **`kubectl lhtx <TAB>`** (kubectl ≥ 1.26) runs `kubectl_complete-lhtx`.
+  The Nix packages include it; otherwise link it next to the binary:
+  `ln -s lhtx /usr/local/bin/kubectl_complete-lhtx` (and `kubectl-lhtx`).
 
 With `nix run`, arguments for lhtx must come after `--`; otherwise nix itself
 parses flags like `--context`.
@@ -227,6 +245,8 @@ internal/kube       kubeconfig/contexts, TCP-level traffic counter
 internal/longhorn   slim CRD structs, one-shot client, informer store, joins
 internal/cli        cobra commands
 internal/tui        Bubble Tea UI
+internal/demo       simulated cluster for --demo (fake dynamic client)
+docs/demo.tape      VHS script for docs/demo.gif (vhs docs/demo.tape)
 ```
 
 `internal/longhorn` does **not** import `longhorn-manager`: that module pulls

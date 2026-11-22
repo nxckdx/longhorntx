@@ -32,9 +32,10 @@
 
             nativeBuildInputs = [ pkgs.installShellFiles ];
 
-            # kubectl plugin: `kubectl lhtx ...`; shell completions
+            # kubectl plugin: `kubectl lhtx ...` (+ its completion); shell completions
             postInstall = ''
               ln -s $out/bin/lhtx $out/bin/kubectl-lhtx
+              ln -s $out/bin/lhtx $out/bin/kubectl_complete-lhtx
             '' + pkgs.lib.optionalString (pkgs.stdenv.buildPlatform.canExecute pkgs.stdenv.hostPlatform) ''
               installShellCompletion --cmd lhtx \
                 --bash <($out/bin/lhtx completion bash) \
@@ -76,6 +77,7 @@
                 runHook preInstall
                 install -Dm755 lhtx $out/bin/lhtx
                 ln -s $out/bin/lhtx $out/bin/kubectl-lhtx
+                ln -s $out/bin/lhtx $out/bin/kubectl_complete-lhtx
                 runHook postInstall
               '';
               postInstall = pkgs.lib.optionalString (pkgs.stdenv.buildPlatform.canExecute pkgs.stdenv.hostPlatform) ''

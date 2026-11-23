@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.4.0](https://github.com/nxckdx/longhorntx/compare/v0.3.0...v0.4.0) (2026-11-23)
+
+
+### Features
+
+* auto refresh switches to polling when volumes change often ([fa6be30](https://github.com/nxckdx/longhorntx/commit/fa6be307cda30237decb065345c400ac8e282ba9))
+* backup volumes view (TUI tab 6, lhtx backupvolumes) ([079ed98](https://github.com/nxckdx/longhorntx/commit/079ed988e36f7ec2d36e02943f3bc6b673d4d791))
+* config file with settings per kubeconfig context and traffic budget ([fefc888](https://github.com/nxckdx/longhorntx/commit/fefc888a9b54797a7047fcdabb92c09cc4ff485f))
+* mark risky orphans and skip them in bulk delete ([b3d61bb](https://github.com/nxckdx/longhorntx/commit/b3d61bb48631febb0ba7e45942eb1b5e9151352a))
+* **nix:** optional Home Manager module for the config file ([f781a03](https://github.com/nxckdx/longhorntx/commit/f781a037133d03329cd01d97b4e717b474ae7fa8))
+* **overview:** clusters without Longhorn are not errors ([fdc866d](https://github.com/nxckdx/longhorntx/commit/fdc866d9c876927d85ed2fb684157437a5a69328))
+* replica matrix (lhtx matrix, nodes view → m) ([3a5c774](https://github.com/nxckdx/longhorntx/commit/3a5c7740fd91e1cea983ecb0e9cec18d356fa489))
+* show snapshots as a tree (chain to volume-head, revert branches) ([a672740](https://github.com/nxckdx/longhorntx/commit/a67274039ed8af8ae180e50e4e125ce64ab53af3))
+* **tui:** cluster overview in the context picker ([0a42a21](https://github.com/nxckdx/longhorntx/commit/0a42a212f797b66ca4ce145b4475ab65b60deeb7))
+* **tui:** theme picker with live preview instead of cycling with T ([b773395](https://github.com/nxckdx/longhorntx/commit/b77339544a041c0cbc1f1e3cdfbfaac817311dea))
+* **tui:** themes, built-in and own ([be91ea7](https://github.com/nxckdx/longhorntx/commit/be91ea76673f6958e4437044dd7922a3ae77b9f0))
+
 ## [0.3.0](https://github.com/nxckdx/longhorntx/compare/v0.2.0...v0.3.0) (2026-11-22)
 
 

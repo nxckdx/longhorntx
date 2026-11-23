@@ -93,7 +93,11 @@ func (m *model) matrixTitle() string {
 	}
 	t := " " + sBold.Render("Replica matrix") + sDim.Render("  ● healthy ◐ rebuilding ✖ failed ○ other · digit = replicas on that node")
 	if issues > 0 {
-		t += "  " + fg(cWarn, fmt.Sprintf("%d volumes share a node or disk", issues))
+		what := fmt.Sprintf("%d volumes share a node or disk", issues)
+		if issues == 1 {
+			what = "1 volume shares a node or disk"
+		}
+		t += "  " + fg(cWarn, what)
 	} else if len(mx.Rows) > 0 {
 		t += "  " + fg(cOK, "✔ spread")
 	}

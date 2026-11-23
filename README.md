@@ -8,7 +8,7 @@ several MB/s (longhorn/longhorn#2372, #4211, #11134). lhtx talks **only to the
 Kubernetes API** (your kubeconfig, like kubectl), reads the `*.longhorn.io`
 CRDs and uses watches instead of polling.
 
-![lhtx demo: volume list with a running rebuild, volume detail, nodes, health checks and a write action preview](docs/demo.gif)
+![lhtx demo: volume list sorted by problems, a replica rebuild live in the volume detail, snapshots](docs/demo.gif)
 
 Try it without a cluster: `lhtx --demo` (or `nix run github:nxckdx/longhorntx -- --demo`)
 starts the TUI on a simulated in-memory cluster with made-up volumes and a
@@ -100,6 +100,8 @@ current connection.
 
 ### Health check
 
+![CLI: lhtx doctor with exit code, lhtx matrix --problems, lhtx backupvolumes](docs/cli.gif)
+
 `lhtx doctor` (and tab `5` in the TUI) reports what is wrong right now:
 
 - faulted/degraded volumes, volumes with only one healthy replica left
@@ -151,6 +153,8 @@ snapshot removal before trying to fix it.
 
 ### Changes (write mode)
 
+![Write mode: replica count and expansion, each shows the exact request before anything is sent](docs/write.gif)
+
 Nothing is changed without `--rw`. Every command first prints the exact request
 (verb, object, changed fields, JSON body). `--dry-run` stops there.
 `--dry-run=server` sends the request with `dryRun=All`: the apiserver and
@@ -198,6 +202,8 @@ Bulk delete (`--all-cleanable`, `ctrl+x`) skips those; deleting one by name
 shows a clear warning.
 
 TUI:
+
+![TUI views: snapshot tree with a revert branch, replica matrix, health, backup volumes](docs/views.gif)
 
 | Key | |
 |---|---|
@@ -315,7 +321,7 @@ internal/longhorn   slim CRD structs, one-shot client, informer store, joins
 internal/cli        cobra commands
 internal/tui        Bubble Tea UI
 internal/demo       simulated cluster for --demo (fake dynamic client)
-docs/demo.tape      VHS script for docs/demo.gif (vhs docs/demo.tape)
+docs/*.gif          README GIFs, recorded from --demo (docs/tapes/record.sh)
 ```
 
 `internal/longhorn` does **not** import `longhorn-manager`: that module pulls

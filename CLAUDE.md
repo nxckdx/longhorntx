@@ -31,7 +31,8 @@ internal/longhorn   slim CRD structs (no longhorn-manager import), Client (one-s
                     volume poll mode (volumes_poll.go)
 internal/fuzzy      fzf-style matching (TUI filter, CLI volume fallback)
 internal/demo       --demo: fake dynamic client with made-up data and a
-                    simulated rebuild loop (README GIF: docs/demo.tape, vhs)
+                    simulated rebuild loop (README GIFs: docs/*.tape + docs/tapes/,
+                    nix shell nixpkgs#vhs -c docs/tapes/record.sh)
 internal/config     ~/.config/lhtx/config.yaml: defaults + per-context overrides
                     (exact name or glob); flags/env beat it (cli/root.go loadConfig,
                     tui applySettings on every connect; traffic budget tui/settings.go)

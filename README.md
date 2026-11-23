@@ -123,7 +123,7 @@ lhtx create snapshot VOLUME [--name N]
 lhtx create backup VOLUME [--snapshot S]   # without --snapshot: snapshot, wait, back up
 lhtx delete snapshot NAME
 lhtx delete replica NAME                   # refused for the only healthy replica
-lhtx delete orphan NAME|--all-cleanable    # Longhorn deletes the data dir if cleanable
+lhtx delete orphan NAME|--all-cleanable    # Longhorn deletes the data dir if cleanable (bulk skips risky ones)
 lhtx set replicas VOLUME COUNT             # volume must be attached
 lhtx set setting NAME VALUE
 lhtx upgrade-engine VOLUME... --image v1.12.1   # like "Upgrade Engine" in the web UI
@@ -151,6 +151,12 @@ other's attach. Patches carry the `resourceVersion` the decision was
 based on, so they fail instead of overwriting a newer state. Deletes use a
 UID precondition.
 
+Orphans: `DataCleanable` only says Longhorn *can* delete the data, not that
+it is safe. Replica data of a volume that is deleted, faulted, degraded or
+has no healthy replica is marked **RISKY** – it may be the last usable copy.
+Bulk delete (`--all-cleanable`, `ctrl+x`) skips those; deleting one by name
+shows a clear warning.
+
 TUI:
 
 | Key | |
@@ -173,7 +179,7 @@ TUI:
 | `X`, `[` `]` | delete replica (selected with `[` `]` in details, or in the disk view) |
 | `D` | delete snapshot (snapshots panel); `B` there backs up the selected snapshot |
 | `C` `E` | replica scheduling / eviction on/off (nodes view, node or disk row) |
-| `X`, `ctrl+x` | orphans tab: delete one / all cleanable orphans |
+| `X`, `ctrl+x` | orphans tab: delete one / all cleanable orphans that are not RISKY |
 | `enter` (Settings) | change value |
 
 Every action opens a dialog with the request: `y` applies (`Y` for

@@ -372,10 +372,17 @@ func (d *data) buildRest() {
 		}
 	}
 
-	// leftovers of a volume deleted while worker-2 was down
-	for k := 0; k < 2; k++ {
-		gone := "pvc-" + uuid(fmt.Sprintf("deleted%d", k))
-		o := &lh.Orphan{ObjectMeta: meta("orphan-"+hex8(gone)+hex8(gone+"x"), map[string]string{lh.LabelNode: "worker-2"}, d.now.Add(-6*24*time.Hour))}
+	// leftovers of a volume deleted while worker-2 was down (risky: maybe
+	// the last copy) and of an old replica of a healthy volume (safe)
+	var healthy string
+	for _, v := range d.volumes {
+		if v.Status.Robustness == "healthy" && healthy == "" {
+			healthy = v.Name
+		}
+	}
+	for k, gone := range []string{"pvc-" + uuid("deleted0"), "pvc-" + uuid("deleted1"), healthy} {
+		age := time.Duration(6-k) * 24 * time.Hour
+		o := &lh.Orphan{ObjectMeta: meta("orphan-"+hex8(gone)+hex8(gone+"x"), map[string]string{lh.LabelNode: "worker-2"}, d.now.Add(-age))}
 		o.Spec.NodeID, o.Spec.OrphanType, o.Spec.DataEngine = "worker-2", "replica-data", "v1"
 		o.Spec.Parameters = map[string]string{"DataName": gone + "-" + hex8(gone), "DiskName": "default-disk-" + hex8("worker-2")[:4],
 			"DiskPath": "/var/lib/longhorn", "DiskUUID": d.diskUUID["worker-2"]}

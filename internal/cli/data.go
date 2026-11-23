@@ -371,7 +371,7 @@ func orphansCmd(g *globals) *cobra.Command {
 			}
 			now := time.Now()
 			w := newTab(os.Stdout)
-			hdr := "NODE\tTYPE\tPATH\tVOLUME\tAGE\tCLEANABLE"
+			hdr := "NODE\tTYPE\tPATH\tVOLUME\tAGE\tCLEANABLE\tRISK"
 			if g.output == "wide" {
 				hdr += "\tNAME"
 			}
@@ -392,7 +392,7 @@ func orphansCmd(g *globals) *cobra.Command {
 				if ov.InUse {
 					clean = "IN USE"
 				}
-				line := fmt.Sprintf("%s\t%s\t%s\t%s\t%s\t%s", ov.Node, ov.Type, path, vol, format.Age(ov.Created, now), clean)
+				line := fmt.Sprintf("%s\t%s\t%s\t%s\t%s\t%s\t%s", ov.Node, ov.Type, path, vol, format.Age(ov.Created, now), clean, dash(ov.Risk))
 				if g.output == "wide" {
 					line += "\t" + ov.Name
 				}

@@ -151,7 +151,6 @@ func toU(g schema.GroupVersionResource, obj any) *unstructured.Unstructured {
 	u.SetKind(kindOf(g))
 	u.SetNamespace(ns)
 	u.SetResourceVersion(strconv.FormatInt(rv.Add(1)+48211, 10))
-	delete(u.Object["metadata"].(map[string]any), "creationTimestamp")
 	return u
 }
 

@@ -218,6 +218,9 @@ func (m *model) orphanRows() []row {
 			if ov.PVC == "" {
 				vol = ov.Volume
 			}
+			if ov.Risk != "" {
+				vol += " " + fg(cWarn, strings.TrimPrefix(ov.Risk, "volume "))
+			}
 		}
 		clean := fg(cOK, "yes")
 		switch {
@@ -225,6 +228,8 @@ func (m *model) orphanRows() []row {
 			clean = sErr.Render("IN USE")
 		case !ov.Cleanable:
 			clean = fg(cWarn, "no")
+		case ov.Risk != "":
+			clean = sErr.Render("RISKY")
 		}
 		r := row{
 			cells: []string{ov.Node, ov.Type, dash(ov.DiskPath), sDim.Render(dash(ov.DataName)), vol, format.Age(ov.Created, time.Now()), clean},
@@ -242,14 +247,14 @@ func (m *model) orphanRows() []row {
 func (m *model) orphansTitle() string {
 	cleanable := 0
 	for _, ov := range m.orphans {
-		if ov.Cleanable && !ov.InUse {
+		if ov.BulkDeletable() {
 			cleanable++
 		}
 	}
 	t := " " + sBold.Render(fmt.Sprintf("Orphans %d", len(m.orphans))) +
-		sDim.Render(fmt.Sprintf("  data/instances no replica or engine owns · %d cleanable", cleanable))
+		sDim.Render(fmt.Sprintf("  data/instances no replica or engine owns · %d safe to clean", cleanable))
 	if m.rw {
-		t += sDim.Render(" · X delete · ctrl+x delete all cleanable")
+		t += sDim.Render(" · X delete · ctrl+x delete all safe ones (RISKY: volume deleted/faulted/degraded)")
 	} else {
 		t += sDim.Render(" · W: write mode to delete")
 	}

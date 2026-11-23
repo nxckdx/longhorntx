@@ -111,15 +111,30 @@ func (m *model) actionKey(p *page, key string) (tea.Cmd, bool) {
 		ovs := m.orphanViews()
 		if key == "ctrl+x" {
 			var acts []*longhorn.Action
+			risky := 0
 			for _, ov := range ovs {
-				if !ov.Cleanable || ov.InUse {
+				if ov.Cleanable && !ov.InUse && ov.Risk != "" {
+					risky++
+				}
+				if !ov.BulkDeletable() {
 					continue
 				}
 				if a, err := longhorn.DeleteOrphan(ov); err == nil {
 					acts = append(acts, a)
 				}
 			}
-			m.confirmBatch(fmt.Sprintf("Delete %d cleanable orphans (data directories on the nodes)", len(acts)), acts)
+			if len(acts) == 0 {
+				m.setFlash(fmt.Sprintf("nothing to delete in bulk (%d risky orphans: delete one by one with X)", risky), true)
+				return nil, true
+			}
+			title := fmt.Sprintf("Delete %d cleanable orphans (data directories on the nodes)", len(acts))
+			if risky > 0 {
+				title += fmt.Sprintf(" – %d risky ones skipped", risky)
+			}
+			m.confirmBatch(title, acts)
+			if risky > 0 {
+				m.setFlash(fmt.Sprintf("%d risky orphans skipped (volume deleted/faulted/degraded): delete them one by one with X", risky), true)
+			}
 			return nil, true
 		}
 		rows := m.rowsFor(p)

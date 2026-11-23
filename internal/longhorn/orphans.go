@@ -67,8 +67,16 @@ type OrphanView struct {
 	VolExists bool    `json:"volumeExists"`
 	InUse     bool    `json:"inUse"` // data dir belongs to a current replica (should never happen)
 	Cleanable bool    `json:"cleanable"`
-	Created   string  `json:"created"`
+	// Risk says why deleting the data may lose the last usable copy
+	// (volume deleted, faulted, degraded, without healthy replica). Such
+	// orphans are left out of "delete all cleanable": DataCleanable only
+	// means Longhorn is able to delete the data, not that it is safe.
+	Risk    string `json:"risk,omitempty"`
+	Created string `json:"created"`
 }
+
+// BulkDeletable reports whether the orphan may go with "delete all cleanable".
+func (ov OrphanView) BulkDeletable() bool { return ov.Cleanable && !ov.InUse && ov.Risk == "" }
 
 func BuildOrphans(orphans []*Orphan, vols []*Volume, reps []*Replica) []OrphanView {
 	byName := map[string]*Volume{}
@@ -76,8 +84,12 @@ func BuildOrphans(orphans []*Orphan, vols []*Volume, reps []*Replica) []OrphanVi
 		byName[v.Name] = v
 	}
 	inUse := map[string]bool{}
+	healthy := map[string]int{} // available replicas per volume
 	for _, r := range reps {
 		inUse[r.Spec.NodeID+"/"+r.Spec.DataDirectoryName] = true
+		if availableReplica(r) {
+			healthy[r.Spec.VolumeName]++
+		}
 	}
 	out := make([]OrphanView, 0, len(orphans))
 	for _, o := range orphans {
@@ -87,8 +99,12 @@ func BuildOrphans(orphans []*Orphan, vols []*Volume, reps []*Replica) []OrphanVi
 			Cleanable: o.Cleanable(), Created: o.CreationTimestamp.UTC().Format("2006-01-02T15:04:05Z"),
 			InUse: o.DataName() != "" && inUse[o.Spec.NodeID+"/"+o.DataName()],
 		}
-		if v := byName[ov.Volume]; v != nil {
+		v := byName[ov.Volume]
+		if v != nil {
 			ov.VolExists, ov.PVC = true, v.PVC()
+		}
+		if o.IsReplicaData() {
+			ov.Risk = orphanRisk(ov, v, healthy[ov.Volume])
 		}
 		out = append(out, ov)
 	}
@@ -100,6 +116,22 @@ func BuildOrphans(orphans []*Orphan, vols []*Volume, reps []*Replica) []OrphanVi
 		return a.DataName < b.DataName
 	})
 	return out
+}
+
+func orphanRisk(ov OrphanView, v *Volume, healthy int) string {
+	switch {
+	case ov.Volume == "":
+		return "volume unknown"
+	case v == nil:
+		return "volume deleted"
+	case v.Status.Robustness == "faulted":
+		return "volume faulted"
+	case healthy == 0:
+		return "volume has no healthy replica"
+	case v.Status.Robustness == "degraded":
+		return "volume degraded"
+	}
+	return ""
 }
 
 // DeleteOrphan builds the delete action; refuses data that a replica uses.
@@ -122,7 +154,15 @@ func DeleteOrphan(ov OrphanView) (*Action, error) {
 	case ov.Orphan.IsReplicaData():
 		a.Warnings = append(a.Warnings, "not DataCleanable: only the Orphan object is removed, the data stays on disk")
 	}
-	if ov.VolExists {
+	if ov.Risk != "" && ov.Cleanable {
+		advice := "keep it until the volume is healthy again"
+		if !ov.VolExists {
+			advice = "if the volume was deleted by mistake, this is the data that is left"
+		}
+		a.Warnings = append(a.Warnings, "RISKY: "+ov.Risk+" – this may be the last usable copy of the data; "+
+			advice+" (copy "+ov.DiskPath+"/replicas/"+ov.DataName+" off the node first if in doubt)")
+	}
+	if ov.VolExists && ov.Risk == "" {
 		a.Warnings = append(a.Warnings, "the volume still exists – this is leftover data of an earlier replica, not the current one")
 	}
 	a.Lines = nil

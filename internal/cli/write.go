@@ -237,7 +237,12 @@ func deleteCmd(g *globals) *cobra.Command {
 		Short: "Delete an orphan (Longhorn removes its data directory if cleanable)",
 		Long: `Delete orphan CRs. For replica data that Longhorn marks DataCleanable,
 Longhorn deletes <disk>/replicas/<dir> on the node. --all-cleanable deletes
-every cleanable orphan; you confirm by typing their number.`,
+every cleanable orphan; you confirm by typing their number.
+
+--all-cleanable skips risky orphans: replica data of volumes that are
+deleted, faulted, degraded or without a healthy replica. DataCleanable only
+means Longhorn is able to delete the data – for such volumes it may be the
+last usable copy. Delete those one by one by NAME after checking.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
@@ -253,11 +258,15 @@ every cleanable orphan; you confirm by typing their number.`,
 				return err
 			}
 			var acts []*longhorn.Action
+			var risky []string
 			for _, ov := range ovs {
 				if len(args) == 1 && ov.Name != args[0] {
 					continue
 				}
-				if allCleanable && (!ov.Cleanable || ov.InUse) {
+				if allCleanable && ov.Cleanable && !ov.InUse && ov.Risk != "" {
+					risky = append(risky, fmt.Sprintf("  %s (%s, %s)", ov.Name, dash(ov.Volume), ov.Risk))
+				}
+				if allCleanable && !ov.BulkDeletable() {
 					continue
 				}
 				a, err := longhorn.DeleteOrphan(ov)
@@ -266,8 +275,15 @@ every cleanable orphan; you confirm by typing their number.`,
 				}
 				acts = append(acts, a)
 			}
+			if len(risky) > 0 {
+				fmt.Fprintf(os.Stderr, "skipping %d risky orphans (delete one by one by NAME after checking):\n%s\n",
+					len(risky), strings.Join(risky, "\n"))
+			}
 			switch len(acts) {
 			case 0:
+				if allCleanable {
+					return fmt.Errorf("no orphan is safe to delete in bulk")
+				}
 				return fmt.Errorf("no matching orphan")
 			case 1:
 				return g.runAction(ctx, c, acts[0])

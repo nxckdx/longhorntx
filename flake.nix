@@ -96,6 +96,10 @@
           default = lhtx;
         });
 
+      # programs.lhtx: package + ~/.config/lhtx/config.yaml (see nix/home-manager.nix)
+      homeManagerModules.default = import ./nix/home-manager.nix self;
+      homeManagerModules.lhtx = self.homeManagerModules.default;
+
       devShells = forAllSystems (system:
         let
           pkgs = nixpkgs.legacyPackages.${system};

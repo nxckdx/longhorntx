@@ -278,6 +278,10 @@ Two flake packages:
     inputs.lhtx.packages.${pkgs.stdenv.hostPlatform.system}.lhtx-bin
   ];
   ```
+- Optional, only if you want the config file managed by Nix: a Home Manager
+  module (`inputs.lhtx.homeManagerModules.default`, then
+  `programs.lhtx = { enable = true; settings = { … }; }`, same keys as
+  `config.yaml`). Without it lhtx uses its built-in defaults.
 
 ### Shell completion
 

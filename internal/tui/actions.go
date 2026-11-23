@@ -912,7 +912,7 @@ func (m *model) viewModal(bodyHeight int) string {
 		}
 		b.WriteString(yes + "   " + sKey.Render("[d]") + " server dry run   " + sKey.Render("[esc]") + " cancel")
 	}
-	border := lipgloss.Color("39")
+	border := cBorder
 	if md.kind == modalConfirm && md.action.Destructive {
 		border = cErr
 	}
@@ -924,5 +924,5 @@ func (m *model) rwBadge() string {
 	if !m.rw {
 		return ""
 	}
-	return " " + lipgloss.NewStyle().Background(cErr).Foreground(lipgloss.Color("231")).Bold(true).Padding(0, 1).Render("RW")
+	return " " + lipgloss.NewStyle().Background(cErr).Foreground(cBadgeFg).Bold(true).Padding(0, 1).Render("RW")
 }

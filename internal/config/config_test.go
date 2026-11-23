@@ -102,3 +102,33 @@ func TestParseBytes(t *testing.T) {
 		}
 	}
 }
+
+func TestThemes(t *testing.T) {
+	ValidTheme = func(s string) error {
+		if s == "nord" || s == "default" {
+			return nil
+		}
+		return os.ErrInvalid
+	}
+	defer func() { ValidTheme = func(string) error { return nil } }()
+	var f File
+	ok := "defaults:\n  theme: mine\nthemes:\n  mine:\n    base: nord\n    accent: \"#ff79c6\"\n    warn: 214\n    palette: [\"#fff\", 25]\n"
+	if err := Parse([]byte(ok), &f); err != nil {
+		t.Fatal(err)
+	}
+	if f.For("x").Theme != "mine" || string(*f.Themes["mine"].Warn) != "214" || len(f.Themes["mine"].Palette) != 2 {
+		t.Errorf("%+v", f.Themes["mine"])
+	}
+	for _, bad := range []string{
+		"themes:\n  x:\n    accent: \"#zzz\"\n",
+		"themes:\n  x:\n    ok: 256\n",
+		"themes:\n  x:\n    base: mine\n",      // base must be built-in
+		"themes:\n  x:\n    acent: \"#fff\"\n", // typo
+		"defaults:\n  theme: other\n",
+	} {
+		var f File
+		if err := Parse([]byte(bad), &f); err == nil {
+			t.Errorf("accepted %q", bad)
+		}
+	}
+}

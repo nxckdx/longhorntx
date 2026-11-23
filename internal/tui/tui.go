@@ -33,6 +33,7 @@ type Options struct {
 	// value was given explicitly on the command line (…Set).
 	Config                          *config.File
 	RWSet, RefreshSet, NamespaceSet bool
+	Theme                           string // --theme, beats the config
 }
 
 // settingsFor resolves the context's settings with explicit flags on top.
@@ -66,6 +67,14 @@ func Run(ctx context.Context, o Options) error {
 			c, _ := config.ColorCode(cfg.For(name).Color)
 			return c
 		}
+	}
+	if o.Config != nil {
+		RegisterThemes(o.Config.Themes)
+	}
+	if o.Theme != "" {
+		applyTheme(o.Theme)
+	} else if o.Config != nil {
+		applyTheme(o.Config.For(o.Kube.Context).Theme) // before the first frame
 	}
 	m := newModel(ctx, o)
 	_, err := tea.NewProgram(m, tea.WithContext(ctx)).Run()
@@ -170,6 +179,7 @@ type model struct {
 	budget               int64            // traffic budget in bytes, 0 = off
 	budgetWarned, paused bool
 	autoNoted            bool // flash shown when auto switched to polling
+	themePicked          bool // T was pressed: keep that theme across contexts
 
 	// overview in the context picker
 	ov        map[string]overview.Summary
@@ -714,6 +724,12 @@ func (m *model) handleKey(k tea.KeyPressMsg) tea.Cmd {
 		return nil
 	case "?":
 		m.push(&page{kind: pHelp})
+		return nil
+	case "T":
+		t := nextTheme()
+		applyTheme(t)
+		m.themePicked = true
+		m.setFlash("theme: "+t+" (keep it: theme: "+t+" in "+config.DefaultPath()+")", false)
 		return nil
 	case "1":
 		m.root(pVolumes)

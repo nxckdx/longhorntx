@@ -87,11 +87,32 @@ contexts:
 ```
 
 Precedence: flag/env > context > defaults > built-in. Settings: `refresh`,
-`autoPollRate`, `readOnly`, `color`, `trafficBudget`, `overview`, `namespace`. Unknown keys
+`autoPollRate`, `readOnly`, `color`, `theme`, `trafficBudget`, `overview`, `namespace`. Unknown keys
 and bad values are errors, so typos do not go unnoticed. `readOnly: false`
 only skips `--rw`/`W`: previews and confirmations stay. Switching the context
 in the TUI applies that context's settings (write mode turns off unless the
 new context allows it or `--rw` was given).
+
+**Themes**: `default`, `catppuccin`, `dracula`, `nord`, `gruvbox`, `light`
+(for light terminals) – `theme:` in the config (globally or per context),
+`--theme`, or `T` in the TUI to cycle through them. `lhtx config themes`
+shows them with colour swatches. Own themes or tweaks of the built-in ones
+start from a base and override single colours:
+
+```yaml
+defaults:
+  theme: mine
+themes:
+  mine:
+    base: nord
+    accent: "#ff79c6"    # #rrggbb, #rgb or 0-255
+    warn: 214
+  default:               # tweak a built-in: same name, no base needed
+    ok: "#00ff87"
+```
+
+Colours: `dim faint ok warn error info accent headerBg selectedBg barFg tabBg
+tabFg badgeFg prodBg border`, `palette` (context badge colours).
 
 **Traffic budget** (TUI): at 80 % of the budget the header shows the usage,
 at 100 % all watches stop (`⏸ paused`); on-demand loads still work and
@@ -231,6 +252,7 @@ TUI:
 
 Every action opens a dialog with the request: `y` applies (`Y` for
 destructive ones), `d` runs a server-side dry run, `esc` cancels.
+| `T` | next theme (try them; keep one with `theme:` in the config) |
 | `?` | help |
 
 ## Install
@@ -480,7 +502,7 @@ engines     24      22ms        20.8 KiB     5              34.8 KiB      69.6 K
    · ✔ snapshot tree, backup volumes (tab 6, `lhtx backupvolumes`) incl.
    volumes that were deleted
    · ✔ config file with settings per context, traffic budget · open: editing
-   the settings in the TUI, themes · ✔ auto switches to poll by measured
+   the settings in the TUI · ✔ themes (built-in + own) · ✔ auto switches to poll by measured
    update rate
 3. **Actions** ✔ snapshot/backup create, snapshot/replica delete, replica count,
    scheduling/eviction for nodes and disks, settings, engine upgrade, expansion,

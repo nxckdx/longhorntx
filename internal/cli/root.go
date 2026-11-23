@@ -36,6 +36,7 @@ type globals struct {
 	dryRunFlag string
 	refresh    string
 	demo       bool
+	theme      string
 
 	cfg *config.File
 	// explicit command line values (they beat the config file)
@@ -46,15 +47,22 @@ type globals struct {
 // selected context to everything not given on the command line.
 func (g *globals) loadConfig(cmd *cobra.Command) error {
 	config.ValidRefresh = func(s string) error { _, err := longhorn.ParseRefresh(s); return err }
+	config.ValidTheme = validTheme
 	cfg, err := config.Load(config.DefaultPath())
 	if err != nil {
 		return err
 	}
 	g.cfg = cfg
+	tui.RegisterThemes(cfg.Themes)
 	f := cmd.Flags()
 	g.rwSet = f.Changed("rw")
 	g.refreshSet = f.Changed("refresh") || os.Getenv("LHTX_REFRESH") != ""
 	g.namespaceSet = f.Changed("namespace")
+	if _, own := cfg.Themes[g.theme]; g.theme != "" && !own {
+		if err := validTheme(g.theme); err != nil {
+			return err
+		}
+	}
 	eff := cfg.For(g.contextName())
 	if !g.rwSet && !eff.ReadOnly {
 		g.rw = true
@@ -66,6 +74,15 @@ func (g *globals) loadConfig(cmd *cobra.Command) error {
 		g.namespace = eff.Namespace
 	}
 	return nil
+}
+
+func validTheme(s string) error {
+	for _, n := range tui.BuiltinThemeNames() {
+		if s == n || s == "" {
+			return nil
+		}
+	}
+	return fmt.Errorf("unknown theme %q (%s, or one under themes: in the config file)", s, strings.Join(tui.BuiltinThemeNames(), ", "))
 }
 
 // contextName is the selected kubeconfig context (local, no traffic).
@@ -130,7 +147,7 @@ Without a subcommand it starts the interactive TUI.`,
 				return err
 			}
 			return tui.Run(cmd.Context(), tui.Options{Kube: g.kube, Namespace: g.namespace, Version: Version, RW: g.rw, Refresh: r, Demo: g.demo,
-				Config: g.cfg, RWSet: g.rwSet, RefreshSet: g.refreshSet, NamespaceSet: g.namespaceSet})
+				Config: g.cfg, RWSet: g.rwSet, RefreshSet: g.refreshSet, NamespaceSet: g.namespaceSet, Theme: g.theme})
 		},
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
 			switch {
@@ -159,6 +176,10 @@ Without a subcommand it starts the interactive TUI.`,
 	if defRefresh == "" {
 		defRefresh = "auto"
 	}
+	f.StringVar(&g.theme, "theme", "", "TUI colours: "+strings.Join(tui.BuiltinThemeNames(), ", ")+" or one from the config file")
+	_ = root.RegisterFlagCompletionFunc("theme", func(*cobra.Command, []string, string) ([]string, cobra.ShellCompDirective) {
+		return tui.ThemeNames(), cobra.ShellCompDirectiveNoFileComp
+	})
 	f.StringVar(&g.refresh, "refresh", defRefresh, "volume updates: auto, watch (live) or a poll interval like 30s (env LHTX_REFRESH)")
 
 	root.AddCommand(

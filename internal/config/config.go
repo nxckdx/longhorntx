@@ -30,6 +30,8 @@ type Settings struct {
 	// ReadOnly false starts the TUI in write mode and lets the CLI change
 	// things without --rw. Previews and confirmations stay.
 	ReadOnly *bool `json:"readOnly,omitempty"`
+	// Theme of the TUI: default, catppuccin, dracula, nord, gruvbox, light.
+	Theme *Str `json:"theme,omitempty"`
 	// Color of the context badge: a name (red, green, …) or 0–255.
 	Color *Str `json:"color,omitempty"`
 	// TrafficBudget per TUI session, e.g. 200MiB ("0" = off).
@@ -38,6 +40,59 @@ type Settings struct {
 	Overview *bool `json:"overview,omitempty"`
 	// Namespace Longhorn runs in.
 	Namespace *Str `json:"namespace,omitempty"`
+}
+
+// ThemeDef overrides colours of a theme: "#rrggbb", "#rgb" or 0-255.
+type ThemeDef struct {
+	Base       Str   `json:"base,omitempty"`
+	Dim        *Str  `json:"dim,omitempty"`        // secondary text
+	Faint      *Str  `json:"faint,omitempty"`      // empty bar parts, unused cells
+	OK         *Str  `json:"ok,omitempty"`         // healthy
+	Warn       *Str  `json:"warn,omitempty"`       // degraded, warnings
+	Error      *Str  `json:"error,omitempty"`      // faulted, errors, RW badge
+	Info       *Str  `json:"info,omitempty"`       // rebuilding, progress
+	Accent     *Str  `json:"accent,omitempty"`     // keys in the footer
+	HeaderBg   *Str  `json:"headerBg,omitempty"`   // header bar
+	SelectedBg *Str  `json:"selectedBg,omitempty"` // cursor row
+	BarFg      *Str  `json:"barFg,omitempty"`      // text on the header bar
+	TabBg      *Str  `json:"tabBg,omitempty"`      // active tab
+	TabFg      *Str  `json:"tabFg,omitempty"`
+	BadgeFg    *Str  `json:"badgeFg,omitempty"` // text on context/RW badges
+	ProdBg     *Str  `json:"prodBg,omitempty"`  // badge of contexts named *prod*
+	Border     *Str  `json:"border,omitempty"`  // dialog border
+	Palette    []Str `json:"palette,omitempty"` // context badge backgrounds
+}
+
+// ValidColor accepts "#rrggbb", "#rgb" and 0-255.
+func ValidColor(s string) error {
+	if len(s) == 7 || len(s) == 4 {
+		if s[0] == '#' {
+			if _, err := strconv.ParseUint(s[1:], 16, 32); err == nil {
+				return nil
+			}
+		}
+	}
+	if n, err := strconv.Atoi(s); err == nil && n >= 0 && n <= 255 {
+		return nil
+	}
+	return fmt.Errorf("invalid colour %q (#rrggbb, #rgb or 0-255)", s)
+}
+
+func (t ThemeDef) validate() error {
+	for _, c := range []*Str{t.Dim, t.Faint, t.OK, t.Warn, t.Error, t.Info, t.Accent, t.HeaderBg, t.SelectedBg,
+		t.BarFg, t.TabBg, t.TabFg, t.BadgeFg, t.ProdBg, t.Border} {
+		if c != nil {
+			if err := ValidColor(string(*c)); err != nil {
+				return err
+			}
+		}
+	}
+	for _, c := range t.Palette {
+		if err := ValidColor(string(c)); err != nil {
+			return fmt.Errorf("palette: %w", err)
+		}
+	}
+	return nil
 }
 
 // Str is a string that may be written as a YAML number (color: 160,
@@ -63,6 +118,10 @@ func (s *Str) UnmarshalJSON(b []byte) error {
 type File struct {
 	Defaults Settings            `json:"defaults"`
 	Contexts map[string]Settings `json:"contexts,omitempty"`
+	// Themes: own themes or changes to the built-in ones; each starts from
+	// Base (a built-in theme; default: the theme of the same name, else
+	// "default") and overrides single colours.
+	Themes map[string]ThemeDef `json:"themes,omitempty"`
 
 	Path string `json:"-"` // where it was read from ("" = no file)
 }
@@ -74,6 +133,7 @@ type Effective struct {
 	AutoPollRate  int
 	ReadOnly      bool
 	Color         string
+	Theme         string
 	TrafficBudget int64 // bytes, 0 = off
 	Overview      bool
 	Namespace     string
@@ -137,21 +197,36 @@ func Parse(b []byte, f *File) error {
 		}
 		return errors.New(msg)
 	}
-	if err := f.Defaults.validate(); err != nil {
+	// themes first: settings may refer to them
+	for name, t := range f.Themes {
+		if err := t.validate(); err != nil {
+			return fmt.Errorf("themes.%s: %w", name, err)
+		}
+		if t.Base != "" && ValidTheme(string(t.Base)) != nil {
+			return fmt.Errorf("themes.%s: base %q is not a built-in theme", name, t.Base)
+		}
+	}
+	themeOK := func(s string) error {
+		if _, ok := f.Themes[s]; ok {
+			return nil
+		}
+		return ValidTheme(s)
+	}
+	if err := f.Defaults.validate(themeOK); err != nil {
 		return fmt.Errorf("defaults: %w", err)
 	}
 	for k, s := range f.Contexts {
 		if _, err := path.Match(k, ""); err != nil {
 			return fmt.Errorf("contexts.%s: bad pattern: %w", k, err)
 		}
-		if err := s.validate(); err != nil {
+		if err := s.validate(themeOK); err != nil {
 			return fmt.Errorf("contexts.%s: %w", k, err)
 		}
 	}
 	return nil
 }
 
-func (s Settings) validate() error {
+func (s Settings) validate(themeOK func(string) error) error {
 	if s.Refresh != nil {
 		if err := ValidRefresh(string(*s.Refresh)); err != nil {
 			return err
@@ -165,6 +240,11 @@ func (s Settings) validate() error {
 			return err
 		}
 	}
+	if s.Theme != nil {
+		if err := themeOK(string(*s.Theme)); err != nil {
+			return err
+		}
+	}
 	if s.TrafficBudget != nil {
 		if _, err := ParseBytes(string(*s.TrafficBudget)); err != nil {
 			return fmt.Errorf("trafficBudget: %w", err)
@@ -172,6 +252,10 @@ func (s Settings) validate() error {
 	}
 	return nil
 }
+
+// ValidTheme checks built-in theme names; set by the caller (the TUI knows
+// them). Themes defined in the file are accepted too.
+var ValidTheme = func(string) error { return nil }
 
 // ValidRefresh is set by the caller (longhorn.ParseRefresh) to avoid an
 // import cycle; the default accepts anything.
@@ -182,7 +266,7 @@ var ValidRefresh = func(string) error { return nil }
 func (f *File) For(kctx string) Effective {
 	e := Effective{Context: kctx, Refresh: DefaultRefresh, AutoPollRate: DefaultAutoPollRate, ReadOnly: true, Overview: true, Namespace: DefaultNamespace,
 		Source: map[string]string{}}
-	for _, k := range []string{"refresh", "autoPollRate", "readOnly", "color", "trafficBudget", "overview", "namespace"} {
+	for _, k := range []string{"refresh", "autoPollRate", "readOnly", "color", "theme", "trafficBudget", "overview", "namespace"} {
 		e.Source[k] = "built-in"
 	}
 	e.apply(f.Defaults, "defaults")
@@ -221,6 +305,9 @@ func (e *Effective) apply(s Settings, src string) {
 	}
 	if s.Color != nil {
 		e.Color, e.Source["color"] = string(*s.Color), src
+	}
+	if s.Theme != nil {
+		e.Theme, e.Source["theme"] = string(*s.Theme), src
 	}
 	if s.TrafficBudget != nil {
 		e.TrafficBudget, _ = ParseBytes(string(*s.TrafficBudget))
@@ -290,6 +377,9 @@ defaults:
   # false: TUI starts in write mode, CLI changes without --rw
   # (previews and confirmations stay)
   readOnly: true
+  # TUI colours: default, catppuccin, dracula, nord, gruvbox, light
+  # (T in the TUI cycles through them to try)
+  theme: default
   # context badge colour: auto, red, green, yellow, blue, magenta, cyan,
   # orange, gray or 0-255 (auto: by name, red for names with prod/prd)
   color: auto

@@ -399,6 +399,7 @@ func (m *model) viewHelp() string {
    i              nodes: drain check (what happens if the node goes away)
    m              nodes: replica matrix (volumes × nodes, shared node/disk first)
    q              back / quit       ?         this help
+   T              next theme (keep one: theme: NAME in the config file)
 
  Volume details
    s snapshots   b backups   e events   J recurring jobs   tab next panel

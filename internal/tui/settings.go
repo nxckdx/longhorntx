@@ -22,6 +22,9 @@ func (m *model) applySettings(eff config.Effective) {
 		m.rw = !eff.ReadOnly
 	}
 	m.budget, m.budgetWarned, m.paused = eff.TrafficBudget, false, false
+	if m.opts.Theme == "" && !m.themePicked {
+		applyTheme(eff.Theme)
+	}
 }
 
 // used is the traffic of the current connection (both directions).

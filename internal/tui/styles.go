@@ -9,39 +9,28 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
+// Colours and styles; set by applyTheme (theme.go).
 var (
-	cDim     = lipgloss.Color("244")
-	cFaint   = lipgloss.Color("238")
-	cOK      = lipgloss.Color("42")
-	cWarn    = lipgloss.Color("214")
-	cErr     = lipgloss.Color("196")
-	cInfo    = lipgloss.Color("39")
-	cAccent  = lipgloss.Color("212")
-	cHeaderB = lipgloss.Color("236")
+	cDim, cFaint, cOK, cWarn, cErr, cInfo, cAccent, cHeaderB color.Color
 
-	sDim      = lipgloss.NewStyle().Foreground(cDim)
-	sBold     = lipgloss.NewStyle().Bold(true)
-	sHead     = lipgloss.NewStyle().Bold(true).Foreground(cDim)
-	sSelected = lipgloss.NewStyle().Background(lipgloss.Color("237")).Bold(true)
-	sBar      = lipgloss.NewStyle().Background(cHeaderB).Foreground(lipgloss.Color("252"))
-	sKey      = lipgloss.NewStyle().Foreground(cAccent).Bold(true)
-	sErr      = lipgloss.NewStyle().Foreground(cErr).Bold(true)
+	sBold                                                = lipgloss.NewStyle().Bold(true)
+	sDim, sHead, sSelected, sBar, sKey, sErr, sTabActive lipgloss.Style
 )
 
-// contextPalette: background colours for the context badge. A context keeps
-// its colour across runs (hash of the name), so customers are recognisable.
-var contextPalette = []string{"25", "28", "90", "130", "31", "94", "60", "66"}
+// The context badge background comes from the theme's palette by a hash of
+// the name, so a context keeps its colour across runs and customers are
+// recognisable; names with prod/prd are red.
 
 func contextStyle(name string) lipgloss.Style {
-	bg := lipgloss.Color(contextPalette[hash(name)%uint32(len(contextPalette))])
+	var bg color.Color = lipgloss.Color(contextPalette[hash(name)%uint32(len(contextPalette))])
 	l := strings.ToLower(name)
 	if strings.Contains(l, "prod") || strings.Contains(l, "prd") {
-		bg = lipgloss.Color("160")
+		bg = cProdBg
 	}
 	if c := contextColor(name); c != "" {
 		bg = lipgloss.Color(c)
 	}
-	return lipgloss.NewStyle().Background(bg).Foreground(lipgloss.Color("231")).Bold(true).Padding(0, 1)
+	return lipgloss.NewStyle().Background(bg).Foreground(cBadgeFg).Bold(true).Padding(0, 1)
 }
 
 func hash(s string) uint32 {
@@ -113,5 +102,3 @@ func bar(pct float64, w int, c color.Color) string {
 	}
 	return fg(c, s) + fg(cFaint, strings.Repeat("░", max(empty, 0)))
 }
-
-var sTabActive = lipgloss.NewStyle().Background(lipgloss.Color("238")).Foreground(lipgloss.Color("231")).Bold(true).Padding(0, 1)

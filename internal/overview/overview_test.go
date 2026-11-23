@@ -1,4 +1,4 @@
-package cli
+package overview
 
 import (
 	"errors"
@@ -21,7 +21,7 @@ func TestNotInstalled(t *testing.T) {
 		{errors.New("dial tcp 10.0.0.1:6443: connect: connection refused"), false},
 		{apierrors.NewForbidden(schema.GroupResource{Group: "longhorn.io", Resource: "volumes"}, "", errors.New("no")), false},
 	} {
-		if got := notInstalled(tc.err); got != tc.want {
+		if got := NotInstalled(tc.err); got != tc.want {
 			t.Errorf("%v: got %v", tc.err, got)
 		}
 	}

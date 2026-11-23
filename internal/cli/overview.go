@@ -4,41 +4,15 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"sort"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
 	"github.com/nxckdx/longhorntx/internal/format"
-	"github.com/nxckdx/longhorntx/internal/kube"
 	"github.com/nxckdx/longhorntx/internal/longhorn"
+	"github.com/nxckdx/longhorntx/internal/overview"
 )
-
-// clusterSummary is one line of `lhtx overview`.
-type clusterSummary struct {
-	Context string `json:"context"`
-	Error   string `json:"error,omitempty"`
-	// NotInstalled: the cluster answered but has no longhorn.io CRDs. Not
-	// an error (many kubeconfigs mix clusters with and without Longhorn).
-	NotInstalled bool              `json:"notInstalled,omitempty"`
-	Version      string            `json:"longhornVersion,omitempty"`
-	Volumes      int               `json:"volumes"`
-	Attached     int               `json:"attached"`
-	Degraded     int               `json:"degraded"`
-	Faulted      int               `json:"faulted"`
-	Rebuilding   int               `json:"rebuilding"`
-	Nodes        int               `json:"nodes"`
-	NodesReady   int               `json:"nodesReady"`
-	Critical     int               `json:"critical"`
-	Warnings     int               `json:"warnings"`
-	Worst        longhorn.Severity `json:"worst"`
-	Top          string            `json:"top,omitempty"` // most severe finding
-	Traffic      int64             `json:"trafficBytes"`
-	Took         time.Duration     `json:"took"`
-}
 
 func overviewCmd(g *globals) *cobra.Command {
 	var contexts []string
@@ -82,7 +56,7 @@ Exit codes like doctor (worst of all clusters): 0 ok, 1 warning, 2 critical,
 					}
 				}
 			}
-			sums := make([]clusterSummary, len(names))
+			sums := make([]overview.Summary, len(names))
 			sem := make(chan struct{}, max(parallel, 1))
 			var wg sync.WaitGroup
 			for i, name := range names {
@@ -143,95 +117,18 @@ Exit codes like doctor (worst of all clusters): 0 ok, 1 warning, 2 critical,
 	return cmd
 }
 
-func summarizeCluster(ctx context.Context, g *globals, name string) (s clusterSummary) {
-	start := time.Now()
-	s.Context = name
-	var c *longhorn.Client
-	var err error
+func summarizeCluster(ctx context.Context, g *globals, name string) overview.Summary {
 	if g.demo {
-		c, err = g.client()
-	} else {
-		ko := g.kube
-		ko.Context = name
-		var cl *kube.Cluster
-		if cl, err = kube.Connect(ko); err == nil {
-			c, err = longhorn.NewClient(cl, g.namespaceFor(name))
+		c, err := g.client()
+		if err != nil {
+			return overview.Summary{Context: name, Error: err.Error()}
 		}
+		return overview.Summarize(ctx, c)
 	}
-	if err != nil {
-		s.Error = err.Error()
-		return s
-	}
-	defer func() {
-		s.Traffic = c.Cluster.Traffic.RX() + c.Cluster.Traffic.TX()
-		s.Took = time.Since(start).Round(100 * time.Millisecond)
-	}()
-	in, err := loadDoctorInput(ctx, c)
-	if err != nil {
-		if notInstalled(err) {
-			s.NotInstalled = true
-			return s
-		}
-		s.Error = shortError(err)
-		return s
-	}
-	s.Version, _ = c.LonghornVersion(ctx)
-	s.Volumes, s.Nodes = len(in.Volumes), len(in.Nodes)
-	for _, v := range in.Volumes {
-		if v.Status.State == "attached" {
-			s.Attached++
-		}
-		switch v.Status.Robustness {
-		case "degraded":
-			s.Degraded++
-		case "faulted":
-			s.Faulted++
-		}
-	}
-	s.Rebuilding = len(longhorn.RebuildingVolumes(in.Replicas))
-	for _, n := range in.Nodes {
-		if n.Ready() {
-			s.NodesReady++
-		}
-	}
-	fs := longhorn.Diagnose(in)
-	s.Worst = longhorn.Worst(fs)
-	sort.SliceStable(fs, func(i, j int) bool { return fs[i].Severity > fs[j].Severity })
-	for _, f := range fs {
-		switch f.Severity {
-		case longhorn.SevCritical:
-			s.Critical++
-		case longhorn.SevWarning:
-			s.Warnings++
-		}
-	}
-	if len(fs) > 0 && fs[0].Severity > longhorn.SevInfo {
-		s.Top = format.Short(fs[0].Object+": "+fs[0].Message, 80)
-	}
-	return s
+	return overview.Check(ctx, g.kube, name, g.namespaceFor(name))
 }
 
-// notInstalled: listing longhorn.io volumes gives 404 when the CRDs are
-// missing (a missing namespace would give an empty list instead).
-func notInstalled(err error) bool {
-	return apierrors.IsNotFound(err) ||
-		strings.Contains(err.Error(), "the server could not find the requested resource")
-}
-
-// shortError trims client-go's verbose errors for a one-line table.
-func shortError(err error) string {
-	msg := err.Error()
-	switch {
-	case strings.Contains(msg, "context deadline exceeded"):
-		return "timeout"
-	}
-	if len(msg) > 120 {
-		msg = msg[:117] + "…"
-	}
-	return msg
-}
-
-func printOverview(sums []clusterSummary, wide bool) {
+func printOverview(sums []overview.Summary, wide bool) {
 	w := newTab(os.Stdout)
 	hdr := "CONTEXT\tSTATUS\tLONGHORN\tVOLUMES\tATTACHED\tDEGRADED\tFAULTED\tREBUILDING\tNODES\tFINDINGS"
 	if wide {

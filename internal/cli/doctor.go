@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -64,7 +63,7 @@ func runDoctor(cmd *cobra.Command, g *globals, backupMaxAge time.Duration, minSe
 		return err
 	}
 	defer g.reportTraffic(c)
-	in, err := loadDoctorInput(cmd.Context(), c)
+	in, err := longhorn.LoadDoctorInput(cmd.Context(), c)
 	if err != nil {
 		return err
 	}
@@ -105,40 +104,6 @@ func parseSeverity(s string) (longhorn.Severity, error) {
 		return longhorn.SevCritical, nil
 	}
 	return 0, fmt.Errorf("invalid --min %q (info|warning|critical)", s)
-}
-
-// loadDoctorInput reads what Diagnose needs; engines and snapshots only for
-// rebuilding volumes.
-func loadDoctorInput(ctx context.Context, c *longhorn.Client) (longhorn.DoctorInput, error) {
-	var in longhorn.DoctorInput
-	var err error
-	if in.Volumes, err = c.Volumes(ctx); err != nil {
-		return in, err
-	}
-	if in.Replicas, err = c.Replicas(ctx, ""); err != nil {
-		return in, err
-	}
-	if in.Nodes, err = c.Nodes(ctx); err != nil {
-		return in, err
-	}
-	for _, v := range longhorn.RebuildingVolumes(in.Replicas) {
-		engs, err := c.Engines(ctx, v)
-		if err != nil {
-			return in, err
-		}
-		in.Engines = append(in.Engines, engs...)
-		snaps, err := c.Snapshots(ctx, v)
-		if err != nil {
-			return in, err
-		}
-		in.Snapshots = append(in.Snapshots, snaps...)
-	}
-	// small collections; failures here should not hide the other checks
-	in.Targets, _ = c.BackupTargets(ctx)
-	in.Jobs, _ = c.RecurringJobs(ctx)
-	in.Orphans, _, _ = c.ListCount(ctx, "orphans")
-	in.Now = time.Now()
-	return in, nil
 }
 
 func printFindings(ctxName string, vols, nodes int, all, shown []longhorn.Finding, wide bool) {

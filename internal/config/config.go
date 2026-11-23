@@ -24,6 +24,9 @@ import (
 type Settings struct {
 	// Refresh of the volume list: auto, watch or a poll interval like 30s.
 	Refresh *Str `json:"refresh,omitempty"`
+	// AutoPollRate: with refresh auto, switch from watch to poll above this
+	// many volume updates per minute (0 = never).
+	AutoPollRate *int `json:"autoPollRate,omitempty"`
 	// ReadOnly false starts the TUI in write mode and lets the CLI change
 	// things without --rw. Previews and confirmations stay.
 	ReadOnly *bool `json:"readOnly,omitempty"`
@@ -68,6 +71,7 @@ type File struct {
 type Effective struct {
 	Context       string
 	Refresh       string
+	AutoPollRate  int
 	ReadOnly      bool
 	Color         string
 	TrafficBudget int64 // bytes, 0 = off
@@ -80,8 +84,9 @@ type Effective struct {
 
 // Built-in values.
 const (
-	DefaultRefresh   = "auto"
-	DefaultNamespace = "longhorn-system"
+	DefaultAutoPollRate = 120
+	DefaultRefresh      = "auto"
+	DefaultNamespace    = "longhorn-system"
 )
 
 // DefaultPath is $XDG_CONFIG_HOME/lhtx/config.yaml (~/.config/lhtx/…);
@@ -152,6 +157,9 @@ func (s Settings) validate() error {
 			return err
 		}
 	}
+	if s.AutoPollRate != nil && *s.AutoPollRate < 0 {
+		return fmt.Errorf("autoPollRate must be ≥ 0")
+	}
 	if s.Color != nil {
 		if _, err := ColorCode(string(*s.Color)); err != nil {
 			return err
@@ -172,9 +180,9 @@ var ValidRefresh = func(string) error { return nil }
 // For resolves the settings of a context: defaults, then matching glob
 // patterns (shorter first, so more specific ones win), then the exact name.
 func (f *File) For(kctx string) Effective {
-	e := Effective{Context: kctx, Refresh: DefaultRefresh, ReadOnly: true, Overview: true, Namespace: DefaultNamespace,
+	e := Effective{Context: kctx, Refresh: DefaultRefresh, AutoPollRate: DefaultAutoPollRate, ReadOnly: true, Overview: true, Namespace: DefaultNamespace,
 		Source: map[string]string{}}
-	for _, k := range []string{"refresh", "readOnly", "color", "trafficBudget", "overview", "namespace"} {
+	for _, k := range []string{"refresh", "autoPollRate", "readOnly", "color", "trafficBudget", "overview", "namespace"} {
 		e.Source[k] = "built-in"
 	}
 	e.apply(f.Defaults, "defaults")
@@ -204,6 +212,9 @@ func (f *File) For(kctx string) Effective {
 func (e *Effective) apply(s Settings, src string) {
 	if s.Refresh != nil {
 		e.Refresh, e.Source["refresh"] = string(*s.Refresh), src
+	}
+	if s.AutoPollRate != nil {
+		e.AutoPollRate, e.Source["autoPollRate"] = *s.AutoPollRate, src
 	}
 	if s.ReadOnly != nil {
 		e.ReadOnly, e.Source["readOnly"] = *s.ReadOnly, src
@@ -273,6 +284,9 @@ defaults:
   # volume list updates: auto (watch below 150 volumes, else poll 30s),
   # watch (live) or a poll interval like 30s / 1m
   refresh: auto
+  # auto: switch from watch to poll when volumes change more often than
+  # this per minute (busy clusters; 0 = never)
+  autoPollRate: 120
   # false: TUI starts in write mode, CLI changes without --rw
   # (previews and confirmations stay)
   readOnly: true

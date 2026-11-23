@@ -87,7 +87,7 @@ contexts:
 ```
 
 Precedence: flag/env > context > defaults > built-in. Settings: `refresh`,
-`readOnly`, `color`, `trafficBudget`, `overview`, `namespace`. Unknown keys
+`autoPollRate`, `readOnly`, `color`, `trafficBudget`, `overview`, `namespace`. Unknown keys
 and bad values are errors, so typos do not go unnoticed. `readOnly: false`
 only skips `--rw`/`W`: previews and confirmations stay. Switching the context
 in the TUI applies that context's settings (write mode turns off unless the
@@ -388,7 +388,11 @@ Strategy:
 
 - **Volumes: `--refresh` (env `LHTX_REFRESH`)**
   - `auto` (default): live watch below 150 volumes, otherwise poll every 30 s.
-    The count comes from one `LIST limit=1` (`remainingItemCount`).
+    The count comes from one `LIST limit=1` (`remainingItemCount`). The live
+    watch is measured: if volumes change more than 120 times a minute (the
+    traffic follows the write load, not the volume count – each change is a
+    new `actualSize`), lhtx switches to polling for the rest of the session
+    and says so in the header (`autoPollRate` in the config file, 0 = never).
   - `watch`: always live. `30s`, `2m`, …: always poll with that interval.
   - Poll mode re-lists with gzip (large cluster: ~0.85 MiB/min instead of
     10.3 MiB/min) but still reacts immediately to what matters: replicas stay
@@ -466,7 +470,8 @@ engines     24      22ms        20.8 KiB     5              34.8 KiB      69.6 K
    · ✔ snapshot tree, backup volumes (tab 6, `lhtx backupvolumes`) incl.
    volumes that were deleted
    · ✔ config file with settings per context, traffic budget · open: editing
-   the settings in the TUI, themes, auto-switch to poll by measured event rate
+   the settings in the TUI, themes · ✔ auto switches to poll by measured
+   update rate
 3. **Actions** ✔ snapshot/backup create, snapshot/replica delete, replica count,
    scheduling/eviction for nodes and disks, settings, engine upgrade, expansion,
    attach/detach, recurring job assignment – with preview, confirmation, client

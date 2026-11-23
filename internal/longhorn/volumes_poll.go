@@ -25,12 +25,17 @@ import (
 //   - a volume a caller holds (detail view, see AcquireEngine) gets its own
 //     watch with a name field selector
 const (
-	RefreshAuto  time.Duration = -1 // decide by volume count
+	RefreshAuto  time.Duration = -1 // decide by volume count and update rate
 	RefreshWatch time.Duration = 0
 	// AutoPollThreshold: from this many volumes on, auto mode polls.
 	AutoPollThreshold = 150
 	// DefaultPollInterval is used by auto mode.
 	DefaultPollInterval = 30 * time.Second
+	// DefaultAutoPollRate: auto mode starts with a watch below
+	// AutoPollThreshold volumes and switches to polling when more than this
+	// many volume updates arrive per minute (each is the full object, ~5 KiB;
+	// 120/min ≈ 0.6 MiB/min, more than polling a few hundred volumes).
+	DefaultAutoPollRate = 120
 	// maxQueuedGets: above this many changed volumes at once, a full
 	// re-list is cheaper than individual GETs.
 	maxQueuedGets = 20
@@ -86,6 +91,71 @@ func (s *Store) LastRefresh() time.Time {
 	return s.lastPoll
 }
 
+// autoWatchMonitor counts volume updates per minute; above AutoPollRate it
+// stops the watch and polls instead, for the rest of the session. Traffic
+// depends on the write load (only actualSize changes), not on the number
+// of volumes, so a small but busy cluster can need this too.
+func (s *Store) autoWatchMonitor(ctx context.Context) {
+	window := s.autoWindow
+	if window <= 0 {
+		window = time.Minute
+	}
+	t := time.NewTicker(window)
+	defer t.Stop()
+	s.volUpdates.Store(0)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		perMin := int(s.volUpdates.Swap(0) * int64(time.Minute) / int64(window))
+		if perMin > s.AutoPollRate {
+			s.switchToPoll(perMin)
+			return
+		}
+	}
+}
+
+func (s *Store) switchToPoll(rate int) {
+	s.mu.Lock()
+	items := s.volumes.GetStore().List()
+	_ = s.volStore.Replace(items, s.volumes.LastSyncResourceVersion())
+	s.refresh, s.switchedRate = DefaultPollInterval, rate
+	s.lastPoll = time.Now()
+	if s.volWatchCancel != nil {
+		s.volWatchCancel()
+		s.volWatchCancel = nil
+	}
+	// volumes held by a caller (detail view) keep a live watch
+	for vol, w := range s.engines {
+		if w.refs > 0 && w.volCancel == nil {
+			ctx, cancel := context.WithCancel(s.ctx)
+			w.volCancel = cancel
+			s.startSingleVolumeWatch(ctx, vol)
+		}
+	}
+	s.mu.Unlock()
+	s.notify()
+	go func() {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-time.After(DefaultPollInterval):
+		case <-s.pollNow:
+		}
+		s.runVolumePoll(DefaultPollInterval, nil)
+	}()
+}
+
+// AutoSwitched returns the update rate (per minute) that made auto mode
+// switch from watch to poll; 0 if it did not.
+func (s *Store) AutoSwitched() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.switchedRate
+}
+
 // RefreshNow triggers an immediate re-list of the volumes (poll mode).
 func (s *Store) RefreshNow() {
 	select {
@@ -113,15 +183,15 @@ func (s *Store) runVolumePoll(interval time.Duration, done chan struct{}) {
 			s.mergeVolumeList(items, ul.GetResourceVersion())
 			s.mu.Lock()
 			s.lastPoll = time.Now()
-			if first {
+			if first && done != nil {
 				s.synced[ResVolumes] = time.Since(s.startedAt)
 			}
 			s.lastErr = nil
 			s.mu.Unlock()
-			if first {
+			if first && done != nil {
 				close(done)
-				first = false
 			}
+			first = false
 			s.notify()
 		}
 		select {

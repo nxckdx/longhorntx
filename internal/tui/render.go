@@ -441,6 +441,9 @@ func (m *model) refreshHint() string {
 	s := "live"
 	if iv := m.store.RefreshInterval(); iv > 0 {
 		s = fmt.Sprintf("⟳ %s · %s ago", iv, time.Since(m.store.LastRefresh()).Round(time.Second))
+		if r := m.store.AutoSwitched(); r > 0 {
+			s += fmt.Sprintf(" (auto: %d updates/min)", r)
+		}
 	}
 	if n := m.store.AutoEnginesSkipped(); n > 0 {
 		s = fg(cWarn, fmt.Sprintf("%d rebuilds w/o progress", n)) + sDim.Render(" · "+s)

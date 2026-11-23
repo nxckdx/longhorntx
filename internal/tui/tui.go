@@ -3,6 +3,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"math"
 	"strings"
@@ -168,6 +169,7 @@ type model struct {
 	eff                  config.Effective // settings of the connected context
 	budget               int64            // traffic budget in bytes, 0 = off
 	budgetWarned, paused bool
+	autoNoted            bool // flash shown when auto switched to polling
 
 	// overview in the context picker
 	ov        map[string]overview.Summary
@@ -281,6 +283,7 @@ func connect(ctx context.Context, o Options, kctx string) tea.Cmd {
 		s := longhorn.NewStore(c)
 		s.WatchBackups = true
 		s.Refresh = refresh
+		s.AutoPollRate = eff.AutoPollRate
 		s.Start(ctx)
 		return connectedMsg{kctx: c.Cluster.Context, store: s, client: c, eff: eff}
 	}
@@ -369,6 +372,7 @@ func (m *model) switchContext(name string) tea.Cmd {
 	m.marked = nil
 	m.health, m.healthLoading, m.fcache = nil, false, nil
 	m.bvRaw, m.bvLoading, m.bvErr, m.bvAt = nil, false, nil, time.Time{}
+	m.autoNoted = false
 	return connect(m.ctx, m.opts, name)
 }
 
@@ -512,6 +516,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *model) refresh() {
 	if m.store == nil {
 		return
+	}
+	if r := m.store.AutoSwitched(); r > 0 && !m.autoNoted {
+		m.autoNoted = true
+		m.setFlash(fmt.Sprintf("volumes changed %d times/min: switched from live to polling every %s (--refresh watch keeps it live)",
+			r, longhorn.DefaultPollInterval), false)
 	}
 	m.state = m.store.State()
 	m.views = longhorn.Build(m.state)

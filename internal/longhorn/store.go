@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -58,6 +59,16 @@ type Store struct {
 	pendingGets map[string]bool
 	autoSkipped int
 
+	// auto mode: the volume watch is measured and swapped for polling when
+	// the update rate is high (see autoWatchMonitor)
+	// AutoPollRate: volume updates per minute above which auto switches
+	// from watch to poll (0 = never). Set before Start.
+	AutoPollRate   int
+	volWatchCancel context.CancelFunc
+	volUpdates     atomic.Int64
+	switchedRate   int           // updates/min that made auto switch, 0 = not switched
+	autoWindow     time.Duration // measuring window (tests), default 1 min
+
 	ctx     context.Context
 	cancel  context.CancelFunc
 	changed chan struct{}
@@ -83,6 +94,7 @@ func NewStore(c *Client) *Store {
 
 		Refresh:        RefreshAuto,
 		MaxAutoEngines: 10,
+		AutoPollRate:   DefaultAutoPollRate,
 		volStore:       cache.NewStore(cache.MetaNamespaceKeyFunc),
 	}
 	s.volumes = newInformer[Volume](s, GVRVolume, "")
@@ -155,7 +167,23 @@ func (s *Store) Start(ctx context.Context) {
 		s.mu.Lock()
 		s.refresh, s.decided = r, true
 		s.mu.Unlock()
-		if r == RefreshWatch {
+		if r == RefreshWatch && s.Refresh == RefreshAuto && s.AutoPollRate > 0 {
+			// auto: watch, but measure and maybe switch to polling
+			vctx, cancel := context.WithCancel(s.ctx)
+			s.mu.Lock()
+			s.volWatchCancel = cancel
+			s.mu.Unlock()
+			go s.volumes.RunWithContext(vctx)
+			if !cache.WaitForCacheSync(vctx.Done(), s.volumes.HasSynced) {
+				return
+			}
+			s.mu.Lock()
+			s.synced[ResVolumes] = time.Since(s.startedAt)
+			s.mu.Unlock()
+			close(volumesDone)
+			s.notify()
+			s.autoWatchMonitor(vctx)
+		} else if r == RefreshWatch {
 			run(ResVolumes, s.volumes, nil, volumesDone)
 		} else {
 			s.runVolumePoll(r, volumesDone)
@@ -391,6 +419,14 @@ func newInformerSel[T any](s *Store, g schema.GroupVersionResource, selector, fi
 		s.setErr(fmt.Errorf("watch %s: %w", g.Resource, err))
 	})
 	isReplica := g == GVRReplica && fieldSelector == "" && selector == ""
+	isVolumes := g == GVRVolume && fieldSelector == "" && selector == ""
+	_, _ = inf.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		UpdateFunc: func(_, _ any) {
+			if isVolumes {
+				s.volUpdates.Add(1)
+			}
+		},
+	})
 	onChange := func(obj any) {
 		s.mu.Lock()
 		s.lastErr = nil // events flow again

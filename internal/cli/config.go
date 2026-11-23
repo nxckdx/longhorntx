@@ -57,6 +57,7 @@ Precedence: flag/env > contexts > defaults > built-in.
 			w := newTab(os.Stdout)
 			fmt.Fprintln(w, "SETTING\tVALUE\tFROM")
 			fmt.Fprintf(w, "refresh\t%s\t%s\n", g.refresh, src("refresh", g.refreshSet))
+			fmt.Fprintf(w, "autoPollRate\t%d/min\t%s\n", eff.AutoPollRate, eff.Source["autoPollRate"])
 			fmt.Fprintf(w, "readOnly\t%v\t%s\n", !g.rw, src("readOnly", g.rwSet))
 			fmt.Fprintf(w, "namespace\t%s\t%s\n", g.namespace, src("namespace", g.namespaceSet))
 			fmt.Fprintf(w, "color\t%s\t%s\n", color, eff.Source["color"])

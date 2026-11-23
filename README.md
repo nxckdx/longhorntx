@@ -85,9 +85,10 @@ fits cron or a monitoring check. `-o wide` shows hints, `-o json` is for scripts
 `lhtx overview` runs the same checks against all kubeconfig contexts (or
 `--contexts a,b`), 4 at a time, and prints one line per cluster: Longhorn
 version, volumes, attached, degraded, faulted, rebuilding, nodes ready and the
-worst finding (`-o wide` adds traffic and duration). Unreachable clusters and
-contexts without Longhorn show the error. Exit code: worst of all clusters, 3
-if one failed.
+worst finding (`-o wide` adds traffic and duration). Clusters without
+Longhorn show `no Longhorn` and do not affect the exit code
+(`--ignore-not-installed` hides them). Unreachable clusters show the error.
+Exit code: worst of all clusters, 3 if one could not be checked.
 
 ### Node maintenance
 

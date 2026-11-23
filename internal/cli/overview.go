@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
 	"github.com/nxckdx/longhorntx/internal/format"
 	"github.com/nxckdx/longhorntx/internal/kube"
@@ -18,36 +19,41 @@ import (
 
 // clusterSummary is one line of `lhtx overview`.
 type clusterSummary struct {
-	Context    string            `json:"context"`
-	Error      string            `json:"error,omitempty"`
-	Version    string            `json:"longhornVersion,omitempty"`
-	Volumes    int               `json:"volumes"`
-	Attached   int               `json:"attached"`
-	Degraded   int               `json:"degraded"`
-	Faulted    int               `json:"faulted"`
-	Rebuilding int               `json:"rebuilding"`
-	Nodes      int               `json:"nodes"`
-	NodesReady int               `json:"nodesReady"`
-	Critical   int               `json:"critical"`
-	Warnings   int               `json:"warnings"`
-	Worst      longhorn.Severity `json:"worst"`
-	Top        string            `json:"top,omitempty"` // most severe finding
-	Traffic    int64             `json:"trafficBytes"`
-	Took       time.Duration     `json:"took"`
+	Context string `json:"context"`
+	Error   string `json:"error,omitempty"`
+	// NotInstalled: the cluster answered but has no longhorn.io CRDs. Not
+	// an error (many kubeconfigs mix clusters with and without Longhorn).
+	NotInstalled bool              `json:"notInstalled,omitempty"`
+	Version      string            `json:"longhornVersion,omitempty"`
+	Volumes      int               `json:"volumes"`
+	Attached     int               `json:"attached"`
+	Degraded     int               `json:"degraded"`
+	Faulted      int               `json:"faulted"`
+	Rebuilding   int               `json:"rebuilding"`
+	Nodes        int               `json:"nodes"`
+	NodesReady   int               `json:"nodesReady"`
+	Critical     int               `json:"critical"`
+	Warnings     int               `json:"warnings"`
+	Worst        longhorn.Severity `json:"worst"`
+	Top          string            `json:"top,omitempty"` // most severe finding
+	Traffic      int64             `json:"trafficBytes"`
+	Took         time.Duration     `json:"took"`
 }
 
 func overviewCmd(g *globals) *cobra.Command {
 	var contexts []string
 	var timeout time.Duration
 	var parallel int
+	var ignoreNotInstalled bool
 	cmd := &cobra.Command{
 		Use:     "overview",
 		Aliases: []string{"clusters"},
 		Short:   "Health of Longhorn in all kubeconfig contexts at a glance",
 		Long: `Runs the doctor checks against several kubeconfig contexts at once (all by
 default, or --contexts a,b) and prints one line per cluster: volumes,
-degraded/faulted, rebuilds, nodes ready, the worst finding. Contexts
-without Longhorn or unreachable clusters show the error.
+degraded/faulted, rebuilds, nodes ready, the worst finding. Clusters
+without Longhorn show "no Longhorn" and do not count for the exit code
+(--ignore-not-installed hides them); unreachable clusters are errors.
 
 Traffic: one LIST of volumes, replicas and nodes per cluster (like doctor).
 
@@ -83,6 +89,15 @@ Exit codes like doctor (worst of all clusters): 0 ok, 1 warning, 2 critical,
 				}()
 			}
 			wg.Wait()
+			if ignoreNotInstalled {
+				kept := sums[:0]
+				for _, s := range sums {
+					if !s.NotInstalled {
+						kept = append(kept, s)
+					}
+				}
+				sums = kept
+			}
 
 			if g.output == "json" {
 				if err := writeJSON(os.Stdout, sums); err != nil {
@@ -112,6 +127,7 @@ Exit codes like doctor (worst of all clusters): 0 ok, 1 warning, 2 critical,
 	cmd.Flags().StringSliceVar(&contexts, "contexts", nil, "kubeconfig contexts to check (default: all)")
 	cmd.Flags().DurationVar(&timeout, "timeout", 45*time.Second, "per cluster")
 	cmd.Flags().IntVar(&parallel, "parallel", 4, "clusters checked at the same time")
+	cmd.Flags().BoolVar(&ignoreNotInstalled, "ignore-not-installed", false, "hide clusters without Longhorn")
 	_ = cmd.RegisterFlagCompletionFunc("contexts", func(*cobra.Command, []string, string) ([]string, cobra.ShellCompDirective) {
 		names, _, _ := g.kube.Contexts()
 		return names, cobra.ShellCompDirectiveNoFileComp
@@ -144,6 +160,10 @@ func summarizeCluster(ctx context.Context, g *globals, name string) (s clusterSu
 	}()
 	in, err := loadDoctorInput(ctx, c)
 	if err != nil {
+		if notInstalled(err) {
+			s.NotInstalled = true
+			return s
+		}
 		s.Error = shortError(err)
 		return s
 	}
@@ -183,12 +203,17 @@ func summarizeCluster(ctx context.Context, g *globals, name string) (s clusterSu
 	return s
 }
 
+// notInstalled: listing longhorn.io volumes gives 404 when the CRDs are
+// missing (a missing namespace would give an empty list instead).
+func notInstalled(err error) bool {
+	return apierrors.IsNotFound(err) ||
+		strings.Contains(err.Error(), "the server could not find the requested resource")
+}
+
 // shortError trims client-go's verbose errors for a one-line table.
 func shortError(err error) string {
 	msg := err.Error()
 	switch {
-	case strings.Contains(msg, "the server could not find the requested resource"):
-		return "Longhorn not installed (no longhorn.io CRDs)"
 	case strings.Contains(msg, "context deadline exceeded"):
 		return "timeout"
 	}
@@ -208,6 +233,10 @@ func printOverview(sums []clusterSummary, wide bool) {
 	for _, s := range sums {
 		if s.Error != "" {
 			fmt.Fprintf(w, "%s\tERROR\t%s\n", s.Context, s.Error)
+			continue
+		}
+		if s.NotInstalled {
+			fmt.Fprintf(w, "%s\tno Longhorn\t-\n", s.Context)
 			continue
 		}
 		status := "OK"

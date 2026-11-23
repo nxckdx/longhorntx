@@ -64,13 +64,13 @@ func (m *model) viewHeader() string {
 			k     pageKind
 			key   string
 			label string
-		}{{pVolumes, "1", vol}, {pNodes, "2", nodes}, {pActivity, "3", act}, {pSettings, "4", "Settings"}, {pHealth, "5", m.healthBadge()}}
+		}{{pVolumes, "1", vol}, {pNodes, "2", nodes}, {pActivity, "3", act}, {pSettings, "4", "Settings"}, {pHealth, "5", m.healthBadge()}, {pBackupVols, "6", "Backups"}}
 		if len(m.orphans) > 0 {
 			tabs = append(tabs, struct {
 				k     pageKind
 				key   string
 				label string
-			}{pOrphans, "6", fg(cWarn, fmt.Sprintf("Orphans %d", len(m.orphans)))})
+			}{pOrphans, "7", fg(cWarn, fmt.Sprintf("Orphans %d", len(m.orphans)))})
 		}
 		for _, t := range tabs {
 			if t.k == root {
@@ -135,9 +135,9 @@ func (m *model) viewFooter() string {
 	case p.kind == pOrphans && m.rw:
 		keys = [][2]string{{"X", "delete"}, {"ctrl+x", "delete all cleanable"}, {"enter", "open volume"}, {"/", "filter"}, {"W", "write mode off"}}
 	case p.kind == pOrphans:
-		keys = [][2]string{{"enter", "open volume"}, {"/", "filter"}, {"W", "write mode"}, {"1-6", "views"}, {"?", "help"}}
+		keys = [][2]string{{"enter", "open volume"}, {"/", "filter"}, {"W", "write mode"}, {"1-7", "views"}, {"?", "help"}}
 	case p.kind == pNodes:
-		keys = [][2]string{{"enter", "open"}, {"i", "drain check"}, {"/", "filter"}, {"1-5", "views"}, {"c", "context"}, {"?", "help"}, {"q", "quit"}}
+		keys = [][2]string{{"enter", "open"}, {"i", "drain check"}, {"/", "filter"}, {"1-7", "views"}, {"c", "context"}, {"?", "help"}, {"q", "quit"}}
 	case p.kind == pVolumes && len(m.marked) > 0:
 		keys = [][2]string{{"space", "toggle"}, {"ctrl+a", "all/none"}, {"esc", "clear"}}
 		if m.rw {
@@ -155,13 +155,13 @@ func (m *model) viewFooter() string {
 		if m.problemsFirst {
 			sortLbl = "sort by PVC"
 		}
-		keys = [][2]string{{"enter", "open"}, {"/", "filter"}, {"p", sortLbl}, {"1-5", "views"}, {"c", "context"}, {"?", "help"}, {"q", "quit"}}
+		keys = [][2]string{{"enter", "open"}, {"/", "filter"}, {"p", sortLbl}, {"1-7", "views"}, {"c", "context"}, {"?", "help"}, {"q", "quit"}}
 	case m.rw && (p.kind == pVolumes || p.kind == pActivity):
 		keys = [][2]string{{"S", "snapshot"}, {"B", "backup"}, {"R", "replicas"}, {"U", "engine"}, {"E", "expand"}, {"A", "attach"}, {"space", "select"}, {"enter", "open"}, {"/", "filter"}, {"W", "write mode off"}}
 	case m.rw && p.kind == pDisk:
 		keys = [][2]string{{"X", "delete replica"}, {"enter", "open"}, {"esc", "back"}, {"W", "write mode off"}}
 	default:
-		keys = [][2]string{{"enter", "open"}, {"/", "filter"}, {"1-5", "views"}, {"c", "context"}, {"?", "help"}}
+		keys = [][2]string{{"enter", "open"}, {"/", "filter"}, {"1-7", "views"}, {"c", "context"}, {"?", "help"}}
 		if len(m.stack) > 1 {
 			keys = append(keys, [2]string{"esc", "back"})
 		} else {
@@ -387,7 +387,8 @@ func (m *model) viewHelp() string {
 
  Views
    1  Volumes   2  Nodes → disks → replicas   3  Activity   4  Settings   5  Health
-   6  Orphans (only shown when there are any)
+   6  Backups (backup volumes, also of deleted volumes; enter: their backups)
+   7  Orphans (only shown when there are any)
 
  Navigation
    ↑/k ↓/j        move              g/G       top / bottom

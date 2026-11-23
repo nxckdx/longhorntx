@@ -99,7 +99,7 @@ func (m *model) loadPanel(p *page) tea.Cmd {
 
 func (m *model) applyPanel(msg panelMsg) {
 	for _, p := range m.stack {
-		if p.kind == pDetail && p.vol == msg.vol && p.panel == msg.data.kind {
+		if (p.kind == pDetail || p.kind == pBackupList) && p.vol == msg.vol && p.panel == msg.data.kind {
 			p.pdata = msg.data
 		}
 	}

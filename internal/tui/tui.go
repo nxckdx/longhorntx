@@ -87,6 +87,8 @@ const (
 	pSettings
 	pHealth
 	pOrphans
+	pBackupVols
+	pBackupList
 	pDrain
 	pContexts
 	pHelp
@@ -164,10 +166,16 @@ type model struct {
 	eff                  config.Effective // settings of the connected context
 	budget               int64            // traffic budget in bytes, 0 = off
 	budgetWarned, paused bool
-	modal                *modal
-	flash                string
-	flashErr             bool
-	flashAt              time.Time
+
+	// backups tab (6), loaded on demand
+	bvRaw     []*longhorn.BackupVolume
+	bvLoading bool
+	bvErr     error
+	bvAt      time.Time
+	modal     *modal
+	flash     string
+	flashErr  bool
+	flashAt   time.Time
 
 	// settings page (loaded on demand)
 	settings        []*longhorn.Setting
@@ -352,6 +360,7 @@ func (m *model) switchContext(name string) tea.Cmd {
 	m.modal, m.settings, m.settingsErr = nil, nil, nil
 	m.marked = nil
 	m.health, m.healthLoading, m.fcache = nil, false, nil
+	m.bvRaw, m.bvLoading, m.bvErr, m.bvAt = nil, false, nil, time.Time{}
 	return connect(m.ctx, m.opts, name)
 }
 
@@ -467,6 +476,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.fcache = m.computeFindings()
 		m.backupLate = m.computeBackupLate()
 		m.clamp()
+		return m, nil
+
+	case backupVolsMsg:
+		m.applyBackupVols(msg)
 		return m, nil
 
 	case settingsMsg:
@@ -695,6 +708,12 @@ func (m *model) handleKey(k tea.KeyPressMsg) tea.Cmd {
 		}
 		return nil
 	case "6":
+		m.root(pBackupVols)
+		if m.bvRaw == nil && !m.bvLoading {
+			return m.loadBackupVols()
+		}
+		return nil
+	case "7":
 		if len(m.orphans) == 0 {
 			m.setFlash("no orphans", false)
 			return nil
@@ -775,6 +794,12 @@ func (m *model) handleKey(k tea.KeyPressMsg) tea.Cmd {
 	}
 	if p.kind == pSettings && key == "ctrl+r" {
 		return m.loadSettings()
+	}
+	if p.kind == pBackupVols && key == "ctrl+r" {
+		return m.loadBackupVols()
+	}
+	if p.kind == pBackupList && key == "ctrl+r" {
+		return m.loadPanel(p)
 	}
 	if p.kind == pHealth && key == "ctrl+r" {
 		return m.loadHealth()
@@ -858,7 +883,7 @@ func (m *model) listHeight() int {
 		h--
 	}
 	switch p.kind {
-	case pDisk, pActivity, pSettings, pHealth, pDrain, pOrphans:
+	case pDisk, pActivity, pSettings, pHealth, pDrain, pOrphans, pBackupVols, pBackupList:
 		h -= 2 // title + rule
 	case pDetail:
 		h -= m.detailTopHeight()

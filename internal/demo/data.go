@@ -382,25 +382,12 @@ func (d *data) buildRest() {
 		for _, s := range snaps {
 			add(s)
 		}
-		// backups
-		if def.backupAge == 0 {
-			continue
-		}
-		for k := 0; k < 4; k++ {
-			age := def.backupAge + time.Duration(k)*24*time.Hour
-			name := "backup-" + hex8(fmt.Sprintf("%sb%d", v.Name, k)) + hex8(fmt.Sprintf("%sc%d", v.Name, k))
-			b := &lh.Backup{ObjectMeta: meta(name, map[string]string{lh.LabelBackupVolume: v.Name, "backup-target": "default"}, d.now.Add(-age))}
-			b.Spec.SnapshotName = "snap-" + hex8(name)
-			b.Status.State, b.Status.Progress = "Completed", 100
-			b.Status.VolumeName, b.Status.VolumeSize = v.Name, v.Spec.Size
-			b.Status.Size = lh.Quantity(int64(v.Status.ActualSize) * 9 / 10)
-			b.Status.NewlyUploadDataSize = lh.Quantity(int64(v.Status.ActualSize) / 40)
-			b.Status.SnapshotCreatedAt, b.Status.BackupCreatedAt = d.ts(age), d.ts(age-3*time.Minute)
-			b.Status.BackupTargetName = "default"
-			b.Status.URL = "s3://longhorn-backups@us-east-1/?backup=" + name + "&volume=" + v.Name
-			add(b)
+		if def.backupAge > 0 {
+			d.addBackups(add, v.Name, def.ns, def.pvc, int64(v.Spec.Size), int64(v.Status.ActualSize), def.backupAge)
 		}
 	}
+	// a volume deleted two weeks ago whose backups remain (restore candidate)
+	d.addBackups(add, "pvc-"+uuid("legacy-wiki"), "legacy", "wiki-data", 20<<30, 6<<30, 14*24*time.Hour)
 
 	// leftovers of a volume deleted while worker-2 was down (risky: maybe
 	// the last copy) and of an old replica of a healthy volume (safe)
@@ -472,8 +459,40 @@ func (d *data) objects() []runtime.Object {
 	return out
 }
 
+// addBackups adds 4 daily backups and the BackupVolume of a volume.
+func (d *data) addBackups(add func(runtime.Object), vol, ns, pvc string, size, actual int64, newest time.Duration) {
+	var last *lh.Backup
+	for k := 3; k >= 0; k-- {
+		age := newest + time.Duration(k)*24*time.Hour
+		name := "backup-" + hex8(fmt.Sprintf("%sb%d", vol, k)) + hex8(fmt.Sprintf("%sc%d", vol, k))
+		b := &lh.Backup{ObjectMeta: meta(name, map[string]string{lh.LabelBackupVolume: vol, "backup-target": "default"}, d.now.Add(-age))}
+		b.Spec.SnapshotName = "snap-" + hex8(name)
+		b.Status.SnapshotName = b.Spec.SnapshotName
+		b.Status.State, b.Status.Progress = "Completed", 100
+		b.Status.VolumeName, b.Status.VolumeSize = vol, lh.Quantity(size)
+		b.Status.Size = lh.Quantity(actual * 9 / 10)
+		b.Status.NewlyUploadDataSize = lh.Quantity(actual / 40)
+		b.Status.SnapshotCreatedAt, b.Status.BackupCreatedAt = d.ts(age), d.ts(age-3*time.Minute)
+		b.Status.BackupTargetName = "default"
+		b.Status.URL = "s3://longhorn-backups@us-east-1/?backup=" + name + "&volume=" + vol
+		add(b)
+		last = b
+	}
+	bv := &lh.BackupVolume{ObjectMeta: meta(vol+"-"+hex8(vol+"default"), map[string]string{lh.LabelBackupVolume: vol, "backup-target": "default"}, d.now.Add(-newest-60*24*time.Hour))}
+	bv.Spec.BackupTargetName, bv.Spec.VolumeName = "default", vol
+	bv.Status.Size, bv.Status.DataStored = lh.Quantity(size), lh.Quantity(actual*11/10)
+	bv.Status.LastBackupName, bv.Status.LastBackupAt = last.Name, last.Status.BackupCreatedAt
+	bv.Status.CreatedAt, bv.Status.LastSyncedAt = d.ts(newest+60*24*time.Hour), d.ts(2*time.Minute)
+	bv.Status.StorageClassName = "longhorn"
+	bv.Status.Labels = map[string]string{"type": "bak",
+		"KubernetesStatus": fmt.Sprintf(`{"pvName":%q,"pvStatus":"Bound","namespace":%q,"pvcName":%q}`, vol, ns, pvc)}
+	add(bv)
+}
+
 func gvrOf(o runtime.Object) schema.GroupVersionResource {
 	switch o.(type) {
+	case *lh.BackupVolume:
+		return lh.GVRBackupVolume
 	case *lh.Setting:
 		return lh.GVRSetting
 	case *lh.EngineImage:

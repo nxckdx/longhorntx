@@ -92,11 +92,13 @@ With VOLUME: the backups of that volume.`,
 				return backupOverview(cmd, g, c, maxAge)
 			}
 			defer g.reportTraffic(c)
-			v, err := resolveVolume(cmd.Context(), c, args[0])
-			if err != nil {
+			volName := ""
+			if v, err := resolveVolume(cmd.Context(), c, args[0]); err == nil {
+				volName = v.Name
+			} else if volName = deletedBackupVolume(cmd, c, args[0]); volName == "" {
 				return err
 			}
-			bks, err := c.Backups(cmd.Context(), v.Name)
+			bks, err := c.Backups(cmd.Context(), volName)
 			if err != nil {
 				return err
 			}
@@ -530,4 +532,92 @@ through a group can only be removed by removing the group.`,
 			return g.runAction(ctx, c, act)
 		},
 	}
+}
+
+func backupVolumesCmd(g *globals) *cobra.Command {
+	return &cobra.Command{
+		Use:     "backupvolumes",
+		Aliases: []string{"backupvolume", "bv"},
+		Short:   "Volumes with backups in the backup store, also deleted ones",
+		Long: `One line per volume and backup target that has backups: last backup,
+size, data stored in the backup store. Volumes that no longer exist come
+first – their backups are what a restore would use. The PVC of a deleted
+volume is the one recorded with its last backup.
+
+Traffic: one LIST of backup volumes and one of volumes.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := g.checkOutput(); err != nil {
+				return err
+			}
+			c, err := g.client()
+			if err != nil {
+				return err
+			}
+			defer g.reportTraffic(c)
+			ctx := cmd.Context()
+			bvs, err := c.BackupVolumes(ctx)
+			if err != nil {
+				return err
+			}
+			vols, err := c.Volumes(ctx)
+			if err != nil {
+				return err
+			}
+			views := longhorn.BuildBackupVolumes(bvs, vols)
+			if g.output == "json" {
+				return writeJSON(os.Stdout, views)
+			}
+			if len(views) == 0 {
+				fmt.Println("no backup volumes")
+				return nil
+			}
+			now := time.Now()
+			w := newTab(os.Stdout)
+			hdr := "PVC\tVOLUME\tTARGET\tLAST BACKUP\tSIZE\tSTORED"
+			if g.output == "wide" {
+				hdr += "\tLAST\tNAME\tMESSAGE"
+			}
+			fmt.Fprintln(w, hdr)
+			for _, v := range views {
+				vol := v.Volume
+				if !v.VolExists {
+					vol += " (deleted)"
+				}
+				line := fmt.Sprintf("%s\t%s\t%s\t%s\t%s\t%s", dash(v.PVC), vol, v.Target, dash(format.Age(v.LastAt, now)),
+					format.Bytes(v.Size), format.Bytes(v.Stored))
+				if g.output == "wide" {
+					line += fmt.Sprintf("\t%s\t%s\t%s", dash(v.Last), v.Name, dash(v.Message))
+				}
+				fmt.Fprintln(w, line)
+			}
+			return w.Flush()
+		},
+	}
+}
+
+// deletedBackupVolume finds a volume that no longer exists by its backup
+// volume: volume name, namespace/pvc or a unique bare PVC name as recorded
+// with the last backup. "" if none matches.
+func deletedBackupVolume(cmd *cobra.Command, c *longhorn.Client, arg string) string {
+	bvs, err := c.BackupVolumes(cmd.Context())
+	if err != nil {
+		return ""
+	}
+	found := map[string]bool{}
+	for _, bv := range bvs {
+		pvc := bv.LastPVC()
+		_, bare, _ := strings.Cut(pvc, "/")
+		if bv.Volume() == arg || (pvc != "" && (pvc == arg || bare == arg)) {
+			found[bv.Volume()] = true
+		}
+	}
+	if len(found) != 1 {
+		return ""
+	}
+	for v := range found {
+		fmt.Fprintf(os.Stderr, "volume %s no longer exists – showing its backups\n", v)
+		return v
+	}
+	return ""
 }

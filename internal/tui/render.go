@@ -114,7 +114,7 @@ func (m *model) viewFooter() string {
 	case m.filtering:
 		keys = [][2]string{{"enter", "apply"}, {"esc", "clear"}}
 	case p.kind == pContexts:
-		keys = [][2]string{{"↑↓", "select"}, {"enter", "switch"}, {"esc", "back"}}
+		keys = [][2]string{{"↑↓", "select"}, {"enter", "switch"}, {"o", "check all clusters"}, {"esc", "back"}}
 	case p.kind == pHelp:
 		keys = [][2]string{{"any key", "back"}}
 	case m.modal != nil:
@@ -364,19 +364,18 @@ func shortReplica(name string) string {
 
 func (m *model) viewContexts() string {
 	var b strings.Builder
-	b.WriteString("\n " + sBold.Render("Switch kubeconfig context") + "\n\n")
-	for i, n := range m.ctxNames {
-		mark := "  "
-		if n == m.kctx {
-			mark = fg(cOK, "● ")
-		}
-		line := mark + contextStyle(n).Render(n)
-		if i == m.ctxCursor {
-			line = sKey.Render("▶ ") + line
-		} else {
-			line = "  " + line
-		}
-		b.WriteString(" " + line + "\n")
+	t := "\n " + sBold.Render("Switch kubeconfig context")
+	switch {
+	case len(m.ovPending) > 0:
+		t += sDim.Render(fmt.Sprintf("  checking %d clusters …", len(m.ovPending)))
+	case !m.ovAt.IsZero():
+		t += sDim.Render(fmt.Sprintf("  checked %s ago · o check again", time.Since(m.ovAt).Round(time.Second)))
+	default:
+		t += sDim.Render("  o: check Longhorn health in all clusters (one doctor per cluster)")
+	}
+	b.WriteString(t + "\n\n")
+	for _, l := range m.contextLines() {
+		b.WriteString(l + "\n")
 	}
 	return b.String()
 }
@@ -393,7 +392,8 @@ func (m *model) viewHelp() string {
  Navigation
    ↑/k ↓/j        move              g/G       top / bottom
    enter / l      open              esc / h   back
-   /              fuzzy filter      c         switch context
+   /              fuzzy filter      c         switch context (o there: health
+                                              of all clusters, like lhtx overview)
                   (fzf syntax: space = and, 'exact, !not, ^start, end$)
    p              volume list: problems & activity first (toggle)
    i              nodes: drain check (what happens if the node goes away)

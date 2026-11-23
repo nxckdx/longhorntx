@@ -35,6 +35,7 @@ internal/demo       --demo: fake dynamic client with made-up data and a
 internal/config     ~/.config/lhtx/config.yaml: defaults + per-context overrides
                     (exact name or glob); flags/env beat it (cli/root.go loadConfig,
                     tui applySettings on every connect; traffic budget tui/settings.go)
+internal/overview   doctor summary per context (lhtx overview, TUI context picker o)
 internal/update     release check (daily, cached) and self-update from GitHub releases
 internal/cli        cobra commands (read: volumes.go, nodes.go, data.go, activity.go,
                     measure.go, doctor.go incl. drain-check, diag.go;

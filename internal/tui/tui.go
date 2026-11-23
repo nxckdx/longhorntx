@@ -15,6 +15,7 @@ import (
 	"github.com/nxckdx/longhorntx/internal/demo"
 	"github.com/nxckdx/longhorntx/internal/kube"
 	"github.com/nxckdx/longhorntx/internal/longhorn"
+	"github.com/nxckdx/longhorntx/internal/overview"
 	"github.com/nxckdx/longhorntx/internal/update"
 )
 
@@ -166,6 +167,12 @@ type model struct {
 	eff                  config.Effective // settings of the connected context
 	budget               int64            // traffic budget in bytes, 0 = off
 	budgetWarned, paused bool
+
+	// overview in the context picker
+	ov        map[string]overview.Summary
+	ovPending map[string]bool
+	ovRun     int
+	ovAt      time.Time
 
 	// backups tab (6), loaded on demand
 	bvRaw     []*longhorn.BackupVolume
@@ -478,6 +485,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.clamp()
 		return m, nil
 
+	case overviewMsg:
+		m.applyOverview(msg)
+		return m, nil
+
 	case backupVolsMsg:
 		m.applyBackupVols(msg)
 		return m, nil
@@ -626,6 +637,8 @@ func (m *model) handleKey(k tea.KeyPressMsg) tea.Cmd {
 				}
 				return m.switchContext(name)
 			}
+		case "o":
+			return m.startOverview()
 		case "esc", "q":
 			m.pop()
 		}
@@ -754,13 +767,13 @@ func (m *model) handleKey(k tea.KeyPressMsg) tea.Cmd {
 		}
 		return nil
 	case "c":
-		if m.opts.Demo {
-			return nil
-		}
-		names, _, err := m.opts.Kube.Contexts()
-		if err != nil {
-			m.connErr = err
-			return nil
+		names := []string{demo.Context}
+		if !m.opts.Demo {
+			var err error
+			if names, _, err = m.opts.Kube.Contexts(); err != nil {
+				m.connErr = err
+				return nil
+			}
 		}
 		m.ctxNames, m.ctxCursor = names, 0
 		for i, n := range names {

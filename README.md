@@ -209,7 +209,7 @@ TUI:
 | `i` | nodes view: drain check for the node |
 | `s` `b` `e` `J`, `tab` | detail panels: snapshots, backups, events, recurring jobs |
 | `ctrl+r` | reload panel (details) or reload volumes (poll mode); resume after the traffic budget paused updates |
-| `c` | switch kubeconfig context |
+| `c` | switch kubeconfig context; `o` there checks Longhorn health in all clusters (like `lhtx overview`) |
 | `W` | write mode on/off (red **RW** badge; or start with `lhtx --rw`) |
 | `S` `B` `R` `U` `E` | snapshot · backup · replica count · engine image · expand (volume list / details) |
 | `A` | attach to a node (normal or maintenance) / detach a manually attached volume |
@@ -474,8 +474,8 @@ engines     24      22ms        20.8 KiB     5              34.8 KiB      69.6 K
 4. **Health** ✔ `lhtx doctor` / Health tab, diagnostics bundle, backup age,
    drain check · open: rebuild/snapshot deadlock workaround as a guided action
    (after collecting evidence with `lhtx diag`)
-5. ✔ Multi-cluster overview (`lhtx overview`) · open: overview in the TUI, more
-   traffic statistics
+5. ✔ Multi-cluster overview (`lhtx overview`, `c` → `o` in the TUI) · open:
+   more traffic statistics
 
 ## License
 

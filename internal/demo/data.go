@@ -26,6 +26,7 @@ type volDef struct {
 	rwx         bool
 	noRebuild   bool // not used for the simulated rebuilds
 	lastFailure bool
+	oneNode     bool // all replicas on one node (shows up in the replica matrix)
 }
 
 var nodeNames = []string{"worker-1", "worker-2", "worker-3", "worker-4"}
@@ -44,6 +45,7 @@ var volDefs = []volDef{
 	{ns: "registry", pvc: "registry-data", sizeGi: 80, usedPct: 33, replicas: 3, node: "worker-1", backupAge: 3 * time.Hour},
 	{ns: "ci", pvc: "runner-cache", sizeGi: 50, usedPct: 90, replicas: 1, node: "worker-2", noRebuild: true},
 	{ns: "auth", pvc: "keycloak-db", sizeGi: 10, usedPct: 25, replicas: 3, node: "worker-1", backupAge: 3 * time.Hour},
+	{ns: "tools", pvc: "scratch", sizeGi: 15, usedPct: 30, replicas: 2, node: "worker-3", noRebuild: true, oneNode: true},
 	{ns: "archive", pvc: "old-backups", sizeGi: 150, usedPct: 85, replicas: 2, node: "", backupAge: 30 * 24 * time.Hour, noRebuild: true},
 }
 
@@ -205,6 +207,9 @@ func (d *data) buildVolume(i int, def volDef) {
 	start := i % len(nodeNames)
 	for k := 0; k < def.replicas; k++ {
 		node := nodeNames[(start+k)%len(nodeNames)]
+		if def.oneNode {
+			node = nodeNames[start]
+		}
 		r := d.newReplica(v, node, k)
 		d.replicas[name] = append(d.replicas[name], r)
 		if def.node != "" {

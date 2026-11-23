@@ -27,7 +27,7 @@ func needs(k pageKind) []string {
 		return []string{longhorn.ResVolumes}
 	case pNodes:
 		return []string{longhorn.ResNodes}
-	case pDisk, pActivity, pDetail, pHealth, pDrain, pOrphans:
+	case pDisk, pActivity, pDetail, pHealth, pDrain, pOrphans, pMatrix:
 		return []string{longhorn.ResVolumes, longhorn.ResReplicas, longhorn.ResNodes}
 	case pBackupVols, pBackupList:
 		return []string{longhorn.ResVolumes}

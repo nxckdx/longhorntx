@@ -131,13 +131,13 @@ func (m *model) viewFooter() string {
 			}
 		}
 	case m.rw && p.kind == pNodes:
-		keys = [][2]string{{"C", "scheduling on/off"}, {"E", "evict on/off"}, {"i", "drain check"}, {"enter", "open"}, {"W", "write mode off"}}
+		keys = [][2]string{{"C", "scheduling on/off"}, {"E", "evict on/off"}, {"i", "drain check"}, {"m", "replica matrix"}, {"enter", "open"}, {"W", "write mode off"}}
 	case p.kind == pOrphans && m.rw:
 		keys = [][2]string{{"X", "delete"}, {"ctrl+x", "delete all cleanable"}, {"enter", "open volume"}, {"/", "filter"}, {"W", "write mode off"}}
 	case p.kind == pOrphans:
 		keys = [][2]string{{"enter", "open volume"}, {"/", "filter"}, {"W", "write mode"}, {"1-7", "views"}, {"?", "help"}}
 	case p.kind == pNodes:
-		keys = [][2]string{{"enter", "open"}, {"i", "drain check"}, {"/", "filter"}, {"1-7", "views"}, {"c", "context"}, {"?", "help"}, {"q", "quit"}}
+		keys = [][2]string{{"enter", "open"}, {"i", "drain check"}, {"m", "replica matrix"}, {"/", "filter"}, {"1-7", "views"}, {"c", "context"}, {"?", "help"}, {"q", "quit"}}
 	case p.kind == pVolumes && len(m.marked) > 0:
 		keys = [][2]string{{"space", "toggle"}, {"ctrl+a", "all/none"}, {"esc", "clear"}}
 		if m.rw {
@@ -397,6 +397,7 @@ func (m *model) viewHelp() string {
                   (fzf syntax: space = and, 'exact, !not, ^start, end$)
    p              volume list: problems & activity first (toggle)
    i              nodes: drain check (what happens if the node goes away)
+   m              nodes: replica matrix (volumes × nodes, shared node/disk first)
    q              back / quit       ?         this help
 
  Volume details

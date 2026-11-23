@@ -74,6 +74,8 @@ func (m *model) rowsFor(p *page) []row {
 		rows = m.drainRows(p)
 	case pOrphans:
 		rows = m.orphanRows()
+	case pMatrix:
+		rows = m.matrixRows()
 	case pBackupVols:
 		rows = m.backupVolRows()
 	case pBackupList:
@@ -137,6 +139,8 @@ func (m *model) colsFor(p *page) []col {
 		return []col{{"PVC", 0, 3}, {"TARGET", 10, 0}, {"LAST BACKUP", 12, 0}, {"SIZE", 10, 0}, {"STORED", 10, 0}, {"VOLUME", 0, 2}}
 	case pBackupList:
 		return m.panelCols(p)
+	case pMatrix:
+		return m.matrixCols()
 	case pOrphans:
 		return []col{{"NODE", 12, 0}, {"TYPE", 9, 0}, {"DISK", 0, 1}, {"DATA DIR", 0, 2}, {"VOLUME", 0, 2}, {"AGE", 6, 0}, {"CLEANABLE", 9, 0}}
 	case pHealth, pDrain:
@@ -166,6 +170,9 @@ func (m *model) viewPage(p *page) string {
 			t += "  " + sErr.Render(m.settingsErr.Error())
 		}
 		b.WriteString(t + "\n")
+		b.WriteString(sDim.Render(" "+strings.Repeat("─", max(m.width-2, 0))) + "\n")
+	case pMatrix:
+		b.WriteString(m.matrixTitle() + "\n")
 		b.WriteString(sDim.Render(" "+strings.Repeat("─", max(m.width-2, 0))) + "\n")
 	case pBackupVols:
 		b.WriteString(m.backupVolsTitle() + "\n")

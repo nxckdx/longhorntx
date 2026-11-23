@@ -90,6 +90,7 @@ const (
 	pOrphans
 	pBackupVols
 	pBackupList
+	pMatrix
 	pDrain
 	pContexts
 	pHelp
@@ -733,6 +734,11 @@ func (m *model) handleKey(k tea.KeyPressMsg) tea.Cmd {
 		}
 		m.root(pOrphans)
 		return nil
+	case "m":
+		if p.kind == pNodes {
+			m.push(&page{kind: pMatrix})
+			return nil
+		}
 	case "i":
 		if p.kind == pNodes || p.kind == pDisk {
 			node := p.node
@@ -898,6 +904,11 @@ func (m *model) listHeight() int {
 	switch p.kind {
 	case pDisk, pActivity, pSettings, pHealth, pDrain, pOrphans, pBackupVols, pBackupList:
 		h -= 2 // title + rule
+	case pMatrix:
+		h -= 2
+		if m.matrixNumbered(m.matrix()) {
+			h-- // legend
+		}
 	case pDetail:
 		h -= m.detailTopHeight()
 	}

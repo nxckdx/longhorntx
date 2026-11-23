@@ -51,6 +51,7 @@ lhtx contexts                        # kubeconfig contexts
 lhtx doctor [--backup-max-age 36h]   # health check, exit code 0/1/2/3 (ok/warn/crit/error)
 lhtx overview [--contexts a,b]       # doctor summary for all kubeconfig contexts, one line each
 lhtx drain-check NODE                # what happens if NODE goes away (reboot/drain)
+lhtx matrix [--problems]             # replica distribution volumes × nodes, shared node/disk first
 lhtx diag VOLUME                     # diagnostics bundle (tar.gz) for a bug report
 lhtx measure [-d 60s] [--backups]    # measure startup + watch traffic per resource
 lhtx config [init|path]              # effective settings of the context, example config file
@@ -207,6 +208,7 @@ TUI:
 | `/` | fuzzy filter like fzf: `valk data` finds `valkey-data`; space = and, `'exact`, `!not`, `^start`, `end$` |
 | `p` | volume list: problems and activity first (toggle) |
 | `i` | nodes view: drain check for the node |
+| `m` | nodes view: replica matrix (volumes × nodes; replicas sharing a node or disk first) |
 | `s` `b` `e` `J`, `tab` | detail panels: snapshots, backups, events, recurring jobs |
 | `ctrl+r` | reload panel (details) or reload volumes (poll mode); resume after the traffic budget paused updates |
 | `c` | switch kubeconfig context; `o` there checks Longhorn health in all clusters (like `lhtx overview`) |

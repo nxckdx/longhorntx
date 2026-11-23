@@ -339,18 +339,48 @@ func (d *data) buildRest() {
 
 	for vi, v := range d.volumes {
 		def := volDefs[vi]
-		// snapshot chain
-		parent := ""
-		for k := 5; k >= 0; k-- {
-			name := fmt.Sprintf("%s-%s", "snap", hex8(fmt.Sprintf("%s%d", v.Name, k)))
-			s := &lh.VolumeSnapshot{ObjectMeta: meta(name, map[string]string{lh.LabelVolume: v.Name}, d.now.Add(-time.Duration(k)*time.Hour))}
+		// snapshot chain (hourly); data-postgres-0 was reverted to the
+		// snapshot from 4h ago, so the newer old line is a branch
+		mk := func(id string, ago time.Duration, parent string, k int) *lh.VolumeSnapshot {
+			name := "snap-" + hex8(v.Name+id)
+			s := &lh.VolumeSnapshot{ObjectMeta: meta(name, map[string]string{lh.LabelVolume: v.Name}, d.now.Add(-ago))}
 			s.Spec.Volume = v.Name
 			s.Status.Parent = parent
-			s.Status.CreationTime = d.ts(time.Duration(k)*time.Hour + 2*time.Minute)
+			s.Status.CreationTime = d.ts(ago)
 			s.Status.Size = lh.Quantity(int64(v.Status.ActualSize) / int64(20+k*5))
-			s.Status.ReadyToUse = true
+			s.Status.ReadyToUse, s.Status.UserCreated = true, true
+			s.Status.Labels = map[string]string{"type": "snap"}
+			s.Status.Children = map[string]bool{}
+			return s
+		}
+		var snaps []*lh.VolumeSnapshot
+		parent := ""
+		for k := 5; k >= 0; k-- {
+			s := mk(fmt.Sprint(k), time.Duration(k)*time.Hour+2*time.Minute, parent, k)
+			snaps = append(snaps, s)
+			parent = s.Name
+		}
+		if def.pvc == "data-postgres-0" {
+			// revert after snapshot 4: snapshots 3..0 were taken on the new
+			// line, two older ones (manual) remain on the abandoned line
+			fork := snaps[1].Name // 4h ago
+			b1 := mk("old1", 4*time.Hour-20*time.Minute, fork, 3)
+			b2 := mk("old2", 4*time.Hour-40*time.Minute, b1.Name, 3)
+			b1.Status.Labels, b2.Status.Labels = nil, nil
+			snaps = append(snaps, b1, b2)
+		}
+		byName := map[string]*lh.VolumeSnapshot{}
+		for _, s := range snaps {
+			byName[s.Name] = s
+		}
+		for _, s := range snaps {
+			if p := byName[s.Status.Parent]; p != nil {
+				p.Status.Children[s.Name] = true
+			}
+		}
+		byName[parent].Status.Children["volume-head"] = true
+		for _, s := range snaps {
 			add(s)
-			parent = name
 		}
 		// backups
 		if def.backupAge == 0 {

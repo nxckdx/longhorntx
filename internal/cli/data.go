@@ -41,14 +41,27 @@ func snapshotsCmd(g *globals) *cobra.Command {
 			if g.output == "json" {
 				return writeJSON(os.Stdout, snaps)
 			}
+			// chain order, newest first; "│ " marks branches left by a revert
+			lines := longhorn.SnapshotTree(snaps)
 			now := time.Now()
 			w := newTab(os.Stdout)
 			fmt.Fprintln(w, "NAME\tCREATED\tSIZE\tTYPE\tREADY\tPARENT")
-			for _, s := range snaps {
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%v\t%s\n", s.Name, dash(format.Age(s.Status.CreationTime, now)),
+			for _, l := range lines {
+				s := l.Snap
+				name := l.Prefix() + s.Name
+				if l.Head {
+					name += " ← head"
+				}
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%v\t%s\n", name, dash(format.Age(s.Status.CreationTime, now)),
 					format.Bytes(int64(s.Status.Size)), longhorn.SnapshotKind(s), s.Status.ReadyToUse, dash(s.Status.Parent))
 			}
-			return w.Flush()
+			if err := w.Flush(); err != nil {
+				return err
+			}
+			if longhorn.Branched(lines) {
+				fmt.Println("\n│ = branch from an earlier revert (not part of the current chain)")
+			}
+			return nil
 		},
 	}
 }

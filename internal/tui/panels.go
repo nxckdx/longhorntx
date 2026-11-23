@@ -15,14 +15,15 @@ import (
 // (one small, label/field-selected LIST) and reloaded with ctrl+r.
 
 type panelData struct {
-	kind     panelKind
-	loading  bool
-	err      error
-	loadedAt time.Time
-	snaps    []*longhorn.VolumeSnapshot
-	backups  []*longhorn.Backup
-	events   []longhorn.Event
-	jobs     []*longhorn.RecurringJob
+	kind      panelKind
+	loading   bool
+	err       error
+	loadedAt  time.Time
+	snaps     []*longhorn.VolumeSnapshot
+	snapLines []longhorn.SnapLine
+	backups   []*longhorn.Backup
+	events    []longhorn.Event
+	jobs      []*longhorn.RecurringJob
 }
 
 type panelMsg struct {
@@ -80,11 +81,8 @@ func (m *model) loadPanel(p *page) tea.Cmd {
 		switch kind {
 		case panelSnapshots:
 			d.snaps, d.err = c.Snapshots(ctx, vol)
-			longhorn.SortSnapshots(d.snaps)
-			// newest first is more useful on screen
-			for i, j := 0, len(d.snaps)-1; i < j; i, j = i+1, j-1 {
-				d.snaps[i], d.snaps[j] = d.snaps[j], d.snaps[i]
-			}
+			// chain order, newest first, branches (reverts) indented
+			d.snapLines = longhorn.SnapshotTree(d.snaps)
 		case panelBackups:
 			d.backups, d.err = c.Backups(ctx, vol)
 			longhorn.SortBackups(d.backups)
@@ -131,7 +129,15 @@ func (m *model) panelRows(p *page) []row {
 	var rows []row
 	switch p.panel {
 	case panelSnapshots:
-		for _, s := range d.snaps {
+		for _, l := range d.snapLines {
+			s := l.Snap
+			name := sDim.Render(l.Prefix()) + s.Name
+			if l.Head {
+				name += sDim.Render(" ← head")
+			}
+			if s.Status.MarkRemoved {
+				name = sDim.Render(l.Prefix() + s.Name)
+			}
 			kind := longhorn.SnapshotKind(s)
 			if kind == "removed" {
 				kind = fg(cWarn, kind)
@@ -140,7 +146,7 @@ func (m *model) panelRows(p *page) []row {
 			if !s.Status.ReadyToUse {
 				ready = fg(cWarn, "…")
 			}
-			rows = append(rows, row{cells: []string{s.Name, format.Age(s.Status.CreationTime, now), format.Bytes(int64(s.Status.Size)), kind, ready}, ref: s})
+			rows = append(rows, row{cells: []string{name, format.Age(s.Status.CreationTime, now), format.Bytes(int64(s.Status.Size)), kind, ready}, ref: s})
 		}
 	case panelBackups:
 		for _, b := range d.backups {
@@ -220,6 +226,9 @@ func (m *model) panelTitle(p *page) string {
 		default:
 			n := len(m.panelRows(p))
 			s += sDim.Render(fmt.Sprintf("   %d · loaded %s ago · ctrl+r reload", n, format.Age(d.loadedAt.Format(time.RFC3339), time.Now())))
+			if p.panel == panelSnapshots && longhorn.Branched(d.snapLines) {
+				s += sDim.Render(" · │ = branch from an earlier revert")
+			}
 			if p.panel == panelEvents && n == 0 {
 				s += sDim.Render(" · events expire after 1h")
 			}

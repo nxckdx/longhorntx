@@ -38,7 +38,7 @@ lhtx replicas [VOLUME]               # replicas with node + disk path, mode, reb
 lhtx nodes [-o wide]                 # nodes → disks: usage, scheduled, replicas, SMART
 lhtx disk NODE[:PATH]                # all replicas on a disk (reverse view)
 lhtx rebuilds [-w]                   # rebuilds/purges/restores (+ backups with -w), speed + ETA
-lhtx snapshots VOLUME                # snapshots of a volume
+lhtx snapshots VOLUME                # snapshot chain of a volume (newest first, revert branches indented)
 lhtx backups [VOLUME] [--max-age 36h] # backup age per volume, or the backups of one volume
 lhtx events VOLUME                   # events of volume, engine, replicas and PVC
 lhtx jobs [VOLUME]                   # recurring jobs (that apply to the volume)
@@ -460,7 +460,7 @@ engines     24      22ms        20.8 KiB     5              34.8 KiB      69.6 K
    rebuild progress with speed/ETA, nodes/disks (node → disk → replicas, SMART),
    events, `lhtx rebuilds -w`, context switching
 2. **Read more data** ✔ snapshots, backups, settings, recurring jobs, backup targets
-   · open: backup-volume view in the TUI, snapshot tree
+   · ✔ snapshot tree · open: backup-volume view in the TUI
    · ✔ config file with settings per context, traffic budget · open: editing
    the settings in the TUI, themes, auto-switch to poll by measured event rate
 3. **Actions** ✔ snapshot/backup create, snapshot/replica delete, replica count,

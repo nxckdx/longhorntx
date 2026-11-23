@@ -144,7 +144,7 @@ Precedence: flag/env > contexts > defaults > built-in.
 
 const themeHelp = `
 Select: theme: NAME in the config file (defaults or per context), --theme,
-or T in the TUI to try them. Own themes or tweaks go under themes: – each
+or T in the TUI (picker with live preview). Own themes or tweaks go under themes: – each
 starts from base (a built-in) and overrides single colours:
 
   themes:

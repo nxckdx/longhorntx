@@ -1,8 +1,10 @@
 package tui
 
 import (
+	"fmt"
 	"image/color"
 	"sort"
+	"strings"
 
 	"charm.land/lipgloss/v2"
 
@@ -12,7 +14,7 @@ import (
 // Themes: every colour of the TUI. "default" uses the 256-colour palette
 // (works everywhere); the others use true colour, which lipgloss degrades
 // on terminals without it. Select with --theme, `theme:` in the config
-// file (globally or per context), or cycle live with T.
+// file (globally or per context), or pick one with T (live preview).
 
 type Theme struct {
 	Dim, Faint, OK, Warn, Err, Info, Accent   string
@@ -187,13 +189,62 @@ func applyTheme(name string) bool {
 
 func init() { applyTheme("default") }
 
-// nextTheme cycles through the themes (T in the TUI).
-func nextTheme() string {
-	names := ThemeNames()
-	for i, n := range names {
+// ---------------------------------------------------------------- picker (T)
+
+// openThemePicker shows all themes; moving the cursor previews a theme,
+// enter keeps it, esc goes back to the one before.
+func (m *model) openThemePicker() {
+	m.themeBefore = curTheme
+	m.themeCursor = 0
+	for i, n := range ThemeNames() {
 		if n == curTheme {
-			return names[(i+1)%len(names)]
+			m.themeCursor = i
 		}
 	}
-	return "default"
+	m.push(&page{kind: pThemes})
+}
+
+func (m *model) themeKey(key string) {
+	names := ThemeNames()
+	switch key {
+	case "up", "k":
+		m.themeCursor = max(m.themeCursor-1, 0)
+	case "down", "j":
+		m.themeCursor = min(m.themeCursor+1, len(names)-1)
+	case "enter":
+		m.themePicked = true
+		m.pop()
+		m.setFlash("theme: "+curTheme+" for this session · keep it: theme: "+curTheme+" in "+config.DefaultPath(), false)
+		return
+	case "esc", "q", "T":
+		applyTheme(m.themeBefore)
+		m.pop()
+		return
+	default:
+		return
+	}
+	applyTheme(names[m.themeCursor]) // live preview
+}
+
+func (m *model) viewThemes() string {
+	var b strings.Builder
+	b.WriteString("\n " + sBold.Render("Theme") + sDim.Render("  ↑↓ preview · enter keep · esc back to "+m.themeBefore) + "\n\n")
+	names := ThemeNames()
+	w := 0
+	for _, n := range names {
+		w = max(w, len(n))
+	}
+	for i, n := range names {
+		cur := "  "
+		if i == m.themeCursor {
+			cur = sKey.Render("▶ ")
+		}
+		label := fmt.Sprintf("%-*s", w, n)
+		if i == m.themeCursor {
+			label = sBold.Render(label)
+		}
+		b.WriteString(fit(" "+cur+label+"  "+ThemeSwatch(n), m.width) + "\n")
+	}
+	b.WriteString("\n " + sDim.Render("Own themes and single colours: themes: in the config file (lhtx config themes)") + "\n")
+	return b.String()
 }

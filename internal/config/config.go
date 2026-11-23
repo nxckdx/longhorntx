@@ -378,7 +378,7 @@ defaults:
   # (previews and confirmations stay)
   readOnly: true
   # TUI colours: default, catppuccin, dracula, nord, gruvbox, light
-  # (T in the TUI cycles through them to try)
+  # (T in the TUI: picker with live preview)
   theme: default
   # context badge colour: auto, red, green, yellow, blue, magenta, cyan,
   # orange, gray or 0-255 (auto: by name, red for names with prod/prd)

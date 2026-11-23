@@ -113,6 +113,8 @@ func (m *model) viewFooter() string {
 	switch {
 	case m.filtering:
 		keys = [][2]string{{"enter", "apply"}, {"esc", "clear"}}
+	case p.kind == pThemes:
+		keys = [][2]string{{"↑↓", "preview"}, {"enter", "keep"}, {"esc", "back"}}
 	case p.kind == pContexts:
 		keys = [][2]string{{"↑↓", "select"}, {"enter", "switch"}, {"o", "check all clusters"}, {"esc", "back"}}
 	case p.kind == pHelp:
@@ -399,7 +401,7 @@ func (m *model) viewHelp() string {
    i              nodes: drain check (what happens if the node goes away)
    m              nodes: replica matrix (volumes × nodes, shared node/disk first)
    q              back / quit       ?         this help
-   T              next theme (keep one: theme: NAME in the config file)
+   T              choose a theme (live preview; keep: theme: NAME in the config)
 
  Volume details
    s snapshots   b backups   e events   J recurring jobs   tab next panel

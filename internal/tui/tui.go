@@ -103,6 +103,7 @@ const (
 	pMatrix
 	pDrain
 	pContexts
+	pThemes
 	pHelp
 )
 
@@ -179,7 +180,9 @@ type model struct {
 	budget               int64            // traffic budget in bytes, 0 = off
 	budgetWarned, paused bool
 	autoNoted            bool // flash shown when auto switched to polling
-	themePicked          bool // T was pressed: keep that theme across contexts
+	themePicked          bool // a theme was picked: keep it across contexts
+	themeBefore          string
+	themeCursor          int
 
 	// overview in the context picker
 	ov        map[string]overview.Summary
@@ -642,6 +645,9 @@ func (m *model) handleKey(k tea.KeyPressMsg) tea.Cmd {
 	case pHelp:
 		m.pop()
 		return nil
+	case pThemes:
+		m.themeKey(key)
+		return nil
 	case pContexts:
 		switch key {
 		case "up", "k":
@@ -726,10 +732,7 @@ func (m *model) handleKey(k tea.KeyPressMsg) tea.Cmd {
 		m.push(&page{kind: pHelp})
 		return nil
 	case "T":
-		t := nextTheme()
-		applyTheme(t)
-		m.themePicked = true
-		m.setFlash("theme: "+t+" (keep it: theme: "+t+" in "+config.DefaultPath()+")", false)
+		m.openThemePicker()
 		return nil
 	case "1":
 		m.root(pVolumes)
@@ -960,6 +963,8 @@ func (m *model) View() tea.View {
 		body = m.viewHelp()
 	case p.kind == pContexts:
 		body = m.viewContexts()
+	case p.kind == pThemes:
+		body = m.viewThemes()
 	case m.connecting:
 		body = sDim.Render("\n  connecting to " + m.ctxLabel() + " …")
 	case m.connErr != nil && m.store == nil:

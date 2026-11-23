@@ -95,7 +95,7 @@ new context allows it or `--rw` was given).
 
 **Themes**: `default`, `catppuccin`, `dracula`, `nord`, `gruvbox`, `light`
 (for light terminals) – `theme:` in the config (globally or per context),
-`--theme`, or `T` in the TUI to cycle through them. `lhtx config themes`
+`--theme`, or `T` in the TUI (a picker with live preview). `lhtx config themes`
 shows them with colour swatches. Own themes or tweaks of the built-in ones
 start from a base and override single colours:
 
@@ -252,7 +252,7 @@ TUI:
 
 Every action opens a dialog with the request: `y` applies (`Y` for
 destructive ones), `d` runs a server-side dry run, `esc` cancels.
-| `T` | next theme (try them; keep one with `theme:` in the config) |
+| `T` | choose a theme (live preview while moving, `enter` keeps, `esc` back; keep it for good with `theme:` in the config) |
 | `?` | help |
 
 ## Install

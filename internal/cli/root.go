@@ -15,6 +15,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/nxckdx/longhorntx/internal/config"
 	"github.com/nxckdx/longhorntx/internal/demo"
 	"github.com/nxckdx/longhorntx/internal/kube"
 	"github.com/nxckdx/longhorntx/internal/longhorn"
@@ -35,6 +36,56 @@ type globals struct {
 	dryRunFlag string
 	refresh    string
 	demo       bool
+
+	cfg *config.File
+	// explicit command line values (they beat the config file)
+	rwSet, refreshSet, namespaceSet bool
+}
+
+// loadConfig reads the config file and applies the settings of the
+// selected context to everything not given on the command line.
+func (g *globals) loadConfig(cmd *cobra.Command) error {
+	config.ValidRefresh = func(s string) error { _, err := longhorn.ParseRefresh(s); return err }
+	cfg, err := config.Load(config.DefaultPath())
+	if err != nil {
+		return err
+	}
+	g.cfg = cfg
+	f := cmd.Flags()
+	g.rwSet = f.Changed("rw")
+	g.refreshSet = f.Changed("refresh") || os.Getenv("LHTX_REFRESH") != ""
+	g.namespaceSet = f.Changed("namespace")
+	eff := cfg.For(g.contextName())
+	if !g.rwSet && !eff.ReadOnly {
+		g.rw = true
+	}
+	if !g.refreshSet {
+		g.refresh = eff.Refresh
+	}
+	if !g.namespaceSet {
+		g.namespace = eff.Namespace
+	}
+	return nil
+}
+
+// contextName is the selected kubeconfig context (local, no traffic).
+func (g *globals) contextName() string {
+	if g.demo {
+		return demo.Context
+	}
+	if g.kube.Context != "" {
+		return g.kube.Context
+	}
+	_, cur, _ := g.kube.Contexts()
+	return cur
+}
+
+// namespaceFor gives the Longhorn namespace of another context (overview).
+func (g *globals) namespaceFor(kctx string) string {
+	if g.namespaceSet || g.cfg == nil {
+		return g.namespace
+	}
+	return g.cfg.For(kctx).Namespace
 }
 
 func (g *globals) refreshMode() (time.Duration, error) { return longhorn.ParseRefresh(g.refresh) }
@@ -78,7 +129,19 @@ Without a subcommand it starts the interactive TUI.`,
 			if err != nil {
 				return err
 			}
-			return tui.Run(cmd.Context(), tui.Options{Kube: g.kube, Namespace: g.namespace, Version: Version, RW: g.rw, Refresh: r, Demo: g.demo})
+			return tui.Run(cmd.Context(), tui.Options{Kube: g.kube, Namespace: g.namespace, Version: Version, RW: g.rw, Refresh: r, Demo: g.demo,
+				Config: g.cfg, RWSet: g.rwSet, RefreshSet: g.refreshSet, NamespaceSet: g.namespaceSet})
+		},
+		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+			switch {
+			case cmd.Name() == "config" || (cmd.Parent() != nil && cmd.Parent().Name() == "config"):
+				return nil // must work with a broken file (loads it itself)
+			case cmd.Name() == cobra.ShellCompRequestCmd || cmd.Name() == cobra.ShellCompNoDescRequestCmd ||
+				cmd.Name() == "completion" || (cmd.Parent() != nil && cmd.Parent().Name() == "completion"):
+				_ = g.loadConfig(cmd) // a broken file must not break the shell
+				return nil
+			}
+			return g.loadConfig(cmd)
 		},
 	}
 	f := root.PersistentFlags()
@@ -102,7 +165,7 @@ Without a subcommand it starts the interactive TUI.`,
 		volumesCmd(g), replicasCmd(g), nodesCmd(g), diskCmd(g), rebuildsCmd(g),
 		snapshotsCmd(g), backupsCmd(g), eventsCmd(g), jobsCmd(g), settingsCmd(g), targetsCmd(g), orphansCmd(g), engineImagesCmd(g),
 		measureCmd(g), doctorCmd(g), overviewCmd(g), drainCheckCmd(g), diagCmd(g), contextsCmd(g),
-		versionCmd(g), updateCmd(g),
+		versionCmd(g), updateCmd(g), configCmd(g),
 	)
 	root.AddCommand(writeCmds(g)...)
 	registerCompletions(root, g)

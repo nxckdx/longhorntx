@@ -38,6 +38,9 @@ func contextStyle(name string) lipgloss.Style {
 	if strings.Contains(l, "prod") || strings.Contains(l, "prd") {
 		bg = lipgloss.Color("160")
 	}
+	if c := contextColor(name); c != "" {
+		bg = lipgloss.Color(c)
+	}
 	return lipgloss.NewStyle().Background(bg).Foreground(lipgloss.Color("231")).Bold(true).Padding(0, 1)
 }
 

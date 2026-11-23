@@ -52,12 +52,49 @@ lhtx overview [--contexts a,b]       # doctor summary for all kubeconfig context
 lhtx drain-check NODE                # what happens if NODE goes away (reboot/drain)
 lhtx diag VOLUME                     # diagnostics bundle (tar.gz) for a bug report
 lhtx measure [-d 60s] [--backups]    # measure startup + watch traffic per resource
+lhtx config [init|path]              # effective settings of the context, example config file
 
 VOLUME = Longhorn volume / PV name, namespace/pvc, a bare PVC name if unique,
          or a fuzzy query if it matches exactly one volume ("imm valk")
 --context NAME  --kubeconfig PATH  -n longhorn-system  -v (print wire bytes)
 --refresh auto|watch|30s (volume updates, env LHTX_REFRESH)
 ```
+
+### Configuration (per context)
+
+`~/.config/lhtx/config.yaml` (`$XDG_CONFIG_HOME`, or the path in
+`LHTX_CONFIG`) holds defaults and overrides per kubeconfig context, so for
+example a small homelab runs live in write mode and a large customer cluster
+polls, has a red badge and a traffic budget. `lhtx config init` writes a
+commented example; `lhtx config [--context NAME]` shows the effective values
+and where each one comes from.
+
+```yaml
+defaults:
+  refresh: auto          # auto | watch | 30s
+  readOnly: true
+contexts:
+  homelab:
+    readOnly: false      # TUI starts in write mode, CLI writes without --rw
+  "customer-*":          # glob; the more specific pattern wins, exact names last
+    color: red           # context badge (name or 0-255)
+    refresh: 30s
+    trafficBudget: 200MiB
+  kind-*:
+    overview: false      # skipped by lhtx overview
+```
+
+Precedence: flag/env > context > defaults > built-in. Settings: `refresh`,
+`readOnly`, `color`, `trafficBudget`, `overview`, `namespace`. Unknown keys
+and bad values are errors, so typos do not go unnoticed. `readOnly: false`
+only skips `--rw`/`W`: previews and confirmations stay. Switching the context
+in the TUI applies that context's settings (write mode turns off unless the
+new context allows it or `--rw` was given).
+
+**Traffic budget** (TUI): at 80 % of the budget the header shows the usage,
+at 100 % all watches stop (`⏸ paused`); on-demand loads still work and
+`ctrl+r` resumes with a fresh budget. It counts both directions of the
+current connection.
 
 ### Health check
 
@@ -170,7 +207,7 @@ TUI:
 | `p` | volume list: problems and activity first (toggle) |
 | `i` | nodes view: drain check for the node |
 | `s` `b` `e` `J`, `tab` | detail panels: snapshots, backups, events, recurring jobs |
-| `ctrl+r` | reload panel (details) or reload volumes (poll mode) |
+| `ctrl+r` | reload panel (details) or reload volumes (poll mode); resume after the traffic budget paused updates |
 | `c` | switch kubeconfig context |
 | `W` | write mode on/off (red **RW** badge; or start with `lhtx --rw`) |
 | `S` `B` `R` `U` `E` | snapshot · backup · replica count · engine image · expand (volume list / details) |
@@ -424,6 +461,8 @@ engines     24      22ms        20.8 KiB     5              34.8 KiB      69.6 K
    events, `lhtx rebuilds -w`, context switching
 2. **Read more data** ✔ snapshots, backups, settings, recurring jobs, backup targets
    · open: backup-volume view in the TUI, snapshot tree
+   · ✔ config file with settings per context, traffic budget · open: editing
+   the settings in the TUI, themes, auto-switch to poll by measured event rate
 3. **Actions** ✔ snapshot/backup create, snapshot/replica delete, replica count,
    scheduling/eviction for nodes and disks, settings, engine upgrade, expansion,
    attach/detach, recurring job assignment – with preview, confirmation, client

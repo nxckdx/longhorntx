@@ -32,6 +32,9 @@ internal/longhorn   slim CRD structs (no longhorn-manager import), Client (one-s
 internal/fuzzy      fzf-style matching (TUI filter, CLI volume fallback)
 internal/demo       --demo: fake dynamic client with made-up data and a
                     simulated rebuild loop (README GIF: docs/demo.tape, vhs)
+internal/config     ~/.config/lhtx/config.yaml: defaults + per-context overrides
+                    (exact name or glob); flags/env beat it (cli/root.go loadConfig,
+                    tui applySettings on every connect; traffic budget tui/settings.go)
 internal/update     release check (daily, cached) and self-update from GitHub releases
 internal/cli        cobra commands (read: volumes.go, nodes.go, data.go, activity.go,
                     measure.go, doctor.go incl. drain-check, diag.go;

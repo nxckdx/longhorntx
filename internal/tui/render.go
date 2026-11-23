@@ -90,7 +90,7 @@ func (m *model) viewHeader() string {
 
 	r := ""
 	if m.client != nil {
-		r = m.loadingHint() + m.refreshHint() + fmt.Sprintf("↓ %s  %s", format.Bytes(m.client.Cluster.Traffic.RX()), format.Rate(m.rxRate))
+		r = m.loadingHint() + m.budgetHint() + m.refreshHint() + fmt.Sprintf("↓ %s  %s", format.Bytes(m.client.Cluster.Traffic.RX()), format.Rate(m.rxRate))
 		if m.store != nil {
 			if n := len(m.store.WatchedEngines()); n > 0 {
 				r = sDim.Render(fmt.Sprintf("engines ⦿%d  ", n)) + r
@@ -173,7 +173,7 @@ func (m *model) viewFooter() string {
 		b = append(b, sKey.Render("["+k[0]+"]")+" "+k[1])
 	}
 	s := m.flashPrefix() + " " + strings.Join(b, "  ")
-	if m.store != nil {
+	if m.store != nil && !m.paused { // a paused store reports its cancelled watches
 		if err := m.store.Err(); err != nil {
 			s += "  " + sErr.Render("⚠ "+err.Error())
 		}
@@ -433,7 +433,7 @@ func dash(s string) string {
 
 // refreshHint shows whether volumes are live or polled.
 func (m *model) refreshHint() string {
-	if m.store == nil || !m.synced(longhorn.ResVolumes) {
+	if m.store == nil || m.paused || !m.synced(longhorn.ResVolumes) {
 		return ""
 	}
 	s := "live"

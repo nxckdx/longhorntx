@@ -57,6 +57,9 @@ without Longhorn show "no Longhorn" and do not count for the exit code
 
 Traffic: one LIST of volumes, replicas and nodes per cluster (like doctor).
 
+Contexts with "overview: false" in the config file are skipped unless named
+in --contexts.
+
 Exit codes like doctor (worst of all clusters): 0 ok, 1 warning, 2 critical,
 3 any cluster failed.`,
 		Args: cobra.NoArgs,
@@ -72,7 +75,12 @@ Exit codes like doctor (worst of all clusters): 0 ok, 1 warning, 2 critical,
 				if err != nil {
 					return err
 				}
-				names = all
+				names = nil
+				for _, n := range all { // overview: false in the config
+					if g.cfg == nil || g.cfg.For(n).Overview {
+						names = append(names, n)
+					}
+				}
 			}
 			sums := make([]clusterSummary, len(names))
 			sem := make(chan struct{}, max(parallel, 1))
@@ -147,7 +155,7 @@ func summarizeCluster(ctx context.Context, g *globals, name string) (s clusterSu
 		ko.Context = name
 		var cl *kube.Cluster
 		if cl, err = kube.Connect(ko); err == nil {
-			c, err = longhorn.NewClient(cl, g.namespace)
+			c, err = longhorn.NewClient(cl, g.namespaceFor(name))
 		}
 	}
 	if err != nil {

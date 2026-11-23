@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"k8s.io/klog/v2"
 
+	"github.com/nxckdx/longhorntx/internal/config"
 	"github.com/nxckdx/longhorntx/internal/demo"
 	"github.com/nxckdx/longhorntx/internal/kube"
 	"github.com/nxckdx/longhorntx/internal/longhorn"
@@ -24,6 +25,31 @@ type Options struct {
 	RW        bool          // start in write mode
 	Refresh   time.Duration // longhorn.RefreshAuto, RefreshWatch or poll interval
 	Demo      bool          // in-memory demo cluster instead of kubeconfig
+
+	// Config gives per-context settings (namespace, refresh, read-only,
+	// colour, traffic budget), applied on every (re)connect unless the
+	// value was given explicitly on the command line (…Set).
+	Config                          *config.File
+	RWSet, RefreshSet, NamespaceSet bool
+}
+
+// settingsFor resolves the context's settings with explicit flags on top.
+func (o Options) settingsFor(kctx string) (ns string, refresh time.Duration, eff config.Effective) {
+	cfg := o.Config
+	if cfg == nil {
+		cfg = &config.File{}
+	}
+	eff = cfg.For(kctx)
+	ns, refresh = o.Namespace, o.Refresh
+	if !o.NamespaceSet {
+		ns = eff.Namespace
+	}
+	if !o.RefreshSet {
+		if r, err := longhorn.ParseRefresh(eff.Refresh); err == nil {
+			refresh = r
+		}
+	}
+	return ns, refresh, eff
 }
 
 func Run(ctx context.Context, o Options) error {
@@ -32,6 +58,13 @@ func Run(ctx context.Context, o Options) error {
 	klog.LogToStderr(false)
 	klog.SetOutput(io.Discard)
 
+	if o.Config != nil {
+		cfg := o.Config
+		contextColor = func(name string) string {
+			c, _ := config.ColorCode(cfg.For(name).Color)
+			return c
+		}
+	}
 	m := newModel(ctx, o)
 	_, err := tea.NewProgram(m, tea.WithContext(ctx)).Run()
 	m.shutdown()
@@ -127,11 +160,14 @@ type model struct {
 	rxRate   float64
 
 	// write mode, dialogs, status messages
-	rw       bool
-	modal    *modal
-	flash    string
-	flashErr bool
-	flashAt  time.Time
+	rw                   bool
+	eff                  config.Effective // settings of the connected context
+	budget               int64            // traffic budget in bytes, 0 = off
+	budgetWarned, paused bool
+	modal                *modal
+	flash                string
+	flashErr             bool
+	flashAt              time.Time
 
 	// settings page (loaded on demand)
 	settings        []*longhorn.Setting
@@ -195,6 +231,7 @@ type connectedMsg struct {
 	kctx   string
 	store  *longhorn.Store
 	client *longhorn.Client
+	eff    config.Effective
 	err    error
 }
 
@@ -207,8 +244,11 @@ type animMsg time.Time
 func connect(ctx context.Context, o Options, kctx string) tea.Cmd {
 	return func() tea.Msg {
 		var c *longhorn.Client
+		var refresh time.Duration
+		var eff config.Effective
 		if o.Demo {
 			c = demo.NewClient(ctx)
+			_, refresh, eff = o.settingsFor(c.Cluster.Context)
 		} else {
 			ko := o.Kube
 			ko.Context = kctx
@@ -216,15 +256,17 @@ func connect(ctx context.Context, o Options, kctx string) tea.Cmd {
 			if err != nil {
 				return connectedMsg{kctx: kctx, err: err}
 			}
-			if c, err = longhorn.NewClient(cl, o.Namespace); err != nil {
+			var ns string
+			ns, refresh, eff = o.settingsFor(cl.Context)
+			if c, err = longhorn.NewClient(cl, ns); err != nil {
 				return connectedMsg{kctx: cl.Context, err: err}
 			}
 		}
 		s := longhorn.NewStore(c)
 		s.WatchBackups = true
-		s.Refresh = o.Refresh
+		s.Refresh = refresh
 		s.Start(ctx)
-		return connectedMsg{kctx: c.Cluster.Context, store: s, client: c}
+		return connectedMsg{kctx: c.Cluster.Context, store: s, client: c, eff: eff}
 	}
 }
 
@@ -298,6 +340,9 @@ func (m *model) switchContext(name string) tea.Cmd {
 	m.state, m.views, m.nodes, m.acts = longhorn.State{}, nil, nil, nil
 	m.kctx = name
 	m.connecting, m.connErr = true, nil
+	if !m.opts.RWSet {
+		m.rw = false // until the context's settings are known
+	}
 	m.lhVersion, m.versionErr = "", ""
 	m.stack = []*page{{kind: m.stack[0].kind}}
 	m.filter, m.filtering = "", false
@@ -335,6 +380,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.store, m.client = msg.store, msg.client
 		m.lastRX = 0
+		m.applySettings(msg.eff)
 		m.refresh()
 		return m, tea.Batch(waitChange(m.store), fetchVersion(m.ctx, m.client))
 
@@ -366,6 +412,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.lastRX = rx
 			}
 			m.lastTick = now
+			m.checkBudget()
 		}
 		// finished backups expire from the activity list
 		if m.store != nil && len(m.acts) > 0 {
@@ -731,6 +778,9 @@ func (m *model) handleKey(k tea.KeyPressMsg) tea.Cmd {
 	}
 	if p.kind == pHealth && key == "ctrl+r" {
 		return m.loadHealth()
+	}
+	if key == "ctrl+r" && m.paused {
+		return m.resume()
 	}
 	if key == "ctrl+r" && m.store != nil && p.kind != pDetail {
 		if m.store.RefreshInterval() > 0 {

@@ -60,7 +60,9 @@ func (m *model) viewLoading() string {
 		}
 	}
 	b.WriteString("\n   " + sDim.Render(fmt.Sprintf("↓ %s received", format.Bytes(m.client.Cluster.Traffic.RX()))))
-	if err := m.store.Err(); err != nil {
+	if m.paused {
+		b.WriteString("\n\n   " + fg(cErr, "⏸ traffic budget reached while loading · ctrl+r resumes"))
+	} else if err := m.store.Err(); err != nil {
 		b.WriteString("\n\n   " + sErr.Render("⚠ "+err.Error()))
 	}
 	return b.String()
@@ -68,7 +70,7 @@ func (m *model) viewLoading() string {
 
 // loadingHint is shown in the header while some lists are still missing.
 func (m *model) loadingHint() string {
-	if m.store == nil || m.store.AllSynced() {
+	if m.store == nil || m.paused || m.store.AllSynced() {
 		return ""
 	}
 	var miss []string

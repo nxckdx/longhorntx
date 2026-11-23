@@ -1,0 +1,99 @@
+package cli
+
+import (
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+
+	"github.com/spf13/cobra"
+
+	"github.com/nxckdx/longhorntx/internal/config"
+	"github.com/nxckdx/longhorntx/internal/format"
+)
+
+func configCmd(g *globals) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "config",
+		Short: "Show the effective settings for a context (config file + flags)",
+		Long: `lhtx reads ` + "`~/.config/lhtx/config.yaml`" + ` ($XDG_CONFIG_HOME, or LHTX_CONFIG):
+defaults plus overrides per kubeconfig context (name or glob). Settings:
+refresh, readOnly, color, trafficBudget, overview, namespace.
+
+Precedence: flag/env > contexts > defaults > built-in.
+
+  lhtx config                     effective values for the current context
+  lhtx config --context NAME      … for another context
+  lhtx config init                write a commented example file`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			p := config.DefaultPath()
+			if err := g.loadConfig(cmd); err != nil {
+				return err
+			}
+			if g.cfg.Path == "" {
+				fmt.Printf("config file: %s (not present, built-in defaults; lhtx config init creates one)\n", p)
+			} else {
+				fmt.Printf("config file: %s\n", p)
+			}
+			kctx := g.contextName()
+			eff := g.cfg.For(kctx)
+			src := func(key string, set bool) string {
+				if set {
+					return "flag/env"
+				}
+				return eff.Source[key]
+			}
+			budget := "off"
+			if eff.TrafficBudget > 0 {
+				budget = format.Bytes(eff.TrafficBudget)
+			}
+			color := eff.Color
+			if color == "" {
+				color = "auto"
+			}
+			fmt.Printf("context:     %s\n\n", kctx)
+			w := newTab(os.Stdout)
+			fmt.Fprintln(w, "SETTING\tVALUE\tFROM")
+			fmt.Fprintf(w, "refresh\t%s\t%s\n", g.refresh, src("refresh", g.refreshSet))
+			fmt.Fprintf(w, "readOnly\t%v\t%s\n", !g.rw, src("readOnly", g.rwSet))
+			fmt.Fprintf(w, "namespace\t%s\t%s\n", g.namespace, src("namespace", g.namespaceSet))
+			fmt.Fprintf(w, "color\t%s\t%s\n", color, eff.Source["color"])
+			fmt.Fprintf(w, "trafficBudget\t%s\t%s\n", budget, eff.Source["trafficBudget"])
+			fmt.Fprintf(w, "overview\t%v\t%s\n", eff.Overview, eff.Source["overview"])
+			return w.Flush()
+		},
+	}
+	cmd.AddCommand(&cobra.Command{
+		Use:   "init",
+		Short: "Write a commented example config file (never overwrites)",
+		Args:  cobra.NoArgs,
+		RunE: func(*cobra.Command, []string) error {
+			p := config.DefaultPath()
+			if p == "" {
+				return fmt.Errorf("no home directory: set LHTX_CONFIG")
+			}
+			if _, err := os.Stat(p); err == nil {
+				return fmt.Errorf("%s exists – edit it instead", p)
+			} else if !errors.Is(err, fs.ErrNotExist) {
+				return err
+			}
+			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+				return err
+			}
+			if err := os.WriteFile(p, []byte(config.Example), 0o644); err != nil {
+				return err
+			}
+			fmt.Println("wrote", p)
+			return nil
+		},
+	})
+	cmd.AddCommand(&cobra.Command{
+		Use:   "path",
+		Short: "Print the config file path",
+		Args:  cobra.NoArgs,
+		Run:   func(*cobra.Command, []string) { fmt.Println(config.DefaultPath()) },
+	})
+	return cmd
+}

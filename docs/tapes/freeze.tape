@@ -1,7 +1,7 @@
 # Freeze everything for a Longhorn upgrade and unfreeze it – no scaling,
 # operators and GitOps keep their specs (demo cluster).
 Output docs/freeze.gif
-Set Height 700
+Set Height 800
 Source docs/tapes/setup.tape
 
 Type "lhtx --demo" Sleep 500ms Enter

@@ -713,7 +713,7 @@ func stopGroup(ctx context.Context, c *longhorn.Client, g Group, o FreezeOptions
 		}
 	}
 	if len(g.Pods) == 1 {
-		o.Log("✔ %s: %s stopped", g.name(), g.Pods[0])
+		o.Log("✔ %s: %s stopped", g.name(), shortNames(g.Pods)[0])
 	}
 	return nil
 }

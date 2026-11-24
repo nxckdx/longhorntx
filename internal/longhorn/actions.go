@@ -462,8 +462,9 @@ func SetSetting(s *Setting, value string) (*Action, error) {
 	return &Action{
 		Title: fmt.Sprintf("Change setting %s", s.Name),
 		Verb:  VerbPatch, GVR: GVRSetting, Name: s.Name,
-		Patch:   patchWithRV(s.ResourceVersion, nil, map[string]any{"value": value}),
-		Changes: []Change{{"value", s.Value, value}},
+		Patch:    patchWithRV(s.ResourceVersion, nil, map[string]any{"value": value}),
+		Changes:  []Change{{"value", s.Value, value}},
+		Warnings: gitopsWarning(s),
 	}, nil
 }
 

@@ -244,7 +244,7 @@ func UpdateJob(j *RecurringJob, s JobSpec, vols []*Volume) (*Action, error) {
 		Verb:  VerbPatch, GVR: GVRRecurringJob, Name: j.Name,
 		Patch: patchWithRV(j.ResourceVersion, patch), Changes: ch,
 	}
-	a.Warnings = append(a.Warnings, jobWarnings(s, time.Now())...)
+	a.Warnings = append(gitopsWarning(j), append(a.Warnings, jobWarnings(s, time.Now())...)...)
 	if s.Retain < old.Retain && taskUsesRetain(s.Task) {
 		a.Warnings = append(a.Warnings, fmt.Sprintf("lower retain: on the next run Longhorn deletes the oldest %ss beyond %d per volume",
 			retainWhat(s.Task), s.Retain))
@@ -364,6 +364,7 @@ func DeleteJob(j *RecurringJob, vols []*Volume) (*Action, error) {
 		Title: fmt.Sprintf("Delete recurring job %s (%s, %s)", j.Name, j.Spec.Task, j.Spec.Cron),
 		Verb:  VerbDelete, GVR: GVRRecurringJob, Name: j.Name, UID: string(j.UID),
 		Destructive: true,
+		Warnings:    gitopsWarning(j),
 	}
 	if users := JobVolumes(j, vols); len(users) > 0 {
 		shown := users

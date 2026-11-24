@@ -274,7 +274,7 @@ func jobsCmd(g *globals) *cobra.Command {
 }
 
 func targetsCmd(g *globals) *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:     "targets",
 		Aliases: []string{"backuptargets", "bt"},
 		Short:   "List backup targets",
@@ -311,6 +311,8 @@ func targetsCmd(g *globals) *cobra.Command {
 			return w.Flush()
 		},
 	}
+	cmd.AddCommand(targetWriteCmds(g)...)
+	return cmd
 }
 
 func backupOverview(cmd *cobra.Command, g *globals, c *longhorn.Client, maxAge time.Duration) error {

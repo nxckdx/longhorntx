@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/dynamic"
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
+	"k8s.io/client-go/metadata"
 
 	"github.com/nxckdx/longhorntx/internal/fuzzy"
 	"github.com/nxckdx/longhorntx/internal/kube"
@@ -46,6 +47,8 @@ type Client struct {
 	coreOnce   sync.Once
 	coreClient corev1client.CoreV1Interface
 	coreErr    error
+
+	meta metadata.Interface // secret names (secrets.go), created on first use
 }
 
 func NewClient(c *kube.Cluster, namespace string) (*Client, error) {

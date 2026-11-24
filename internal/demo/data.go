@@ -326,6 +326,15 @@ func (d *data) buildRest() {
 	bt.Status.Available = true
 	bt.Status.LastSyncedAt = d.ts(2 * time.Minute)
 	add(bt)
+	// a second target (Longhorn ≥ 1.8) that is currently unreachable
+	off := &lh.BackupTarget{ObjectMeta: meta("offsite", map[string]string{
+		"kustomize.toolkit.fluxcd.io/name": "infra", "kustomize.toolkit.fluxcd.io/namespace": "flux-system"}, created)}
+	off.Spec.BackupTargetURL = "nfs://backup-nas.example:/export/longhorn"
+	off.Spec.PollInterval = "30m0s"
+	off.Status.LastSyncedAt = d.ts(3 * time.Hour)
+	off.Status.Conditions = []lh.Condition{{Type: "Unavailable", Status: "True", Reason: "Unavailable",
+		Message: "failed to mount nfs://backup-nas.example:/export/longhorn: connection timed out"}}
+	add(off)
 
 	rj := &lh.RecurringJob{ObjectMeta: meta("daily-backup", nil, created)}
 	rj.Spec.Task, rj.Spec.Cron, rj.Spec.Retain, rj.Spec.Concurrency = "backup", "0 2 * * *", 7, 2

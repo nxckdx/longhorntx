@@ -22,6 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	dynfake "k8s.io/client-go/dynamic/fake"
 	corefake "k8s.io/client-go/kubernetes/typed/core/v1/fake"
+	metafake "k8s.io/client-go/metadata/fake"
 	"k8s.io/client-go/rest"
 	k8stesting "k8s.io/client-go/testing"
 
@@ -110,6 +111,17 @@ func NewClient(ctx context.Context) *longhorn.Client {
 
 	cl := &kube.Cluster{Context: Context, Config: &rest.Config{Host: "demo.invalid"}, Traffic: &kube.Counter{}}
 	c := longhorn.NewClientFrom(cl, ns, dyn, &corefake.FakeCoreV1{Fake: &k8stesting.Fake{}})
+	// secret names only (backup target credential picker)
+	var secrets []runtime.Object
+	for _, n := range []string{"backup-s3", "azure-blob", "cifs-nas", "longhorn-webhook-tls"} {
+		secrets = append(secrets, &metav1.PartialObjectMetadata{
+			TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"},
+			ObjectMeta: metav1.ObjectMeta{Name: n, Namespace: ns}})
+	}
+	sch := metafake.NewTestScheme()
+	sch.AddKnownTypeWithName(schema.GroupVersionKind{Version: "v1", Kind: "Secret"}, &metav1.PartialObjectMetadata{})
+	sch.AddKnownTypeWithName(schema.GroupVersionKind{Version: "v1", Kind: "SecretList"}, &metav1.PartialObjectMetadataList{})
+	c.SetMetadataClient(metafake.NewSimpleMetadataClient(sch, secrets...))
 	go s.run(ctx)
 	return c
 }

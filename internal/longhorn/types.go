@@ -80,10 +80,17 @@ type VolumeSpec struct {
 }
 
 type VolumeStatus struct {
-	State            string           `json:"state"`      // attached | detached | attaching | ...
-	Robustness       string           `json:"robustness"` // healthy | degraded | faulted | unknown
-	ActualSize       Quantity         `json:"actualSize"`
-	CurrentNodeID    string           `json:"currentNodeID"`
+	State         string   `json:"state"`      // attached | detached | attaching | ...
+	Robustness    string   `json:"robustness"` // healthy | degraded | faulted | unknown
+	ActualSize    Quantity `json:"actualSize"`
+	CurrentNodeID string   `json:"currentNodeID"`
+	// RestoreRequired: restoring from a backup (or a clone copying) is not
+	// finished yet.
+	RestoreRequired  bool `json:"restoreRequired"`
+	RestoreInitiated bool `json:"restoreInitiated"`
+	CloneStatus      struct {
+		State string `json:"state"` // "" | initiated | completed | failed | copy-completed-awaiting-healthy
+	} `json:"cloneStatus"`
 	KubernetesStatus KubernetesStatus `json:"kubernetesStatus"`
 	LastBackup       string           `json:"lastBackup"`
 	LastBackupAt     string           `json:"lastBackupAt"`

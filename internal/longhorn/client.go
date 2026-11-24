@@ -265,3 +265,7 @@ func resolveFuzzy(vols []*Volume, ref string) (*Volume, error) {
 	}
 	return nil, fmt.Errorf("%q matches %d volumes, be more specific: %s", ref, len(hits), strings.Join(cands, ", "))
 }
+
+// Dynamic exposes the dynamic client for non-Longhorn objects (switchover:
+// workloads, pods, Flux objects).
+func (c *Client) Dynamic() dynamic.Interface { return c.dyn }

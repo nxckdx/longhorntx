@@ -197,6 +197,8 @@ lhtx upgrade-engine VOLUME... --image v1.12.1   # like "Upgrade Engine" in the w
 lhtx expand VOLUME 20Gi|+5Gi               # through the PVC if bound (StorageClass must allow it)
 lhtx restore BACKUP|VOLUME [--name N] [--pvc NS/NAME|auto]   # backup → NEW volume (+ PV/PVC)
 lhtx clone VOLUME [--snapshot S] [--pvc NS/NAME|auto]       # volume/snapshot → NEW volume (safe "revert")
+lhtx restore VOLUME --switch               # restore, then switch the PVC to it (workload + Flux handled)
+lhtx switch NS/PVC --to-volume VOLUME      # point a PVC to another Longhorn volume (and back)
 lhtx attach VOLUME NODE [--maintenance]    # like Attach in the web UI (ticket "longhorn-ui")
 lhtx detach VOLUME                         # removes only that ticket, never the CSI one
 lhtx jobs add|remove VOLUME JOB|group:NAME...   # recurring job labels on the volume
@@ -236,6 +238,29 @@ and annotations of those tools) carry a warning: the next reconcile reverts
 them, change them in Git instead. The credential secret picker for backup
 targets reads secret **names** through the metadata API – secret data never
 travels.
+
+**Restore and switch** (`lhtx restore VOLUME --switch`, `lhtx switch`): the
+web UI makes you restore under another name, detach, delete the PVC and
+create PV/PVC by hand. lhtx does it in one confirmed run and waits between
+the steps:
+
+1. restore into a new volume, wait until it is restored and detached
+2. suspend the Flux Kustomizations/HelmReleases that manage the workload or
+   the PVC (`spec.suspend`, like `flux suspend`; already suspended ones stay)
+3. scale the Deployments/StatefulSets that mount the PVC to 0, wait until no
+   pod uses it and the volume is detached
+4. set the old PV to `Retain`, delete the old PVC
+5. create a PV for the restored volume and the PVC again with the same name,
+   labels and annotations (Flux and Helm keep owning it), wait until Bound
+6. scale back up, resume Flux and request a reconcile
+
+The old volume is kept: `lhtx switch NS/PVC --to-volume OLD` switches back
+(the old, released PV is rebound). Until the old PVC is deleted every failure
+– and Ctrl+C – is rolled back automatically; every step goes to a journal in
+`$XDG_STATE_HOME/lhtx/switch/`. Refused up front, with the reason: workloads
+of operators (CloudNativePG clusters, the Prometheus operator, …), HPAs, bare
+pods, jobs, Argo CD and Flux Operator ResourceSets (not supported yet).
+`--dry-run` shows the plan.
 
 Orphans: `DataCleanable` only says Longhorn *can* delete the data, not that
 it is safe. Replica data of a volume that is deleted, faulted, degraded or
@@ -535,9 +560,9 @@ engines     24      22ms        20.8 KiB     5              34.8 KiB      69.6 K
    attach/detach, recurring job assignment, recurring jobs and backup targets
    (create/edit/delete), restore into a new volume with PV/PVC, clone of a
    volume or snapshot – with preview,
-   confirmation, client and server dry run · open: switching a workload to the
-   restored volume (scale down, swap PV/PVC, scale up, keep the old volume for
-   rollback; needs a plan for GitOps-managed workloads)
+   confirmation, client and server dry run, restore + switch of the PVC with
+   Flux handled (`--switch`, `lhtx switch`) · open: Argo CD, Flux Operator
+   ResourceSets, CloudNativePG-aware restore
 4. **Health** ✔ `lhtx doctor` / Health tab, diagnostics bundle, backup age,
    drain check · open: rebuild/snapshot deadlock workaround as a guided action
    (after collecting evidence with `lhtx diag`)

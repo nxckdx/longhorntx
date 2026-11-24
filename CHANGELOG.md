@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.5.0](https://github.com/nxckdx/longhorntx/compare/v0.4.0...v0.5.0) (2026-11-24)
+
+
+### Features
+
+* clone a volume or snapshot into a new volume (lhtx clone, TUI C) ([8bb5b3e](https://github.com/nxckdx/longhorntx/commit/8bb5b3e178e75820210b23682813eed0b992386c))
+* create, edit and delete recurring jobs (lhtx jobs create|edit|delete|next) ([e9c6c8b](https://github.com/nxckdx/longhorntx/commit/e9c6c8bb9239a1316451a24e15c7e4a483c70d75))
+* doctor/health report suspended Flux objects and unfinished switches; switch --status ([7a4e6dd](https://github.com/nxckdx/longhorntx/commit/7a4e6ddd86c9b64b54f86ba0fa7a722265d1e08b))
+* freeze PVCs with an admission policy instead of scaling (lhtx freeze/unfreeze); switch uses it ([c72bb8a](https://github.com/nxckdx/longhorntx/commit/c72bb8a6d179b9c1f5550ac7f229844036bc814f))
+* **freeze:** stop apps cleanly – ordered stop, hooks, CloudNativePG hibernation ([9abf116](https://github.com/nxckdx/longhorntx/commit/9abf1167fce0b0a441a757afd77f52ac8b1838ff))
+* manage backup targets (lhtx targets create|edit|delete|sync) ([273b2a8](https://github.com/nxckdx/longhorntx/commit/273b2a81e35f6664bf5eb3c40ba8185d80301ea0))
+* restore a backup and switch the PVC to it, Flux included (lhtx restore --switch, lhtx switch) ([0bab11e](https://github.com/nxckdx/longhorntx/commit/0bab11eaa23198dd43a71e9e4bb8d0455ddff705))
+* restore a backup into a new volume with PV/PVC (lhtx restore, TUI r) ([f981bff](https://github.com/nxckdx/longhorntx/commit/f981bffcbd66ed5ab961c48bc0af16db5f10b1d4))
+* **tui:** back up all volumes with late backups from the health tab (B) ([8f1fd0f](https://github.com/nxckdx/longhorntx/commit/8f1fd0f2bbc459baae8bae9a2142c48367b8ee5c))
+* **tui:** backup targets page with create/edit/delete/sync ([520ff25](https://github.com/nxckdx/longhorntx/commit/520ff2534a6c1f0df79cc0d4fbe6a2734a860700))
+* **tui:** freeze and unfreeze with Z; header shows active freezes ([f081aec](https://github.com/nxckdx/longhorntx/commit/f081aec729fe4274e460b073afe3f99af961e28d))
+* **tui:** lhtx settings page (,) that edits config.yaml ([c005a2f](https://github.com/nxckdx/longhorntx/commit/c005a2f2d86e0d9220c38d389b9d1c3651d2a247))
+* **tui:** recurring jobs page with create/edit/delete forms ([8d94321](https://github.com/nxckdx/longhorntx/commit/8d94321417ccdbe0929d38be9df70cfd3c1e7ca4))
+* **tui:** restore and switch from the backups tab, with live log and cancel ([d81b28b](https://github.com/nxckdx/longhorntx/commit/d81b28b98ba4bffb6edc0d7dcbfcc0fccfba4a25))
+* **tui:** w switches a PVC to the volume in the details (switch back) ([3fc74b9](https://github.com/nxckdx/longhorntx/commit/3fc74b9e23395c8423f95cb8d795f6947c7c9fc7))
+* warn when a change targets a GitOps- or Helm-managed object ([82b39ff](https://github.com/nxckdx/longhorntx/commit/82b39ff1ee3825b77d77dfb12726c4c5325cb651))
+
 ## [0.4.0](https://github.com/nxckdx/longhorntx/compare/v0.3.0...v0.4.0) (2026-11-23)
 
 

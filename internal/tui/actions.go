@@ -113,6 +113,9 @@ func (m *model) actionKey(p *page, key string) (tea.Cmd, bool) {
 	if cmd, ok := m.targetsKey(p, key); ok {
 		return cmd, true
 	}
+	if cmd, ok := m.restoreKey(p, key); ok {
+		return cmd, true
+	}
 	if p.kind == pOrphans && (key == "X" || key == "ctrl+x") {
 		if !m.requireRW() {
 			return nil, true
@@ -768,9 +771,14 @@ func (m *model) confirmBatch(title string, acts []*longhorn.Action, skipped ...[
 	}
 	sum := &longhorn.Action{Title: title, Verb: acts[0].Verb, GVR: acts[0].GVR, Namespace: acts[0].Namespace, Name: fmt.Sprintf("%d objects", len(acts))}
 	var warns []string
+	kinds := map[string]bool{}
 	for _, a := range acts {
 		if a.Namespace != sum.Namespace || a.GVR != sum.GVR {
 			sum.Namespace = "(several)"
+		}
+		kinds[a.GVR.Resource] = true
+		if len(kinds) > 1 {
+			sum.Header = fmt.Sprintf("%s %d objects", sum.Verb, len(acts))
 		}
 		sum.Destructive = sum.Destructive || a.Destructive
 		warns = append(warns, a.Warnings...)

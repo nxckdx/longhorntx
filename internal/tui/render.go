@@ -122,7 +122,7 @@ func (m *model) viewFooter() string {
 	case p.kind == pTargets:
 		keys = [][2]string{{"W", "write mode to change"}, {"ctrl+r", "reload"}, {"esc", "back"}}
 	case p.kind == pBackupVols:
-		keys = [][2]string{{"enter", "backups"}, {"J", "recurring jobs"}, {"t", "targets"}, {"/", "filter"}, {"ctrl+r", "reload"}, {"1-7", "views"}, {"?", "help"}}
+		keys = [][2]string{{"enter", "backups"}, {"r", "restore newest"}, {"J", "recurring jobs"}, {"t", "targets"}, {"/", "filter"}, {"ctrl+r", "reload"}, {"1-7", "views"}, {"?", "help"}}
 	case p.kind == pThemes:
 		keys = [][2]string{{"↑↓", "preview"}, {"enter", "keep"}, {"esc", "back"}}
 	case p.kind == pContexts:
@@ -401,6 +401,8 @@ func (m *model) viewHelp() string {
    6  Backups (backup volumes, also of deleted volumes; enter: their backups)
       J there: recurring jobs, t: backup targets (write mode: n new,
       enter edit, X delete; targets also s sync now)
+      r restore (write mode): newest backup of the backup volume, or the
+      selected one in a backup list – into a new volume, optionally PV/PVC
    7  Orphans (only shown when there are any)
 
  Navigation

@@ -28,6 +28,8 @@ type form struct {
 	// live shows extra lines under the fields (e.g. the next cron runs)
 	live   func(vals map[string]string) []string
 	submit func(vals map[string]string) (*longhorn.Action, error)
+	// submitBatch is used instead of submit for several objects at once
+	submitBatch func(vals map[string]string) (string, []*longhorn.Action, error)
 }
 
 func (f *form) values() map[string]string {
@@ -65,6 +67,16 @@ func (m *model) formKey(k tea.KeyPressMsg) tea.Cmd {
 	case "shift+tab", "up":
 		f.move(-1)
 	case "enter":
+		if f.submitBatch != nil {
+			title, acts, err := f.submitBatch(f.values())
+			if err != nil {
+				f.err = err.Error()
+				return nil
+			}
+			m.modal = nil
+			m.confirmBatch(title, acts)
+			return nil
+		}
 		a, err := f.submit(f.values())
 		if err != nil {
 			f.err = err.Error()

@@ -621,7 +621,7 @@ func deletedBackupVolume(cmd *cobra.Command, c *longhorn.Client, arg string) str
 		return ""
 	}
 	for v := range found {
-		fmt.Fprintf(os.Stderr, "volume %s no longer exists – showing its backups\n", v)
+		fmt.Fprintf(os.Stderr, "volume %s no longer exists – using its backups\n", v)
 		return v
 	}
 	return ""

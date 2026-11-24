@@ -1,6 +1,7 @@
 package longhorn
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -34,17 +35,22 @@ const (
 )
 
 type Action struct {
-	Title       string
-	Verb        Verb
-	GVR         schema.GroupVersionResource
-	Namespace   string // "" = the Longhorn namespace
-	Name        string
-	UID         string         // delete precondition: never delete a recreated object
-	Object      map[string]any // create
-	Patch       map[string]any // JSON merge patch (incl. resourceVersion for optimistic locking)
-	Changes     []Change
-	Warnings    []string
-	Destructive bool
+	Title     string
+	Verb      Verb
+	GVR       schema.GroupVersionResource
+	Namespace string // "" = the Longhorn namespace
+	// ClusterScoped objects (PersistentVolume) have no namespace.
+	ClusterScoped bool
+	// Header replaces the request line of the preview (batches of
+	// different kinds of objects).
+	Header string
+	Name          string
+	UID           string         // delete precondition: never delete a recreated object
+	Object        map[string]any // create
+	Patch         map[string]any // JSON merge patch (incl. resourceVersion for optimistic locking)
+	Changes       []Change
+	Warnings      []string
+	Destructive   bool
 	// Lines replace the request details in the preview (batch summaries).
 	Lines   []string
 	summary string // one-line description used in batch summaries
@@ -91,7 +97,13 @@ func (a *Action) Preview(namespace string) string {
 	if a.GVR.Group != "" {
 		res += "." + a.GVR.Group
 	}
-	fmt.Fprintf(&b, "%s %s/%s -n %s\n", a.Verb, res, a.Name, namespace)
+	if a.Header != "" {
+		b.WriteString(a.Header + "\n")
+	} else if a.ClusterScoped {
+		fmt.Fprintf(&b, "%s %s/%s\n", a.Verb, res, a.Name)
+	} else {
+		fmt.Fprintf(&b, "%s %s/%s -n %s\n", a.Verb, res, a.Name, namespace)
+	}
 	if len(a.Lines) > 0 {
 		for _, l := range a.Lines {
 			b.WriteString("  " + l + "\n")
@@ -109,8 +121,12 @@ func (a *Action) Preview(namespace string) string {
 		body = a.Patch
 	}
 	if body != nil {
-		j, _ := json.MarshalIndent(body, "  ", "  ")
-		b.WriteString("  " + string(j) + "\n")
+		var buf bytes.Buffer
+		enc := json.NewEncoder(&buf)
+		enc.SetEscapeHTML(false) // URLs with & stay readable
+		enc.SetIndent("  ", "  ")
+		_ = enc.Encode(body)
+		b.WriteString("  " + strings.TrimSuffix(buf.String(), "\n") + "\n")
 	}
 	return strings.TrimSuffix(b.String(), "\n")
 }
@@ -133,13 +149,16 @@ func (c *Client) Apply(ctx context.Context, a *Action, mode DryRun) error {
 		dry = []string{metav1.DryRunAll}
 	}
 	res := c.res(a.GVR)
-	if a.Namespace != "" {
+	switch {
+	case a.ClusterScoped:
+		res = c.dyn.Resource(a.GVR)
+	case a.Namespace != "":
 		res = c.dyn.Resource(a.GVR).Namespace(a.Namespace)
 	}
 	switch a.Verb {
 	case VerbCreate:
 		obj := &unstructured.Unstructured{Object: a.Object}
-		if obj.GetNamespace() == "" {
+		if obj.GetNamespace() == "" && !a.ClusterScoped {
 			obj.SetNamespace(c.Namespace)
 		}
 		_, err := res.Create(ctx, obj, metav1.CreateOptions{DryRun: dry, FieldManager: "lhtx"})

@@ -163,7 +163,7 @@ func (m *model) panelRows(p *page) []row {
 				b.Name, st, bar(float64(b.Status.Progress), 10, cInfo) + fmt.Sprintf(" %3d%%", b.Status.Progress),
 				format.Age(longhorn.BackupTime(b), now), format.Bytes(int64(b.Status.Size)),
 				format.Bytes(int64(b.Status.NewlyUploadDataSize)), dash(b.Status.BackupTargetName),
-			}})
+			}, ref: b})
 		}
 	case panelEvents:
 		for _, e := range d.events {

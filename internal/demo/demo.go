@@ -101,6 +101,28 @@ func NewClient(ctx context.Context) *longhorn.Client {
 		return false, nil, nil
 	})
 
+	// Restore: a volume created from a backup becomes a detached volume;
+	// a PVC bound to it shows up in its kubernetesStatus.
+	dyn.PrependReactor("create", "volumes", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if !isDryRun(a) {
+			if u, ok := a.(k8stesting.CreateActionImpl).GetObject().(*unstructured.Unstructured); ok {
+				go s.restored(ctx, u.GetName(), nil)
+			}
+		}
+		return false, nil, nil
+	})
+	dyn.PrependReactor("create", "persistentvolumeclaims", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if !isDryRun(a) {
+			if u, ok := a.(k8stesting.CreateActionImpl).GetObject().(*unstructured.Unstructured); ok {
+				if vol, _, _ := unstructured.NestedString(u.Object, "spec", "volumeName"); vol != "" {
+					go s.restored(ctx, vol, map[string]any{"namespace": u.GetNamespace(), "pvcName": u.GetName(),
+						"pvName": vol, "pvStatus": "Bound"})
+				}
+			}
+		}
+		return false, nil, nil
+	})
+
 	// Attach/detach: follow the attachment tickets like Longhorn does.
 	dyn.PrependReactor("patch", "volumeattachments", func(a k8stesting.Action) (bool, runtime.Object, error) {
 		if !isDryRun(a) {
@@ -242,6 +264,26 @@ func (s *sim) resize(ctx context.Context, pvc string, size int64) {
 			s.update(ctx, longhorn.GVREngine, e)
 		}
 	}
+}
+
+// restored fills the status of a volume created from a backup (and its
+// PVC once one is bound).
+func (s *sim) restored(ctx context.Context, name string, ks map[string]any) {
+	time.Sleep(600 * time.Millisecond)
+	res := s.dyn.Resource(longhorn.GVRVolume).Namespace(ns)
+	u, err := res.Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return
+	}
+	size, _, _ := unstructured.NestedString(u.Object, "spec", "size")
+	_ = unstructured.SetNestedField(u.Object, "detached", "status", "state")
+	_ = unstructured.SetNestedField(u.Object, "unknown", "status", "robustness")
+	_ = unstructured.SetNestedField(u.Object, size, "status", "actualSize")
+	if ks != nil {
+		_ = unstructured.SetNestedMap(u.Object, ks, "status", "kubernetesStatus")
+	}
+	u.SetResourceVersion(strconv.FormatInt(rv.Add(1)+48211, 10))
+	_, _ = res.Update(ctx, u, metav1.UpdateOptions{})
 }
 
 func (s *sim) update(ctx context.Context, g schema.GroupVersionResource, obj any) {

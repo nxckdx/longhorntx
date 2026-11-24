@@ -258,15 +258,18 @@ func jobsCmd(g *globals) *cobra.Command {
 				return writeJSON(os.Stdout, jobs)
 			}
 			w := newTab(os.Stdout)
-			fmt.Fprintln(w, "NAME\tTASK\tCRON\tRETAIN\tCONCURRENCY\tGROUPS\tRUNS")
+			now := time.Now()
+			fmt.Fprintln(w, "NAME\tTASK\tCRON\tNEXT\tRETAIN\tCONCURRENCY\tGROUPS\tRUNS")
 			for _, j := range jobs {
-				fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%d\t%s\t%d\n", j.Name, j.Spec.Task, j.Spec.Cron, j.Spec.Retain,
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d\t%d\t%s\t%d\n", j.Name, j.Spec.Task, j.Spec.Cron,
+					dash(longhorn.FormatRuns(longhorn.NextRuns(j.Spec.Cron, now, 1), now)), j.Spec.Retain,
 					j.Spec.Concurrency, dash(strings.Join(j.Spec.Groups, ",")), j.Status.ExecutionCount)
 			}
 			return w.Flush()
 		},
 	}
 	cmd.AddCommand(jobAssignCmd(g, true), jobAssignCmd(g, false))
+	cmd.AddCommand(jobWriteCmds(g)...)
 	return cmd
 }
 

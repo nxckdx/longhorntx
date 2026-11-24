@@ -95,17 +95,20 @@ type BackupTarget struct {
 type RecurringJob struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata"`
-	Spec              struct {
-		Task        string            `json:"task"`
-		Cron        string            `json:"cron"`
-		Retain      int               `json:"retain"`
-		Concurrency int               `json:"concurrency"`
-		Groups      []string          `json:"groups"`
-		Labels      map[string]string `json:"labels"`
-	} `json:"spec"`
-	Status struct {
+	Spec              RecurringJobSpec `json:"spec"`
+	Status            struct {
 		ExecutionCount int `json:"executionCount"`
 	} `json:"status"`
+}
+
+type RecurringJobSpec struct {
+	Task        string            `json:"task"`
+	Cron        string            `json:"cron"`
+	Retain      int               `json:"retain"`
+	Concurrency int               `json:"concurrency"`
+	Groups      []string          `json:"groups"`
+	Labels      map[string]string `json:"labels"`
+	Parameters  map[string]string `json:"parameters"`
 }
 
 func (o *VolumeSnapshot) DeepCopyObject() runtime.Object { c := *o; return &c }

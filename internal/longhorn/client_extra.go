@@ -224,6 +224,10 @@ func (c *Client) SettingCR(ctx context.Context, name string) (*Setting, error) {
 	return get[Setting](ctx, c, GVRSetting, name)
 }
 
+func (c *Client) RecurringJob(ctx context.Context, name string) (*RecurringJob, error) {
+	return get[RecurringJob](ctx, c, GVRRecurringJob, name)
+}
+
 func (c *Client) Orphans(ctx context.Context) ([]*Orphan, error) {
 	return list[Orphan](ctx, c, GVROrphan, "")
 }

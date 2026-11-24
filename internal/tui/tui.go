@@ -101,6 +101,7 @@ const (
 	pBackupVols
 	pBackupList
 	pMatrix
+	pJobs
 	pDrain
 	pContexts
 	pThemes
@@ -189,6 +190,12 @@ type model struct {
 	ovPending map[string]bool
 	ovRun     int
 	ovAt      time.Time
+
+	// recurring jobs page (6 → j), loaded on demand
+	jobsRaw     []*longhorn.RecurringJob
+	jobsLoading bool
+	jobsErr     error
+	jobsAt      time.Time
 
 	// backups tab (6), loaded on demand
 	bvRaw     []*longhorn.BackupVolume
@@ -385,6 +392,7 @@ func (m *model) switchContext(name string) tea.Cmd {
 	m.marked = nil
 	m.health, m.healthLoading, m.fcache = nil, false, nil
 	m.bvRaw, m.bvLoading, m.bvErr, m.bvAt = nil, false, nil, time.Time{}
+	m.jobsRaw, m.jobsLoading, m.jobsErr, m.jobsAt = nil, false, nil, time.Time{}
 	m.autoNoted = false
 	return connect(m.ctx, m.opts, name)
 }
@@ -505,6 +513,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case overviewMsg:
 		m.applyOverview(msg)
+		return m, nil
+
+	case jobsMsg:
+		m.applyJobs(msg)
 		return m, nil
 
 	case backupVolsMsg:
@@ -845,6 +857,10 @@ func (m *model) handleKey(k tea.KeyPressMsg) tea.Cmd {
 	if p.kind == pBackupVols && key == "ctrl+r" {
 		return m.loadBackupVols()
 	}
+	if p.kind == pBackupVols && key == "J" {
+		m.push(&page{kind: pJobs})
+		return m.loadJobs()
+	}
 	if p.kind == pBackupList && key == "ctrl+r" {
 		return m.loadPanel(p)
 	}
@@ -930,7 +946,7 @@ func (m *model) listHeight() int {
 		h--
 	}
 	switch p.kind {
-	case pDisk, pActivity, pSettings, pHealth, pDrain, pOrphans, pBackupVols, pBackupList:
+	case pDisk, pActivity, pSettings, pHealth, pDrain, pOrphans, pBackupVols, pBackupList, pJobs:
 		h -= 2 // title + rule
 	case pMatrix:
 		h -= 2

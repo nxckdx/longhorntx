@@ -86,7 +86,7 @@ func (m *model) backupVolsTitle() string {
 	if gone > 0 {
 		t += " " + fg(cWarn, fmt.Sprintf("%d of deleted volumes", gone))
 	}
-	t += sDim.Render("  volumes with backups in the backup store · enter: backups")
+	t += sDim.Render("  volumes with backups in the backup store · enter: backups · J recurring jobs")
 	switch {
 	case m.bvLoading:
 		t += sDim.Render(" · loading …")

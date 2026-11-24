@@ -196,6 +196,10 @@ lhtx expand VOLUME 20Gi|+5Gi               # through the PVC if bound (StorageCl
 lhtx attach VOLUME NODE [--maintenance]    # like Attach in the web UI (ticket "longhorn-ui")
 lhtx detach VOLUME                         # removes only that ticket, never the CSI one
 lhtx jobs add|remove VOLUME JOB|group:NAME...   # recurring job labels on the volume
+lhtx jobs create NAME --task backup --cron "0 2 * * *" --retain 14 --groups default
+lhtx jobs edit NAME [--cron …] [--retain …] [--groups …]   # only the given flags change
+lhtx jobs delete NAME                      # preview lists the volumes that lose the job
+lhtx jobs next "0 2 * * 1-5"               # when a cron runs (UTC like Longhorn) in your time zone
 lhtx cordon|uncordon NODE[:DISK]           # replica scheduling off/on
 lhtx evict NODE[:DISK] [--cancel]          # also disables scheduling (Longhorn requires it)
 
@@ -228,7 +232,8 @@ TUI:
 
 | Key | |
 |---|---|
-| `1` … `7` | Volumes · Nodes → disks → replicas · Activity · Settings · Health · Backups (backup volumes → backups) · Orphans (only if there are any) |
+| `1` … `7` | Volumes · Nodes → disks → replicas · Activity · Settings · Health · Backups (backup volumes → backups, `J` recurring jobs) · Orphans (only if there are any) |
+| `n`, `enter`, `X` | recurring jobs page (write mode): new job, edit, delete – a form with live cron check and the next runs |
 | `↑↓`/`jk`, `g`/`G` | move |
 | `enter` | open (volume detail, disk, …) |
 | `esc` / `q` | back (quit on the top level) |

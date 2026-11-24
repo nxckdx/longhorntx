@@ -113,6 +113,12 @@ func (m *model) viewFooter() string {
 	switch {
 	case m.filtering:
 		keys = [][2]string{{"enter", "apply"}, {"esc", "clear"}}
+	case p.kind == pJobs && m.rw:
+		keys = [][2]string{{"n", "new job"}, {"enter", "edit"}, {"X", "delete"}, {"ctrl+r", "reload"}, {"esc", "back"}, {"W", "write mode off"}}
+	case p.kind == pJobs:
+		keys = [][2]string{{"W", "write mode to change"}, {"ctrl+r", "reload"}, {"/", "filter"}, {"esc", "back"}}
+	case p.kind == pBackupVols:
+		keys = [][2]string{{"enter", "backups"}, {"J", "recurring jobs"}, {"/", "filter"}, {"ctrl+r", "reload"}, {"1-7", "views"}, {"?", "help"}}
 	case p.kind == pThemes:
 		keys = [][2]string{{"↑↓", "preview"}, {"enter", "keep"}, {"esc", "back"}}
 	case p.kind == pContexts:
@@ -389,6 +395,7 @@ func (m *model) viewHelp() string {
  Views
    1  Volumes   2  Nodes → disks → replicas   3  Activity   4  Settings   5  Health
    6  Backups (backup volumes, also of deleted volumes; enter: their backups)
+      J there: recurring jobs (write mode: n new, enter edit, X delete)
    7  Orphans (only shown when there are any)
 
  Navigation

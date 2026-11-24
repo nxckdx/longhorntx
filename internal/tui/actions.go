@@ -24,6 +24,7 @@ const (
 	modalPrompt
 	modalBusy
 	modalPick
+	modalForm
 )
 
 type pickOption struct {
@@ -51,6 +52,8 @@ type modal struct {
 	onPick  func(string)
 
 	busyText string
+
+	form *form // modalForm
 }
 
 type actionDoneMsg struct {
@@ -103,6 +106,9 @@ func (m *model) actionKey(p *page, key string) (tea.Cmd, bool) {
 			m.setFlash("write mode off", false)
 		}
 		return nil, true
+	}
+	if cmd, ok := m.jobsKey(p, key); ok {
+		return cmd, true
 	}
 	if p.kind == pOrphans && (key == "X" || key == "ctrl+x") {
 		if !m.requireRW() {
@@ -648,6 +654,8 @@ func (m *model) modalKey(k tea.KeyPressMsg) tea.Cmd {
 	switch md.kind {
 	case modalBusy:
 		return nil
+	case modalForm:
+		return m.formKey(k)
 	case modalPrompt:
 		switch key {
 		case "esc":
@@ -813,6 +821,9 @@ func (m *model) applyActionDone(msg actionDoneMsg) tea.Cmd {
 		if p.kind == pSettings {
 			return m.loadSettings()
 		}
+		if p.kind == pJobs {
+			return m.loadJobs()
+		}
 	}
 	return nil
 }
@@ -862,6 +873,8 @@ func (m *model) viewModal(bodyHeight int) string {
 	switch md.kind {
 	case modalBusy:
 		b.WriteString(fg(cInfo, spinner(time.Since(m.flashAt))+" "+md.busyText))
+	case modalForm:
+		b.WriteString(m.viewForm(md.form, w))
 	case modalPick:
 		b.WriteString(sBold.Render(md.label) + "\n\n")
 		for i, o := range md.options {

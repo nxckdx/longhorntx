@@ -76,6 +76,8 @@ func (m *model) rowsFor(p *page) []row {
 		rows = m.orphanRows()
 	case pMatrix:
 		rows = m.matrixRows()
+	case pJobs:
+		rows = m.jobRows()
 	case pBackupVols:
 		rows = m.backupVolRows()
 	case pBackupList:
@@ -141,6 +143,9 @@ func (m *model) colsFor(p *page) []col {
 		return m.panelCols(p)
 	case pMatrix:
 		return m.matrixCols()
+	case pJobs:
+		return []col{{"NAME", 0, 2}, {"TASK", 20, 0}, {"CRON", 0, 1}, {"NEXT", 16, 0}, {"RETAIN", 6, 0}, {"CONC", 5, 0},
+			{"GROUPS", 0, 1}, {"VOLUMES", 7, 0}, {"RUNS", 6, 0}}
 	case pOrphans:
 		return []col{{"NODE", 12, 0}, {"TYPE", 9, 0}, {"DISK", 0, 1}, {"DATA DIR", 0, 2}, {"VOLUME", 0, 2}, {"AGE", 6, 0}, {"CLEANABLE", 9, 0}}
 	case pHealth, pDrain:
@@ -170,6 +175,9 @@ func (m *model) viewPage(p *page) string {
 			t += "  " + sErr.Render(m.settingsErr.Error())
 		}
 		b.WriteString(t + "\n")
+		b.WriteString(sDim.Render(" "+strings.Repeat("─", max(m.width-2, 0))) + "\n")
+	case pJobs:
+		b.WriteString(m.jobsTitle() + "\n")
 		b.WriteString(sDim.Render(" "+strings.Repeat("─", max(m.width-2, 0))) + "\n")
 	case pMatrix:
 		b.WriteString(m.matrixTitle() + "\n")
@@ -204,6 +212,7 @@ func (m *model) viewPage(p *page) string {
 		pOrphans:    "✔ no orphans",
 		pBackupVols: "no backup volumes (no backups in the backup store)",
 		pBackupList: "no backups",
+		pJobs:       "no recurring jobs",
 	}[p.kind]
 	b.WriteString(m.renderList(p, m.colsFor(p), m.rowsFor(p), empty))
 	return b.String()

@@ -378,3 +378,8 @@ func DeleteJob(j *RecurringJob, vols []*Volume) (*Action, error) {
 	a.Warnings = append(a.Warnings, "existing snapshots and backups made by the job stay")
 	return a, nil
 }
+
+// SortJobs orders jobs by name.
+func SortJobs(js []*RecurringJob) {
+	sort.Slice(js, func(i, k int) bool { return js[i].Name < js[k].Name })
+}

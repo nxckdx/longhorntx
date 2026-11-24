@@ -4,7 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 go build -o lhtx ./cmd/lhtx
-for t in docs/demo.tape docs/tapes/views.tape docs/tapes/write.tape docs/tapes/cli.tape; do
+for t in docs/demo.tape docs/tapes/views.tape docs/tapes/write.tape docs/tapes/switch.tape docs/tapes/cli.tape; do
   vhs "$t"
 done
 ls -la docs/*.gif

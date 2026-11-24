@@ -244,6 +244,8 @@ web UI makes you restore under another name, detach, delete the PVC and
 create PV/PVC by hand. lhtx does it in one confirmed run and waits between
 the steps:
 
+![Restore a backup and switch the PVC to it: step preview, Flux suspended, workload scaled down and up, PVC re-created](docs/switch.gif)
+
 1. restore into a new volume, wait until it is restored and detached
 2. suspend the Flux Kustomizations/HelmReleases that manage the workload or
    the PVC (`spec.suspend`, like `flux suspend`; already suspended ones stay)

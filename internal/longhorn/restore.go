@@ -120,6 +120,17 @@ func RestoreBackup(b *Backup, bv *BackupVolume, s RestoreSpec, exists func(kind 
 		vol.Warnings = append(vol.Warnings, "no PVC: create one later (Longhorn UI \"Create PV/PVC\" or lhtx restore --pvc on a new restore)")
 		return acts, nil
 	}
+	more, err := pvAndPVC(s, size, mode, exists)
+	if err != nil {
+		return nil, err
+	}
+	vol.Warnings = append(vol.Warnings, fmt.Sprintf("PV reclaim policy Retain: deleting PVC %s/%s keeps the volume", s.PVCNamespace, s.PVCName))
+	return append(acts, more...), nil
+}
+
+// pvAndPVC builds the PV (volumeHandle = the Longhorn volume) and a PVC
+// bound to it, like the web UI's "Create PV/PVC".
+func pvAndPVC(s RestoreSpec, size int64, mode string, exists func(string) bool) ([]*Action, error) {
 	if s.PVCNamespace == "" {
 		return nil, fmt.Errorf("PVC needs a namespace (namespace/name)")
 	}
@@ -172,8 +183,7 @@ func RestoreBackup(b *Backup, bv *BackupVolume, s RestoreSpec, exists func(kind 
 		},
 		summary: fmt.Sprintf("PVC %s/%s bound to %s", s.PVCNamespace, s.PVCName, s.Name),
 	}
-	vol.Warnings = append(vol.Warnings, fmt.Sprintf("PV reclaim policy Retain: deleting PVC %s/%s keeps the volume", s.PVCNamespace, s.PVCName))
-	return append(acts, pv, pvc), nil
+	return []*Action{pv, pvc}, nil
 }
 
 func backupAge(b *Backup) string {
@@ -256,8 +266,39 @@ func (c *Client) PlanRestore(ctx context.Context, b *Backup, now time.Time) (*Re
 
 // Build checks for existing objects and returns the actions.
 func (c *Client) BuildRestore(ctx context.Context, p *RestorePlan) ([]*Action, error) {
+	exists, lookupErr := c.existsFn(ctx, p.Spec)
+	acts, err := RestoreBackup(p.Backup, p.BackupVolume, p.Spec, exists)
+	if err != nil {
+		return nil, err
+	}
+	return acts, *lookupErr
+}
+
+// BuildClone checks for existing objects and returns the clone actions.
+func (c *Client) BuildClone(ctx context.Context, src *Volume, snapshot string, s RestoreSpec) ([]*Action, error) {
+	exists, lookupErr := c.existsFn(ctx, s)
+	acts, err := CloneVolume(src, snapshot, s, exists)
+	if err != nil {
+		return nil, err
+	}
+	return acts, *lookupErr
+}
+
+// CloneDefaults: same replica count as the source, the static class, the
+// source's namespace for a PVC.
+func (c *Client) CloneDefaults(ctx context.Context, src *Volume, now time.Time) RestoreSpec {
+	sc, _ := c.Setting(ctx, "default-longhorn-static-storage-class")
+	if sc == "" {
+		sc = "longhorn-static"
+	}
+	return RestoreSpec{Name: CloneName(src, now), Replicas: max(src.Spec.NumberOfReplicas, 1), StorageClass: sc,
+		FSType: "ext4", PVCNamespace: src.Status.KubernetesStatus.Namespace}
+}
+
+func (c *Client) existsFn(ctx context.Context, spec RestoreSpec) (func(string) bool, *error) {
 	var lookupErr error
-	exists := func(kind string) bool {
+	p := struct{ Spec RestoreSpec }{spec}
+	return func(kind string) bool {
 		var ok bool
 		var err error
 		switch kind {
@@ -272,10 +313,5 @@ func (c *Client) BuildRestore(ctx context.Context, p *RestorePlan) ([]*Action, e
 			lookupErr = fmt.Errorf("checking %s: %w", kind, err)
 		}
 		return ok
-	}
-	acts, err := RestoreBackup(p.Backup, p.BackupVolume, p.Spec, exists)
-	if err != nil {
-		return nil, err
-	}
-	return acts, lookupErr
+	}, &lookupErr
 }

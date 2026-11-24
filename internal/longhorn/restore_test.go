@@ -79,3 +79,28 @@ func TestRestoreBackup(t *testing.T) {
 		t.Error("unfinished backup accepted")
 	}
 }
+
+func TestCloneVolume(t *testing.T) {
+	v := &Volume{}
+	v.Name, v.Spec.Size, v.Spec.AccessMode = "pvc-a", 5<<30, "rwo"
+	v.Status.KubernetesStatus.Namespace, v.Status.KubernetesStatus.PVCName = "db", "pg"
+	now := time.Date(2026, 11, 24, 0, 0, 0, 0, time.UTC)
+	if n := CloneName(v, now); n != "pg-clone-1124" {
+		t.Error(n)
+	}
+	none := func(string) bool { return false }
+	acts, err := CloneVolume(v, "snap-1", RestoreSpec{Name: "pg-clone", Replicas: 2, PVCNamespace: "db", PVCName: "pg-clone", StorageClass: "longhorn-static"}, none)
+	if err != nil || len(acts) != 3 {
+		t.Fatalf("%v %d", err, len(acts))
+	}
+	if ds := acts[0].Object["spec"].(map[string]any)["dataSource"]; ds != "snap://pvc-a/snap-1" {
+		t.Error(ds)
+	}
+	acts, _ = CloneVolume(v, "", RestoreSpec{Name: "pg-clone", Replicas: 2}, none)
+	if ds := acts[0].Object["spec"].(map[string]any)["dataSource"]; len(acts) != 1 || ds != "vol://pvc-a" {
+		t.Error(ds)
+	}
+	if _, err := CloneVolume(v, "", RestoreSpec{Name: "pg-clone", Replicas: 2}, func(k string) bool { return k == "volume" }); err == nil {
+		t.Error("existing name accepted")
+	}
+}

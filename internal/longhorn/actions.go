@@ -43,14 +43,14 @@ type Action struct {
 	ClusterScoped bool
 	// Header replaces the request line of the preview (batches of
 	// different kinds of objects).
-	Header string
-	Name          string
-	UID           string         // delete precondition: never delete a recreated object
-	Object        map[string]any // create
-	Patch         map[string]any // JSON merge patch (incl. resourceVersion for optimistic locking)
-	Changes       []Change
-	Warnings      []string
-	Destructive   bool
+	Header      string
+	Name        string
+	UID         string         // delete precondition: never delete a recreated object
+	Object      map[string]any // create
+	Patch       map[string]any // JSON merge patch (incl. resourceVersion for optimistic locking)
+	Changes     []Change
+	Warnings    []string
+	Destructive bool
 	// Lines replace the request details in the preview (batch summaries).
 	Lines   []string
 	summary string // one-line description used in batch summaries

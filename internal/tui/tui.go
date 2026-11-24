@@ -524,6 +524,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.applyOverview(msg)
 		return m, nil
 
+	case clonePlanMsg:
+		m.cloneForm(msg)
+		return m, nil
+
 	case restorePlanMsg:
 		m.restoreForm(msg)
 		return m, nil

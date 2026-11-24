@@ -139,7 +139,10 @@ func (m *model) viewFooter() string {
 		if m.rw {
 			keys = append(keys, [2]string{"S", "snapshot"}, [2]string{"B", "backup"}, [2]string{"R", "replicas"}, [2]string{"U", "engine"}, [2]string{"E", "expand"}, [2]string{"A", "attach"}, [2]string{"[ ]", "select"}, [2]string{"X", "del replica"})
 			if p.panel == panelSnapshots {
-				keys = append(keys, [2]string{"D", "del snapshot"})
+				keys = append(keys, [2]string{"D", "del snapshot"}, [2]string{"C", "clone"})
+			}
+			if p.panel == panelBackups {
+				keys = append(keys, [2]string{"r", "restore"})
 			}
 		}
 	case m.rw && p.kind == pNodes:
@@ -429,6 +432,8 @@ func (m *model) viewHelp() string {
    space select volumes, ctrl+a select all (filtered), esc clear – S/B/R/U/E
    then act on all selected volumes
    X delete replica ([ ] selects in volume details)   D delete snapshot (in panel)
+   C (snapshots panel) clone the snapshot into a new volume (+ PV/PVC)
+   r (backups panel / backups tab) restore into a new volume (+ PV/PVC)
    C scheduling on/off, E eviction on/off (nodes view)   enter edit (settings)
    X delete orphan, ctrl+x delete all cleanable orphans (orphans tab)
    Every action shows the request first: y apply (Y for destructive ones),

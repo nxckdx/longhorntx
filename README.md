@@ -194,6 +194,7 @@ lhtx set setting NAME VALUE
 lhtx upgrade-engine VOLUME... --image v1.12.1   # like "Upgrade Engine" in the web UI
 lhtx expand VOLUME 20Gi|+5Gi               # through the PVC if bound (StorageClass must allow it)
 lhtx restore BACKUP|VOLUME [--name N] [--pvc NS/NAME|auto]   # backup → NEW volume (+ PV/PVC)
+lhtx clone VOLUME [--snapshot S] [--pvc NS/NAME|auto]       # volume/snapshot → NEW volume (safe "revert")
 lhtx attach VOLUME NODE [--maintenance]    # like Attach in the web UI (ticket "longhorn-ui")
 lhtx detach VOLUME                         # removes only that ticket, never the CSI one
 lhtx jobs add|remove VOLUME JOB|group:NAME...   # recurring job labels on the volume
@@ -226,7 +227,9 @@ UID precondition. A restore creates a Longhorn Volume with `spec.fromBackup`
 (`driver.longhorn.io`, `volumeHandle` = volume, reclaim `Retain`, Longhorn's
 static StorageClass) and a PVC bound to it by `volumeName`, like the web UI's
 "Restore" + "Create PV/PVC"; existing volumes/PVs/PVCs of those names are
-refused up front. Changes to objects owned by Flux, Argo CD or Helm (labels
+refused up front. A clone works the same with `spec.dataSource`
+(`vol://VOLUME` or `snap://VOLUME/SNAPSHOT`) instead of `fromBackup`.
+Changes to objects owned by Flux, Argo CD or Helm (labels
 and annotations of those tools) carry a warning: the next reconcile reverts
 them, change them in Git instead. The credential secret picker for backup
 targets reads secret **names** through the metadata API – secret data never
@@ -245,6 +248,7 @@ TUI:
 | Key | |
 |---|---|
 | `1` … `7` | Volumes · Nodes → disks → replicas · Activity · Settings · Health · Backups (backup volumes → backups, `J` recurring jobs, `t` backup targets) · Orphans (only if there are any) |
+| `C` | snapshots panel (write mode): clone the snapshot into a new volume (+ PV/PVC) – look at old data without reverting |
 | `r` | backups tab (write mode): restore the newest backup of the backup volume, or the selected backup in a backup list, into a new volume (+ PV/PVC) |
 | `n`, `enter`, `X` | recurring jobs / backup targets pages (write mode): new, edit, delete – forms with live checks (cron: next runs; targets: secret picker); `s` syncs a target now |
 | `↑↓`/`jk`, `g`/`G` | move |
@@ -525,7 +529,8 @@ engines     24      22ms        20.8 KiB     5              34.8 KiB      69.6 K
 3. **Actions** ✔ snapshot/backup create, snapshot/replica delete, replica count,
    scheduling/eviction for nodes and disks, settings, engine upgrade, expansion,
    attach/detach, recurring job assignment, recurring jobs and backup targets
-   (create/edit/delete), restore into a new volume with PV/PVC – with preview,
+   (create/edit/delete), restore into a new volume with PV/PVC, clone of a
+   volume or snapshot – with preview,
    confirmation, client and server dry run · open: switching a workload to the
    restored volume (scale down, swap PV/PVC, scale up, keep the old volume for
    rollback; needs a plan for GitOps-managed workloads)

@@ -107,6 +107,16 @@ func backupWhen(b *longhorn.Backup) string {
 
 // restoreKey: r on the backup volumes page and in backup lists.
 func (m *model) restoreKey(p *page, key string) (tea.Cmd, bool) {
+	if key == "C" && p.kind == pDetail && p.panel == panelSnapshots {
+		rows := m.rowsFor(p)
+		vv := m.findView(p.vol)
+		if p.cursor < len(rows) && vv != nil {
+			if s, ok := rows[p.cursor].ref.(*longhorn.VolumeSnapshot); ok {
+				return m.startClone(vv.Volume, s.Name), true
+			}
+		}
+		return nil, true
+	}
 	if key != "r" {
 		return nil, false
 	}
@@ -125,4 +135,72 @@ func (m *model) restoreKey(p *page, key string) (tea.Cmd, bool) {
 		}
 	}
 	return nil, false
+}
+
+// ---------------------------------------------------------------- clone (C)
+
+type clonePlanMsg struct {
+	client   *longhorn.Client
+	src      *longhorn.Volume
+	snapshot string
+	spec     longhorn.RestoreSpec
+}
+
+// startClone loads the defaults (one GET of a setting) and opens the form.
+func (m *model) startClone(src *longhorn.Volume, snapshot string) tea.Cmd {
+	if !m.requireRW() || m.client == nil {
+		return nil
+	}
+	c, ctx := m.client, m.ctx
+	return func() tea.Msg {
+		return clonePlanMsg{client: c, src: src, snapshot: snapshot, spec: c.CloneDefaults(ctx, src, time.Now())}
+	}
+}
+
+func (m *model) cloneForm(msg clonePlanMsg) {
+	if msg.client != m.client {
+		return
+	}
+	c, s := msg.client, msg.spec
+	pvc := ""
+	if s.PVCNamespace != "" {
+		pvc = s.PVCNamespace + "/" + s.Name
+	}
+	what := "current data"
+	if msg.snapshot != "" {
+		what = "snapshot " + msg.snapshot
+	}
+	f := &form{title: "Clone " + what + " of " + volLabelOf(msg.src) + " into a new volume", fields: []formField{
+		{key: "name", label: "new volume", value: s.Name, hint: "also the PV name"},
+		{key: "replicas", label: "replicas", value: fmt.Sprint(s.Replicas)},
+		{key: "pvc", label: "PVC", value: pvc, hint: "namespace/name, empty = volume only"},
+		{key: "sc", label: "storage class", value: s.StorageClass, hint: "of PV and PVC"},
+	}}
+	f.live = func(map[string]string) []string {
+		return []string{"the source volume is not changed – mount the clone next to it to look at the old data"}
+	}
+	f.submitBatch = func(v map[string]string) (string, []*longhorn.Action, error) {
+		s.Name = strings.TrimSpace(v["name"])
+		n, err := strconv.Atoi(strings.TrimSpace(v["replicas"]))
+		if err != nil {
+			return "", nil, fmt.Errorf("replicas: a number")
+		}
+		s.Replicas, s.StorageClass = n, strings.TrimSpace(v["sc"])
+		s.PVCNamespace, s.PVCName = "", ""
+		if p := strings.TrimSpace(v["pvc"]); p != "" {
+			ns, name, ok := strings.Cut(p, "/")
+			if !ok || ns == "" || name == "" {
+				return "", nil, fmt.Errorf("PVC: namespace/name")
+			}
+			s.PVCNamespace, s.PVCName = ns, name
+		}
+		ctx, cancel := context.WithTimeout(m.ctx, 10*time.Second)
+		defer cancel()
+		acts, err := c.BuildClone(ctx, msg.src, msg.snapshot, s)
+		if err != nil {
+			return "", nil, err
+		}
+		return acts[0].Title, acts, nil
+	}
+	m.openForm(f)
 }

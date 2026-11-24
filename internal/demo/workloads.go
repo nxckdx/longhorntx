@@ -251,6 +251,22 @@ func (s *sim) scaled(ctx context.Context, gvr schema.GroupVersionResource, nsNam
 	})
 }
 
+func (s *sim) markUnbound(ctx context.Context, vol string) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, v := range s.d.volumes {
+		if v.Name == vol {
+			v.Status.KubernetesStatus.LastPVCRefAt = now
+			s.update(ctx, longhorn.GVRVolume, v)
+			return
+		}
+	}
+	s.patchStatus(ctx, longhorn.GVRVolume, vol, func(o *unstructured.Unstructured) {
+		_ = unstructured.SetNestedField(o.Object, now, "status", "kubernetesStatus", "lastPVCRefAt")
+	})
+}
+
 func (s *sim) releasePV(ctx context.Context, nsName, claim string) {
 	time.Sleep(300 * time.Millisecond)
 	pvs, err := s.dyn.Resource(gvrPV).List(ctx, metav1.ListOptions{})
@@ -263,6 +279,9 @@ func (s *sim) releasePV(ctx context.Context, nsName, claim string) {
 		if n == nsName && c == claim {
 			_ = unstructured.SetNestedField(pv.Object, "Released", "status", "phase")
 			_, _ = s.dyn.Resource(gvrPV).Update(ctx, &pv, metav1.UpdateOptions{})
+			// Longhorn notes that the PVC no longer uses the volume
+			vol, _, _ := unstructured.NestedString(pv.Object, "spec", "csi", "volumeHandle")
+			s.markUnbound(ctx, vol)
 		}
 	}
 }

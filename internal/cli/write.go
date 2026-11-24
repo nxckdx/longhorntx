@@ -638,5 +638,5 @@ func writeCmds(g *globals) []*cobra.Command {
 			func(n *longhorn.Node, d string, cancel bool) (*longhorn.Action, error) {
 				return longhorn.SetEviction(n, d, !cancel)
 			}, true),
-	}, attachCmds(g)...)
+	}, append(attachCmds(g), freezeCmds(g)...)...)
 }

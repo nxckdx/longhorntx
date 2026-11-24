@@ -3,7 +3,6 @@ package switchover
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -11,38 +10,17 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/dynamic"
 
 	"github.com/nxckdx/longhorntx/internal/longhorn"
 )
 
 var (
-	gvrPod         = schema.GroupVersionResource{Version: "v1", Resource: "pods"}
-	gvrPVC         = schema.GroupVersionResource{Version: "v1", Resource: "persistentvolumeclaims"}
-	gvrPV          = schema.GroupVersionResource{Version: "v1", Resource: "persistentvolumes"}
-	gvrReplicaSet  = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "replicasets"}
-	gvrDeployment  = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
-	gvrStatefulSet = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "statefulsets"}
-	gvrHPA         = schema.GroupVersionResource{Group: "autoscaling", Version: "v2", Resource: "horizontalpodautoscalers"}
+	gvrPod = schema.GroupVersionResource{Version: "v1", Resource: "pods"}
+	gvrPVC = schema.GroupVersionResource{Version: "v1", Resource: "persistentvolumeclaims"}
+	gvrPV  = schema.GroupVersionResource{Version: "v1", Resource: "persistentvolumes"}
 )
 
 const longhornDriver = "driver.longhorn.io"
-
-// Workload is a Deployment or StatefulSet that mounts the PVC.
-type Workload struct {
-	Kind     string `json:"kind"` // Deployment | StatefulSet
-	Name     string `json:"name"`
-	Replicas int64  `json:"replicas"` // before the switch
-}
-
-func (w Workload) String() string { return w.Kind + "/" + w.Name }
-
-func (w Workload) gvr() schema.GroupVersionResource {
-	if w.Kind == "StatefulSet" {
-		return gvrStatefulSet
-	}
-	return gvrDeployment
-}
 
 // Plan is everything the switch does, decided up front and shown before
 // anything changes. It is also the journal written while it runs.
@@ -68,13 +46,12 @@ type Plan struct {
 	FSType       string            `json:"fsType"`
 	PVAttributes map[string]string `json:"pvAttributes,omitempty"`
 
-	Workloads []Workload `json:"workloads"`
-	Flux      []FluxRef  `json:"flux"`
+	// Freeze: the pods that mount the PVC and their owners; they are
+	// stopped by freezing the PVC (no scaling, no GitOps changes)
+	Freeze *FreezePlan `json:"freeze"`
 
 	Blockers []string `json:"blockers,omitempty"` // reasons not to run
 	Warnings []string `json:"warnings,omitempty"`
-
-	pods int // pods that mount the PVC
 }
 
 func (p *Plan) block(format string, a ...any) {
@@ -123,11 +100,6 @@ func build(ctx context.Context, c *longhorn.Client, namespace, pvc, newVolume st
 	}
 	p.Labels = claim.GetLabels()
 	p.Annotations = keepAnnotations(claim.GetAnnotations())
-	flux := map[string]FluxRef{}
-	addFlux(flux, fluxOwners(claim.GetLabels())...)
-	if u := unsupportedOwner(claim.GetLabels(), claim.GetAnnotations()); u != "" {
-		p.block("the PVC is managed by %s", u)
-	}
 
 	// the PV and the Longhorn volume behind it
 	if p.OldPV != "" {
@@ -198,123 +170,26 @@ func build(ctx context.Context, c *longhorn.Client, namespace, pvc, newVolume st
 		p.Request = p.NewSize
 	}
 
-	// who mounts the PVC
-	if err := p.findWorkloads(ctx, dyn, flux); err != nil {
+	// who mounts the PVC: they are stopped by freezing it
+	fp, err := PlanFreeze(ctx, c, []string{p.PVCRef()}, "switch "+p.PVCRef()+" to "+newVolume)
+	if err != nil {
 		return nil, err
 	}
-	p.Flux = sortedFlux(flux)
-	for i := range p.Flux {
-		s, err := readSuspended(ctx, dyn, p.Flux[i])
-		if err != nil {
-			if apierrors.IsNotFound(err) || strings.Contains(err.Error(), "could not find the requested resource") {
-				p.block("%s is named in the labels but not found", p.Flux[i])
-				continue
+	p.Freeze = fp
+	p.Warnings = append(p.Warnings, fp.Warnings...)
+	for _, pod := range fp.Pods {
+		ns, n, _ := strings.Cut(pod, "/")
+		if po, err := dyn.Resource(gvrPod).Namespace(ns).Get(ctx, n, metav1.GetOptions{}); err == nil {
+			if k, cl := owner(po); k == "Cluster" {
+				p.warn("this is an instance of the CloudNativePG cluster %s: restoring one instance's PVC does not restore the database "+
+					"consistently (the other instances keep their data, the operator may re-sync or fail over) – prefer CNPG's own recovery", cl)
 			}
-			return nil, err
-		}
-		p.Flux[i].WasSuspended = s
-	}
-	p.addWarnings()
-	return p, nil
-}
-
-func (p *Plan) findWorkloads(ctx context.Context, dyn dynamic.Interface, flux map[string]FluxRef) error {
-	pods, err := dyn.Resource(gvrPod).Namespace(p.Namespace).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return fmt.Errorf("pods in %s: %w", p.Namespace, err)
-	}
-	seen := map[string]bool{}
-	for _, pod := range pods.Items {
-		if !mountsClaim(&pod, p.PVC) {
-			continue
-		}
-		p.pods++
-		kind, name := owner(&pod)
-		switch kind {
-		case "ReplicaSet":
-			rs, err := dyn.Resource(gvrReplicaSet).Namespace(p.Namespace).Get(ctx, name, metav1.GetOptions{})
-			if err != nil {
-				return fmt.Errorf("ReplicaSet %s: %w", name, err)
-			}
-			k, n := owner(rs)
-			if k != "Deployment" {
-				p.block("pod %s belongs to ReplicaSet %s without a Deployment", pod.GetName(), name)
-				continue
-			}
-			kind, name = k, n
-		case "StatefulSet":
-		case "Cluster":
-			p.block("pod %s belongs to a CloudNativePG Cluster (%s): its PVCs are managed by the operator – use CNPG's own recovery, or restore into a new volume and bootstrap a new cluster from it", pod.GetName(), name)
-			continue
-		case "":
-			p.block("pod %s has no owner – delete it yourself first", pod.GetName())
-			continue
-		default:
-			p.block("pod %s belongs to a %s (%s) – lhtx can only scale Deployments and StatefulSets", pod.GetName(), kind, name)
-			continue
-		}
-		key := kind + "/" + name
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		w := Workload{Kind: kind, Name: name}
-		obj, err := dyn.Resource(w.gvr()).Namespace(p.Namespace).Get(ctx, name, metav1.GetOptions{})
-		if err != nil {
-			return fmt.Errorf("%s: %w", w, err)
-		}
-		if k, n := owner(obj); k != "" {
-			p.block("%s is managed by %s %s (an operator) – it would scale it back up; stop it through the operator", w, k, n)
-			continue
-		}
-		w.Replicas, _, _ = unstructured.NestedInt64(obj.Object, "spec", "replicas")
-		if _, found, _ := unstructured.NestedInt64(obj.Object, "spec", "replicas"); !found {
-			w.Replicas = 1
-		}
-		addFlux(flux, fluxOwners(obj.GetLabels())...)
-		if u := unsupportedOwner(obj.GetLabels(), obj.GetAnnotations()); u != "" {
-			p.block("%s is managed by %s", w, u)
-		}
-		p.Workloads = append(p.Workloads, w)
-	}
-	sort.Slice(p.Workloads, func(i, j int) bool { return p.Workloads[i].String() < p.Workloads[j].String() })
-
-	// an autoscaler would undo scaling to 0
-	hpas, err := dyn.Resource(gvrHPA).Namespace(p.Namespace).List(ctx, metav1.ListOptions{})
-	if err == nil {
-		for _, h := range hpas.Items {
-			k, _, _ := unstructured.NestedString(h.Object, "spec", "scaleTargetRef", "kind")
-			n, _, _ := unstructured.NestedString(h.Object, "spec", "scaleTargetRef", "name")
-			for _, w := range p.Workloads {
-				if w.Kind == k && w.Name == n {
-					p.block("HorizontalPodAutoscaler %s scales %s – it would scale it back up", h.GetName(), w)
-				}
-			}
-		}
-	}
-	return nil
-}
-
-func (p *Plan) addWarnings() {
-	if p.pods == 0 {
-		p.warn("no running pod uses the PVC: nothing is scaled (anything started meanwhile would block the switch)")
-	}
-	for _, w := range p.Workloads {
-		if w.Kind == "StatefulSet" && w.Replicas > 1 {
-			p.warn("%s has %d replicas: all of them stop during the switch, not only the one using this PVC", w, w.Replicas)
-		}
-	}
-	for _, f := range p.Flux {
-		switch {
-		case f.WasSuspended:
-			p.warn("%s is already suspended and stays suspended", f)
-		case f.Kind == "Kustomization":
-			p.warn("while %s is suspended Flux applies none of its objects (only for the few minutes of the switch)", f)
 		}
 	}
 	if p.OldReclaim == "Delete" {
 		p.warn("the old PV has reclaim policy Delete: it is set to Retain first, so deleting the old PVC keeps the old volume for a rollback")
 	}
+	return p, nil
 }
 
 func mountsClaim(pod *unstructured.Unstructured, claim string) bool {
@@ -378,15 +253,12 @@ func (p *Plan) Steps() []string {
 	var out []string
 	add := func(f string, a ...any) { out = append(out, fmt.Sprintf(f, a...)) }
 	add("wait until volume %s is restored/ready and detached", p.NewVolume)
-	for _, f := range p.Flux {
-		if !f.WasSuspended {
-			add("suspend %s (spec.suspend: true)", f)
-		}
+	pods := "no pod mounts it right now"
+	if p.Freeze != nil && len(p.Freeze.Pods) > 0 {
+		pods = fmt.Sprintf("delete its %d pod(s): %s", len(p.Freeze.Pods), strings.Join(firstN(p.Freeze.Pods, 3), ", "))
 	}
-	for _, w := range p.Workloads {
-		add("scale %s from %d to 0", w, w.Replicas)
-	}
-	add("wait until no pod uses %s and volume %s is detached", p.PVCRef(), p.OldVolume)
+	add("freeze %s (admission policy: no pod may mount it, only lhtx may delete/create it) and %s", p.PVCRef(), pods)
+	add("wait until volume %s is detached", p.OldVolume)
 	if p.OldReclaim != "Retain" {
 		add("PV %s: reclaim policy %s → Retain (keeps volume %s)", p.OldPV, p.OldReclaim, p.OldVolume)
 	}
@@ -397,14 +269,15 @@ func (p *Plan) Steps() []string {
 		add("create PV %s (volume %s, %s, class %s)", p.NewVolume, p.NewVolume, human(p.NewSize), p.StorageClass)
 	}
 	add("create PVC %s (same labels/annotations, %s) bound to it, wait until Bound", p.PVCRef(), human(p.Request))
-	for _, w := range p.Workloads {
-		add("scale %s back to %d", w, w.Replicas)
-	}
-	for _, f := range p.Flux {
-		if !f.WasSuspended {
-			add("resume %s and request a reconcile", f)
+	owners := "their controllers"
+	if p.Freeze != nil && len(p.Freeze.Owners) > 0 {
+		var o []string
+		for _, x := range p.Freeze.Owners {
+			o = append(o, x.Kind+"/"+x.Name)
 		}
+		owners = strings.Join(firstN(o, 3), ", ")
 	}
+	add("unfreeze; %s start the pods again (nudged), wait until the volume is attached", owners)
 	add("keep volume %s for a rollback (lhtx switch %s --to-volume %s)", p.OldVolume, p.PVCRef(), p.OldVolume)
 	return out
 }

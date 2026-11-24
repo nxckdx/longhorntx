@@ -10,9 +10,6 @@ import (
 	"strings"
 	"time"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-
 	"github.com/nxckdx/longhorntx/internal/longhorn"
 )
 
@@ -76,9 +73,9 @@ func Journals(dir string) []JournalEntry {
 	return out
 }
 
-// Checks are findings for doctor / the health tab: Flux objects that are
-// suspended (maybe left over) and switches of this machine that did not
-// finish. Flux being absent is not an error.
+// Checks are findings for doctor / the health tab: active freezes (pods of
+// frozen PVCs cannot start) and switches of this machine that did not
+// finish.
 func Checks(ctx context.Context, c *longhorn.Client, journalDir string) []longhorn.Finding {
 	var f []longhorn.Finding
 	for _, e := range Journals(journalDir) {
@@ -94,19 +91,13 @@ func Checks(ctx context.Context, c *longhorn.Client, journalDir string) []longho
 		f = append(f, longhorn.Finding{Severity: longhorn.SevWarning, Check: "switch", Object: e.PVC, Message: msg,
 			Hint: "see " + e.Path + "; check the workload's replicas and suspended Flux objects"})
 	}
-	dyn := c.Dynamic()
-	for _, kind := range []string{"Kustomization", "HelmRelease"} {
-		l, err := dyn.Resource(FluxRef{Kind: kind}.gvr()).List(ctx, metav1.ListOptions{})
-		if err != nil {
-			continue // Flux not installed or not allowed
-		}
-		for _, it := range l.Items {
-			if s, _, _ := unstructured.NestedBool(it.Object, "spec", "suspend"); s {
-				f = append(f, longhorn.Finding{Severity: longhorn.SevInfo, Check: "flux",
-					Object:  kind + " " + it.GetNamespace() + "/" + it.GetName(),
-					Message: "suspended: Flux applies no changes from Git",
-					Hint:    "intended? else: flux resume " + strings.ToLower(kind) + " " + it.GetName() + " -n " + it.GetNamespace()})
-			}
+	// active freezes: pods of these PVCs cannot start until unfrozen
+	if fs, err := ActiveFreezes(ctx, c.Dynamic()); err == nil {
+		for _, fr := range fs {
+			f = append(f, longhorn.Finding{Severity: longhorn.SevWarning, Check: "freeze", Object: fr.Name,
+				Message: fmt.Sprintf("%d PVCs frozen since %s (%s): their pods cannot start", len(fr.PVCs),
+					fr.Created.Local().Format("2006-01-02 15:04"), dashIf(fr.Reason)),
+				Hint: "lhtx unfreeze " + fr.Name})
 		}
 	}
 	return f
@@ -118,6 +109,13 @@ func firstLine(s string) string {
 	}
 	if len(s) > 140 {
 		s = s[:137] + "…"
+	}
+	return s
+}
+
+func dashIf(s string) string {
+	if s == "" {
+		return "-"
 	}
 	return s
 }

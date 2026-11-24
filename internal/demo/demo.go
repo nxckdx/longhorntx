@@ -54,10 +54,13 @@ func NewClient(ctx context.Context) *longhorn.Client {
 	kinds[longhorn.GVRStorageClass] = "StorageClassList"
 	for g, k := range map[schema.GroupVersionResource]string{gvrPod: "PodList", gvrPV: "PersistentVolumeList",
 		gvrReplicaSet: "ReplicaSetList", gvrDeployment: "DeploymentList", gvrStatefulSet: "StatefulSetList",
-		gvrHPA: "HorizontalPodAutoscalerList", gvrKS: "KustomizationList", gvrHR: "HelmReleaseList"} {
+		gvrHPA: "HorizontalPodAutoscalerList", gvrKS: "KustomizationList", gvrHR: "HelmReleaseList",
+		gvrVAP: "ValidatingAdmissionPolicyList", gvrVAPB: "ValidatingAdmissionPolicyBindingList",
+		gvrCluster: "ClusterList", gvrProm: "PrometheusList"} {
 		kinds[g] = k
 	}
-	dyn := dynfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), kinds, d.objects()...)
+	objs := append(d.objects(), operatorObjects()...)
+	dyn := dynfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), kinds, objs...)
 	// The fake client ignores label selectors on watches; lhtx relies on
 	// them for the per-volume engine watches.
 	dyn.PrependWatchReactor("*", func(a k8stesting.Action) (bool, watch.Interface, error) {
@@ -84,8 +87,11 @@ func NewClient(ctx context.Context) *longhorn.Client {
 		})
 	}
 
-	s := &sim{d: d, dyn: dyn, claimsOf: map[string][]string{}, nodeOf: map[string]string{}}
+	s := &sim{d: d, dyn: dyn, claimsOf: map[string][]string{}, nodeOf: map[string]string{},
+		adm: &admission{frozen: map[string]map[string]bool{}, pods: map[string]*podInfo{}, stopped: map[string][]*podInfo{}}}
+	s.registerPods(objs)
 	s.workloadReactors(ctx)
+	s.admissionReactors(ctx)
 	// Expanding a PVC: grow the volume a moment later, like the CSI resizer.
 	dyn.PrependReactor("patch", "persistentvolumeclaims", func(a k8stesting.Action) (bool, runtime.Object, error) {
 		pa := a.(k8stesting.PatchActionImpl)
@@ -235,6 +241,7 @@ type sim struct {
 	// workloads scaled to 0: their PVCs and node, to start them again
 	claimsOf map[string][]string
 	nodeOf   map[string]string
+	adm      *admission // freeze policies, running and stopped pods (freeze.go)
 }
 
 func (s *sim) reconcileAttachment(ctx context.Context, name string) {
@@ -370,6 +377,17 @@ func (s *sim) runBackup(ctx context.Context, name string) {
 func (s *sim) restored(ctx context.Context, name string, ks map[string]any) {
 	time.Sleep(600 * time.Millisecond)
 	if ks != nil { // a PVC was bound to it
+		s.mu.Lock()
+		for _, v := range s.d.volumes { // one of the demo's own volumes (switching back)
+			if v.Name == name {
+				v.Status.KubernetesStatus = longhorn.KubernetesStatus{PVName: ks["pvName"].(string), PVStatus: "Bound",
+					Namespace: ks["namespace"].(string), PVCName: ks["pvcName"].(string)}
+				s.update(ctx, longhorn.GVRVolume, v)
+				s.mu.Unlock()
+				return
+			}
+		}
+		s.mu.Unlock()
 		s.patchStatus(ctx, longhorn.GVRVolume, name, func(u *unstructured.Unstructured) {
 			_ = unstructured.SetNestedMap(u.Object, ks, "status", "kubernetesStatus")
 		})

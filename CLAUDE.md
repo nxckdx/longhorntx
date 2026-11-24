@@ -40,10 +40,11 @@ internal/demo       --demo: fake dynamic client with made-up data and a
 internal/config     ~/.config/lhtx/config.yaml: defaults + per-context overrides
                     (exact name or glob); flags/env beat it (cli/root.go loadConfig,
                     tui applySettings on every connect; traffic budget tui/settings.go)
-internal/switchover restore/clone → switch a PVC to another volume: plan (workloads via
-                    pods → RS → Deployment/STS, Flux owners by label, blockers), run
-                    (suspend Flux, scale 0, Retain, re-create PV/PVC, scale up, resume;
-                    rollback until the old PVC is deleted; journal)
+internal/switchover freeze (ValidatingAdmissionPolicy denies pods mounting the PVCs and
+                    PVC create/delete except our user; delete pods; unfreeze nudges
+                    owners) and switch (restore → freeze → swap PV/PVC → unfreeze;
+                    rollback until the old PVC is deleted; journal). No per-operator
+                    or per-GitOps logic – the desired state is never changed.
 internal/overview   doctor summary per context (lhtx overview, TUI context picker o)
 internal/update     release check (daily, cached) and self-update from GitHub releases
 internal/cli        cobra commands (read: volumes.go, nodes.go, data.go, activity.go,

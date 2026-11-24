@@ -106,6 +106,17 @@ type KubernetesStatus struct {
 	PVStatus  string `json:"pvStatus"`
 	Namespace string `json:"namespace"`
 	PVCName   string `json:"pvcName"`
+	// LastPVCRefAt is set when the PVC no longer uses the volume (deleted
+	// or bound elsewhere); Namespace/PVCName then name the former PVC.
+	LastPVCRefAt string `json:"lastPVCRefAt"`
+}
+
+// BoundPVC is like PVC but only for the PVC that uses the volume now.
+func (v *Volume) BoundPVC() string {
+	if v.Status.KubernetesStatus.LastPVCRefAt != "" {
+		return ""
+	}
+	return v.PVC()
 }
 
 // PVC returns "namespace/pvc" or "" if the volume is not bound to a PVC.

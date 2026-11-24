@@ -45,16 +45,13 @@ type journal struct {
 }
 
 type runner struct {
-	ctx context.Context
-	c   *longhorn.Client
-	dyn dynamic.Interface
-	p   *Plan
-	o   Options
-	j   journal
-	// what was done and has to be undone if a later step fails before
-	// the old PVC is gone
-	suspended []FluxRef
-	scaled    []Workload
+	ctx    context.Context
+	c      *longhorn.Client
+	dyn    dynamic.Interface
+	p      *Plan
+	o      Options
+	j      journal
+	freeze *Freeze // active while the PVC is swapped
 }
 
 // pastReturn marks a failure after the old PVC's delete was accepted:
@@ -116,15 +113,13 @@ func (r *runner) run() error {
 	}
 
 	// --- reversible part ---------------------------------------------
-	if err := r.suspendFlux(); err != nil {
+	fo := FreezeOptions{Log: r.o.Log, Wait: r.o.Wait, Poll: r.o.Poll}
+	f, err := ApplyFreeze(r.ctx, r.c, p.Freeze, fo)
+	r.freeze = f
+	if err != nil {
 		return r.rollback(err)
 	}
-	if err := r.scaleDown(); err != nil {
-		return r.rollback(err)
-	}
-	if err := r.waitUnused(); err != nil {
-		return r.rollback(err)
-	}
+	r.step("%s frozen (%s), its pods are gone and volume %s is detached", p.PVCRef(), f.Name, p.OldVolume)
 	if p.OldReclaim != "Retain" && p.OldPV != "" {
 		if err := r.patch(gvrPV, "", p.OldPV, `{"spec":{"persistentVolumeReclaimPolicy":"Retain"}}`); err != nil {
 			return r.rollback(fmt.Errorf("set Retain on PV %s: %w", p.OldPV, err))
@@ -143,55 +138,53 @@ func (r *runner) run() error {
 	if err := r.bindNew(); err != nil {
 		return r.stuck(err)
 	}
-	if err := r.scaleUp(); err != nil {
-		return r.stuck(err)
+	unfreezeErr := Unfreeze(r.ctx, r.c, *f, fo)
+	r.freeze = nil
+	switch {
+	case unfreezeErr != nil && strings.Contains(unfreezeErr.Error(), "remove policy"):
+		return fmt.Errorf("the PVC uses %s now, but ending the freeze failed: %w – run lhtx unfreeze %s", p.NewVolume, unfreezeErr, f.Name)
+	case unfreezeErr != nil:
+		r.step("unfrozen; %v", unfreezeErr)
+	default:
+		r.step("unfrozen, the workload runs on %s", p.NewVolume)
 	}
-	if err := r.resumeFlux(); err != nil {
-		return r.stuck(err)
-	}
-	r.waitReady() // only reports
 	r.o.Log("done: %s now uses %s; the old volume %s is kept (detached) – switch back with: lhtx --rw switch %s --to-volume %s",
 		p.PVCRef(), p.NewVolume, p.OldVolume, p.PVCRef(), p.OldVolume)
 	r.step("finished")
 	return nil
 }
 
-// rollback undoes scaling and suspending (before the old PVC was deleted).
+// rollback ends the freeze (before the old PVC was deleted): the pods
+// start again on the old volume.
 func (r *runner) rollback(cause error) error {
 	r.o.Log("✖ %v – rolling back", cause)
+	if r.freeze == nil {
+		r.j.RolledBack = true
+		return fmt.Errorf("%w (nothing changed; volume %s stays – delete it if not needed)", cause, r.p.NewVolume)
+	}
 	// also after Ctrl+C: undo with a fresh context
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.ctx), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.ctx), 5*time.Minute)
 	defer cancel()
-	r.ctx = ctx
-	var errs []string
-	for _, w := range r.scaled {
-		if err := r.setReplicas(w, w.Replicas); err != nil {
-			errs = append(errs, err.Error())
-		} else {
-			r.o.Log("↺ %s scaled back to %d", w, w.Replicas)
-		}
-	}
-	for _, f := range r.suspended {
-		if err := setSuspend(r.ctx, r.dyn, f, false); err != nil {
-			errs = append(errs, err.Error())
-		} else {
-			r.o.Log("↺ %s resumed", f)
-		}
-	}
-	if len(errs) > 0 {
-		return fmt.Errorf("%w; rollback incomplete: %s (journal: %s)", cause, strings.Join(errs, "; "), r.o.Journal)
+	err := Unfreeze(ctx, r.c, *r.freeze, FreezeOptions{Log: func(f string, a ...any) { r.o.Log("↺ "+f, a...) }, Wait: 2 * time.Minute, Poll: r.o.Poll})
+	if err != nil && strings.Contains(err.Error(), "remove policy") {
+		return fmt.Errorf("%w; rollback incomplete: %v – run lhtx unfreeze %s (journal: %s)", cause, err, r.freeze.Name, r.o.Journal)
 	}
 	r.j.RolledBack = true
-	return fmt.Errorf("%w (rolled back: workloads and Flux as before, the PVC untouched; volume %s stays – delete it if not needed)", cause, r.p.NewVolume)
+	return fmt.Errorf("%w (rolled back: unfrozen, the PVC untouched; volume %s stays – delete it if not needed)", cause, r.p.NewVolume)
 }
 
-// stuck explains the state after the point of no return.
+// stuck explains the state after the point of no return. The freeze stays:
+// nothing can start on (or re-create) the PVC until it is fixed.
 func (r *runner) stuck(cause error) error {
 	p := r.p
+	name := ""
+	if r.freeze != nil {
+		name = r.freeze.Name
+	}
 	return fmt.Errorf("%w – the old PVC is already deleted; old volume %s is kept (PV %s, Retain). "+
-		"Fix the cause and run the same switch again, or switch back with: lhtx --rw switch %s --to-volume %s. "+
-		"Workloads/Flux may still be scaled down/suspended (journal: %s)",
-		cause, p.OldVolume, p.OldPV, p.PVCRef(), p.OldVolume, r.o.Journal)
+		"The PVC stays frozen (%s) so nothing re-creates it meanwhile. Run the same switch again, or switch back with: "+
+		"lhtx --rw switch %s --to-volume %s, then lhtx unfreeze %s (journal: %s)",
+		cause, p.OldVolume, p.OldPV, name, p.PVCRef(), p.OldVolume, name, r.o.Journal)
 }
 
 // waitTargetReady waits until the restore/clone into the target finished
@@ -256,91 +249,6 @@ func (r *runner) sleep() error {
 		return r.ctx.Err()
 	case <-time.After(r.o.Poll):
 		return nil
-	}
-}
-
-func (r *runner) suspendFlux() error {
-	for _, f := range r.p.Flux {
-		if f.WasSuspended {
-			continue
-		}
-		if err := setSuspend(r.ctx, r.dyn, f, true); err != nil {
-			return fmt.Errorf("suspend %w", err)
-		}
-		r.suspended = append(r.suspended, f)
-		r.step("%s suspended", f)
-	}
-	return nil
-}
-
-func (r *runner) resumeFlux() error {
-	for _, f := range r.suspended {
-		if err := setSuspend(r.ctx, r.dyn, f, false); err != nil {
-			return fmt.Errorf("resume %w", err)
-		}
-		r.step("%s resumed (reconcile requested)", f)
-	}
-	r.suspended = nil
-	return nil
-}
-
-func (r *runner) setReplicas(w Workload, n int64) error {
-	return r.patch(w.gvr(), r.p.Namespace, w.Name, fmt.Sprintf(`{"spec":{"replicas":%d}}`, n))
-}
-
-func (r *runner) scaleDown() error {
-	for _, w := range r.p.Workloads {
-		if err := r.setReplicas(w, 0); err != nil {
-			return fmt.Errorf("scale %s to 0: %w", w, err)
-		}
-		r.scaled = append(r.scaled, w)
-		r.step("%s scaled to 0 (was %d)", w, w.Replicas)
-	}
-	return nil
-}
-
-func (r *runner) scaleUp() error {
-	for _, w := range r.scaled {
-		if err := r.setReplicas(w, w.Replicas); err != nil {
-			return fmt.Errorf("scale %s to %d: %w", w, w.Replicas, err)
-		}
-		r.step("%s scaled to %d", w, w.Replicas)
-	}
-	r.scaled = nil
-	return nil
-}
-
-// waitUnused waits until no pod mounts the PVC and the old volume is
-// detached.
-func (r *runner) waitUnused() error {
-	deadline := time.Now().Add(r.o.Wait)
-	for {
-		pods, err := r.dyn.Resource(gvrPod).Namespace(r.p.Namespace).List(r.ctx, metav1.ListOptions{})
-		if err != nil {
-			return err
-		}
-		var using []string
-		for i := range pods.Items {
-			if mountsClaim(&pods.Items[i], r.p.PVC) {
-				using = append(using, pods.Items[i].GetName())
-			}
-		}
-		state := "detached"
-		if r.p.OldVolume != "" {
-			if v, err := r.c.Volume(r.ctx, r.p.OldVolume); err == nil {
-				state = v.Status.State
-			}
-		}
-		if len(using) == 0 && state == "detached" {
-			r.step("no pod uses the PVC, volume %s is detached", r.p.OldVolume)
-			return nil
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("still in use after %s: pods %s, volume %s", r.o.Wait, strings.Join(using, ","), state)
-		}
-		if err := r.sleep(); err != nil {
-			return err
-		}
 	}
 }
 
@@ -454,31 +362,6 @@ func (r *runner) bindNew() error {
 		}
 		if err := r.sleep(); err != nil {
 			return err
-		}
-	}
-}
-
-// waitReady reports whether the workloads came up (no failure if not).
-func (r *runner) waitReady() {
-	deadline := time.Now().Add(r.o.Wait)
-	for _, w := range r.p.Workloads {
-		for {
-			u, err := r.dyn.Resource(w.gvr()).Namespace(r.p.Namespace).Get(r.ctx, w.Name, metav1.GetOptions{})
-			ready := int64(0)
-			if err == nil {
-				ready, _, _ = unstructured.NestedInt64(u.Object, "status", "readyReplicas")
-			}
-			if ready >= w.Replicas {
-				r.step("%s ready (%d/%d)", w, ready, w.Replicas)
-				break
-			}
-			if time.Now().After(deadline) || r.ctx.Err() != nil {
-				r.o.Log("⚠ %s not ready yet (%d/%d) – check its pods", w, ready, w.Replicas)
-				break
-			}
-			if r.sleep() != nil {
-				return
-			}
 		}
 	}
 }

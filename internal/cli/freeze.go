@@ -1,0 +1,238 @@
+package cli
+
+import (
+	"fmt"
+	"os"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/spf13/cobra"
+
+	"github.com/nxckdx/longhorntx/internal/longhorn"
+	"github.com/nxckdx/longhorntx/internal/switchover"
+)
+
+func freezeCmds(g *globals) []*cobra.Command {
+	var all, status bool
+	var node, reason string
+	var wait time.Duration
+	freeze := &cobra.Command{
+		Use:   "freeze [NS/PVC…] [--node NODE | --all]",
+		Short: "Stop everything that uses Longhorn volumes, without scaling anything (needs --rw)",
+		Long: `Freezes PVCs: a ValidatingAdmissionPolicy (Kubernetes ≥ 1.30, enforced by
+the API server, no webhook server) denies new pods that mount them and
+creating/deleting the PVCs by anyone else; then their pods are deleted and
+lhtx waits until the volumes are detached.
+
+Nothing in the desired state changes – Deployments, StatefulSets, operators,
+Flux and Argo CD keep their specs and just cannot start pods. So no operator
+deletes its cluster because of a scale-down, and no GitOps tool reverts
+anything. Made for Longhorn upgrades and other maintenance:
+
+  lhtx --rw freeze --all --reason "longhorn 1.12 → 1.13"   # detach everything
+  … upgrade Longhorn …
+  lhtx --rw unfreeze --all                                 # pods start again
+
+  lhtx --rw freeze --node worker-3                          # volumes attached there
+  lhtx --rw freeze shop/db-data shop/uploads
+
+unfreeze removes the policy and nudges the owners of the deleted pods
+(annotation lhtx.io/unfrozen-at) so they start their pods at once instead of
+after their back-off, then waits until the volumes are attached again.
+The freeze lives in the cluster (lhtx freeze --status, lhtx doctor) – it can
+be ended from any machine. Needs cluster-admin rights.`,
+		ValidArgsFunction: g.completeVolumes,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			c, err := g.client()
+			if err != nil {
+				return err
+			}
+			if status {
+				return printFreezes(cmd, c)
+			}
+			pvcs, err := selectPVCs(cmd, c, args, all, node)
+			if err != nil {
+				return err
+			}
+			p, err := switchover.PlanFreeze(ctx, c, pvcs, reason)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Freeze %d PVCs · %s\n\n", len(p.PVCs), c.Cluster.Context)
+			fmt.Printf("  PVCs:   %s\n", strings.Join(short(p.PVCs, 8), ", "))
+			fmt.Printf("  pods:   %d to delete%s\n", len(p.Pods), listSuffix(p.Pods))
+			var owners []string
+			for _, o := range p.Owners {
+				owners = append(owners, o.Kind+" "+o.Namespace+"/"+o.Name)
+			}
+			fmt.Printf("  owners: %d (they cannot start pods until unfreeze)%s\n", len(owners), listSuffix(owners))
+			fmt.Printf("  volumes attached now: %d – lhtx waits until they are detached\n", len(p.Attached))
+			fmt.Printf("  policy: deny pods mounting them, deny PVC create/delete except by %s\n\n", p.User)
+			for _, w := range p.Warnings {
+				fmt.Println("⚠ " + w)
+			}
+			fmt.Println("⚠ until lhtx unfreeze, these workloads stay down – also if lhtx stops or this machine goes away")
+			mode, err := g.dryRun()
+			if err != nil {
+				return err
+			}
+			if mode != longhorn.DryRunNone {
+				fmt.Println("\n(dry run: nothing changed – a freeze has no server dry run)")
+				return nil
+			}
+			if err := g.confirm(true, "freeze"); err != nil {
+				return err
+			}
+			start := time.Now()
+			f, err := switchover.ApplyFreeze(ctx, c, p, switchover.FreezeOptions{Wait: wait, Log: logger(start)})
+			if f != nil {
+				fmt.Printf("\nfrozen: %s – end it with: lhtx --rw unfreeze %s\n", f.Name, f.Name)
+			}
+			return err
+		},
+	}
+	f := freeze.Flags()
+	f.BoolVar(&all, "all", false, "every PVC that has a Longhorn volume (e.g. for a Longhorn upgrade)")
+	f.StringVar(&node, "node", "", "the PVCs whose Longhorn volume is attached on this node")
+	f.StringVar(&reason, "reason", "", "note stored with the freeze (shown by --status and doctor)")
+	f.DurationVar(&wait, "wait", 10*time.Minute, "how long to wait for the volumes to detach")
+	f.BoolVar(&status, "status", false, "list the active freezes")
+	_ = freeze.RegisterFlagCompletionFunc("node", func(c *cobra.Command, _ []string, s string) ([]string, cobra.ShellCompDirective) {
+		return g.completeNodeDisk(c, nil, s)
+	})
+
+	var uall bool
+	var uwait time.Duration
+	unfreeze := &cobra.Command{
+		Use:   "unfreeze [NAME | --all]",
+		Short: "End a freeze: pods may start again, their owners are nudged (needs --rw)",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			c, err := g.client()
+			if err != nil {
+				return err
+			}
+			fs, err := switchover.ActiveFreezes(ctx, c.Dynamic())
+			if err != nil {
+				return err
+			}
+			var sel []switchover.Freeze
+			for _, fr := range fs {
+				if uall || (len(args) == 1 && fr.Name == args[0]) {
+					sel = append(sel, fr)
+				}
+			}
+			switch {
+			case len(fs) == 0:
+				fmt.Println("nothing is frozen")
+				return nil
+			case len(sel) == 0 && len(args) == 0 && len(fs) == 1:
+				sel = fs
+			case len(sel) == 0:
+				_ = printFreezes(cmd, c)
+				return fmt.Errorf("give a freeze NAME or --all")
+			}
+			for _, fr := range sel {
+				fmt.Printf("Unfreeze %s: %d PVCs, %d owners to nudge · %s\n", fr.Name, len(fr.PVCs), len(fr.Owners), c.Cluster.Context)
+			}
+			if !g.rw {
+				return fmt.Errorf("lhtx is read-only by default: add --rw")
+			}
+			if mode, _ := g.dryRun(); mode != longhorn.DryRunNone {
+				fmt.Println("(dry run: nothing changed)")
+				return nil
+			}
+			if err := g.confirm(false, ""); err != nil {
+				return err
+			}
+			start := time.Now()
+			var errs []string
+			for _, fr := range sel {
+				if err := switchover.Unfreeze(ctx, c, fr, switchover.FreezeOptions{Wait: uwait, Log: logger(start)}); err != nil {
+					errs = append(errs, err.Error())
+				}
+			}
+			if len(errs) > 0 {
+				return fmt.Errorf("%s", strings.Join(errs, "; "))
+			}
+			return nil
+		},
+	}
+	unfreeze.Flags().BoolVar(&uall, "all", false, "end all freezes")
+	unfreeze.Flags().DurationVar(&uwait, "wait", 10*time.Minute, "how long to wait for the volumes to be attached again")
+	return []*cobra.Command{freeze, unfreeze}
+}
+
+func logger(start time.Time) func(string, ...any) {
+	return func(f string, a ...any) {
+		fmt.Printf("%6s  %s\n", time.Since(start).Round(time.Second), fmt.Sprintf(f, a...))
+	}
+}
+
+// selectPVCs resolves the arguments: NS/PVC names, --node or --all.
+func selectPVCs(cmd *cobra.Command, c *longhorn.Client, args []string, all bool, node string) ([]string, error) {
+	n := 0
+	for _, b := range []bool{len(args) > 0, all, node != ""} {
+		if b {
+			n++
+		}
+	}
+	if n != 1 {
+		return nil, fmt.Errorf("give NS/PVC names, --node NODE or --all")
+	}
+	if len(args) > 0 {
+		return args, nil
+	}
+	vols, err := c.Volumes(cmd.Context())
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, v := range vols {
+		if v.BoundPVC() == "" {
+			continue
+		}
+		if all || (v.Status.State == "attached" && v.Status.CurrentNodeID == node) {
+			out = append(out, v.BoundPVC())
+		}
+	}
+	sort.Strings(out)
+	if len(out) == 0 {
+		return nil, fmt.Errorf("no PVC matches")
+	}
+	return out, nil
+}
+
+func printFreezes(cmd *cobra.Command, c *longhorn.Client) error {
+	fs, err := switchover.ActiveFreezes(cmd.Context(), c.Dynamic())
+	if err != nil {
+		return err
+	}
+	if len(fs) == 0 {
+		fmt.Println("nothing is frozen")
+		return nil
+	}
+	w := newTab(os.Stdout)
+	fmt.Fprintln(w, "NAME\tSINCE\tPVCS\tOWNERS\tBY\tREASON")
+	for _, f := range fs {
+		fmt.Fprintf(w, "%s\t%s\t%d\t%d\t%s\t%s\n", f.Name, f.Created.Local().Format("2006-01-02 15:04"), len(f.PVCs), len(f.Owners), dash(f.User), dash(f.Reason))
+	}
+	return w.Flush()
+}
+
+func short(s []string, n int) []string {
+	if len(s) <= n {
+		return s
+	}
+	return append(append([]string{}, s[:n]...), fmt.Sprintf("… %d more", len(s)-n))
+}
+
+func listSuffix(s []string) string {
+	if len(s) == 0 {
+		return ""
+	}
+	return ": " + strings.Join(short(s, 5), ", ")
+}

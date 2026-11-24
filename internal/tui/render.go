@@ -433,6 +433,7 @@ func (m *model) viewHelp() string {
    then act on all selected volumes
    X delete replica ([ ] selects in volume details)   D delete snapshot (in panel)
    C (snapshots panel) clone the snapshot into a new volume (+ PV/PVC)
+   B (health tab) back up every attached volume with a late/missing backup
    r (backups panel / backups tab) restore into a new volume (+ PV/PVC)
    C scheduling on/off, E eviction on/off (nodes view)   enter edit (settings)
    X delete orphan, ctrl+x delete all cleanable orphans (orphans tab)

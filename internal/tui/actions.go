@@ -116,6 +116,31 @@ func (m *model) actionKey(p *page, key string) (tea.Cmd, bool) {
 	if cmd, ok := m.restoreKey(p, key); ok {
 		return cmd, true
 	}
+	if p.kind == pHealth && key == "B" {
+		var vols, detached []string
+		for _, n := range m.lateBackupVolumes() {
+			if vv := m.findView(n); vv != nil && vv.State != "attached" {
+				detached = append(detached, dash(vv.PVC))
+				continue
+			}
+			vols = append(vols, n)
+		}
+		if len(vols) == 0 {
+			msg := "no attached volume with a late or missing backup"
+			if len(detached) > 0 {
+				msg += fmt.Sprintf(" (%d detached: Longhorn snapshots only attached volumes)", len(detached))
+			}
+			m.setFlash(msg, len(detached) > 0)
+			return nil, true
+		}
+		cmd := m.volumeAction(vols, "B", nil)
+		if len(detached) > 0 && m.modal != nil && m.modal.action != nil {
+			m.modal.action.Warnings = append(m.modal.action.Warnings,
+				fmt.Sprintf("skipped %d detached volumes (%s): Longhorn snapshots only attached volumes – attach them or let the recurring job do it (setting allow-recurring-job-while-volume-detached)",
+					len(detached), strings.Join(detached, ", ")))
+		}
+		return cmd, true
+	}
 	if p.kind == pOrphans && (key == "X" || key == "ctrl+x") {
 		if !m.requireRW() {
 			return nil, true

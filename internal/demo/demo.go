@@ -123,6 +123,25 @@ func NewClient(ctx context.Context) *longhorn.Client {
 		return false, nil, nil
 	})
 
+	// Snapshots become ready shortly after they are requested; backups run
+	// to Completed in a few seconds (Activity shows them).
+	dyn.PrependReactor("create", "snapshots", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if !isDryRun(a) {
+			if u, ok := a.(k8stesting.CreateActionImpl).GetObject().(*unstructured.Unstructured); ok {
+				go s.snapshotReady(ctx, u.GetName())
+			}
+		}
+		return false, nil, nil
+	})
+	dyn.PrependReactor("create", "backups", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if !isDryRun(a) {
+			if u, ok := a.(k8stesting.CreateActionImpl).GetObject().(*unstructured.Unstructured); ok {
+				go s.runBackup(ctx, u.GetName())
+			}
+		}
+		return false, nil, nil
+	})
+
 	// Attach/detach: follow the attachment tickets like Longhorn does.
 	dyn.PrependReactor("patch", "volumeattachments", func(a k8stesting.Action) (bool, runtime.Object, error) {
 		if !isDryRun(a) {
@@ -262,6 +281,76 @@ func (s *sim) resize(ctx context.Context, pvc string, size int64) {
 			e := s.d.engines[v.Name]
 			e.Spec.VolumeSize = v.Spec.Size
 			s.update(ctx, longhorn.GVREngine, e)
+		}
+	}
+}
+
+func (s *sim) patchStatus(ctx context.Context, g schema.GroupVersionResource, name string, set func(u *unstructured.Unstructured)) bool {
+	res := s.dyn.Resource(g).Namespace(ns)
+	u, err := res.Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return false
+	}
+	set(u)
+	u.SetResourceVersion(strconv.FormatInt(rv.Add(1)+48211, 10))
+	_, err = res.Update(ctx, u, metav1.UpdateOptions{})
+	return err == nil
+}
+
+func (s *sim) snapshotReady(ctx context.Context, name string) {
+	time.Sleep(700 * time.Millisecond)
+	s.patchStatus(ctx, longhorn.GVRSnapshot, name, func(u *unstructured.Unstructured) {
+		vol, _, _ := unstructured.NestedString(u.Object, "spec", "volume")
+		_ = unstructured.SetNestedField(u.Object, true, "status", "readyToUse")
+		_ = unstructured.SetNestedField(u.Object, true, "status", "userCreated")
+		_ = unstructured.SetNestedField(u.Object, time.Now().UTC().Format(time.RFC3339), "status", "creationTime")
+		_ = unstructured.SetNestedField(u.Object, "268435456", "status", "size")
+		_ = unstructured.SetNestedField(u.Object, vol, "status", "volume")
+	})
+}
+
+func (s *sim) runBackup(ctx context.Context, name string) {
+	for p := int64(0); p <= 100; p += 10 {
+		time.Sleep(700 * time.Millisecond)
+		state := "InProgress"
+		if p == 100 {
+			state = "Completed"
+		}
+		ok := s.patchStatus(ctx, longhorn.GVRBackup, name, func(u *unstructured.Unstructured) {
+			vol := u.GetLabels()[longhorn.LabelBackupVolume]
+			snap, _, _ := unstructured.NestedString(u.Object, "spec", "snapshotName")
+			now := time.Now().UTC().Format(time.RFC3339)
+			_ = unstructured.SetNestedField(u.Object, state, "status", "state")
+			_ = unstructured.SetNestedField(u.Object, p, "status", "progress")
+			_ = unstructured.SetNestedField(u.Object, vol, "status", "volumeName")
+			_ = unstructured.SetNestedField(u.Object, snap, "status", "snapshotName")
+			_ = unstructured.SetNestedField(u.Object, "default", "status", "backupTargetName")
+			_ = unstructured.SetNestedField(u.Object, "268435456", "status", "size")
+			// Activity derives the speed from volumeSize: keep it plausible
+			_ = unstructured.SetNestedField(u.Object, "268435456", "status", "volumeSize")
+			_ = unstructured.SetNestedField(u.Object, "26214400", "status", "newlyUploadDataSize")
+			_ = unstructured.SetNestedField(u.Object, now, "status", "snapshotCreatedAt")
+			if p == 100 {
+				_ = unstructured.SetNestedField(u.Object, now, "status", "backupCreatedAt")
+				_ = unstructured.SetNestedField(u.Object, "s3://longhorn-backups@us-east-1/?backup="+u.GetName()+"&volume="+vol, "status", "url")
+			}
+		})
+		if !ok {
+			return
+		}
+	}
+	// like longhorn-manager: the volume records its last backup
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	b, err := s.dyn.Resource(longhorn.GVRBackup).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return
+	}
+	vol := b.GetLabels()[longhorn.LabelBackupVolume]
+	for _, v := range s.d.volumes {
+		if v.Name == vol {
+			v.Status.LastBackup, v.Status.LastBackupAt = name, time.Now().UTC().Format(time.RFC3339)
+			s.update(ctx, longhorn.GVRVolume, v)
 		}
 	}
 }

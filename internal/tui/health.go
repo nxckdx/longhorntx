@@ -59,6 +59,21 @@ func (m *model) loadHealth() tea.Cmd {
 // not on every frame).
 func (m *model) findings() []longhorn.Finding { return m.fcache }
 
+// lateBackupVolumes are the volumes the backup-age check complains about
+// (never backed up, or older than their job expects).
+func (m *model) lateBackupVolumes() []string {
+	var out []string
+	for _, f := range m.findings() {
+		if f.Check != "backup-age" {
+			continue
+		}
+		if vv := m.viewByObject(f.Object); vv != nil {
+			out = append(out, vv.Name)
+		}
+	}
+	return out
+}
+
 // computeFindings runs the checks on what is available right now.
 func (m *model) computeFindings() []longhorn.Finding {
 	if m.store == nil || !m.store.AllSynced() {
@@ -125,6 +140,13 @@ func (m *model) healthTitle() string {
 		t += "  " + sErr.Render(x.err.Error())
 	default:
 		t += sDim.Render(fmt.Sprintf(" · backups/orphans checked %s ago · ctrl+r reload", format.Age(x.loadedAt.Format(time.RFC3339), time.Now())))
+	}
+	if n := len(m.lateBackupVolumes()); n > 0 {
+		if m.rw {
+			t += "  " + fg(cWarn, fmt.Sprintf("B: back up the %d volumes with late/missing backups", n))
+		} else {
+			t += sDim.Render(fmt.Sprintf(" · %d late backups (W, then B backs them up)", n))
+		}
 	}
 	return t
 }

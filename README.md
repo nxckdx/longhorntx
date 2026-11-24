@@ -245,6 +245,8 @@ travels.
 that uses Longhorn volumes – for a Longhorn upgrade, node work or a volume
 swap – without touching a single Deployment, StatefulSet or operator:
 
+![Freeze all volumes for a Longhorn upgrade, then unfreeze: pods stopped by an admission policy, volumes detach and attach again](docs/freeze.gif)
+
 ```
 lhtx --rw freeze --all --reason "longhorn upgrade"   # every PVC with a Longhorn volume
 lhtx --rw freeze --node worker-3                     # volumes attached on a node

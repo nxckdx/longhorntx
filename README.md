@@ -69,7 +69,9 @@ VOLUME = Longhorn volume / PV name, namespace/pvc, a bare PVC name if unique,
 example a small homelab runs live in write mode and a large customer cluster
 polls, has a red badge and a traffic budget. `lhtx config init` writes a
 commented example; `lhtx config [--context NAME]` shows the effective values
-and where each one comes from.
+and where each one comes from; in the TUI `,` shows the same and can change
+values (the file keeps your comments; a file managed by Home Manager is
+read-only and says so).
 
 ```yaml
 defaults:
@@ -174,7 +176,7 @@ snapshot removal before trying to fix it.
 
 ### Changes (write mode)
 
-![Write mode: replica count and expansion, each shows the exact request before anything is sent](docs/write.gif)
+![Write mode: replica count, expansion and a restore into a new volume, each shows the exact request before anything is sent](docs/write.gif)
 
 Nothing is changed without `--rw`. Every command first prints the exact request
 (verb, object, changed fields, JSON body). `--dry-run` stops there.
@@ -243,7 +245,7 @@ shows a clear warning.
 
 TUI:
 
-![TUI views: snapshot tree with a revert branch, replica matrix, health, backup volumes](docs/views.gif)
+![TUI views: snapshot tree with a revert branch, replica matrix, health, backup volumes, recurring jobs, backup targets](docs/views.gif)
 
 | Key | |
 |---|---|
@@ -275,6 +277,7 @@ TUI:
 
 Every action opens a dialog with the request: `y` applies (`Y` for
 destructive ones), `d` runs a server-side dry run, `esc` cancels.
+| `,` | lhtx settings of the connected context: value and where it comes from; `enter` changes it for this context or all (writes `config.yaml`, comments stay, applied at once) |
 | `T` | choose a theme (live preview while moving, `enter` keeps, `esc` back; keep it for good with `theme:` in the config) |
 | `?` | help |
 
@@ -525,7 +528,7 @@ engines     24      22ms        20.8 KiB     5              34.8 KiB      69.6 K
    · ✔ snapshot tree, backup volumes (tab 6, `lhtx backupvolumes`) incl.
    volumes that were deleted
    · ✔ config file with settings per context, traffic budget · open: editing
-   the settings in the TUI · ✔ themes (built-in + own) · ✔ auto switches to poll by measured
+   ✔ settings page in the TUI (`,`) · ✔ themes (built-in + own) · ✔ auto switches to poll by measured
    update rate
 3. **Actions** ✔ snapshot/backup create, snapshot/replica delete, replica count,
    scheduling/eviction for nodes and disks, settings, engine upgrade, expansion,

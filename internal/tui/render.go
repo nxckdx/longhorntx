@@ -419,6 +419,7 @@ func (m *model) viewHelp() string {
    m              nodes: replica matrix (volumes × nodes, shared node/disk first)
    q              back / quit       ?         this help
    T              choose a theme (live preview; keep: theme: NAME in the config)
+   ,              lhtx settings of this context (writes ~/.config/lhtx/config.yaml)
 
  Volume details
    s snapshots   b backups   e events   J recurring jobs   tab next panel

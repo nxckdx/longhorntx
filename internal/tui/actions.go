@@ -730,6 +730,9 @@ func (m *model) modalKey(k tea.KeyPressMsg) tea.Cmd {
 				}
 				m.modal = nil
 				md.onPick(o.value)
+				cmd := m.afterSubmit
+				m.afterSubmit = nil
+				return cmd
 			}
 		}
 		return nil

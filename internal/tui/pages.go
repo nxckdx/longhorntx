@@ -80,6 +80,8 @@ func (m *model) rowsFor(p *page) []row {
 		rows = m.jobRows()
 	case pTargets:
 		rows = m.targetRows()
+	case pPrefs:
+		rows = m.prefRows()
 	case pBackupVols:
 		rows = m.backupVolRows()
 	case pBackupList:
@@ -145,6 +147,8 @@ func (m *model) colsFor(p *page) []col {
 		return m.panelCols(p)
 	case pMatrix:
 		return m.matrixCols()
+	case pPrefs:
+		return []col{{"SETTING", 15, 0}, {"VALUE", 0, 1}, {"FROM", 0, 2}, {"", 0, 2}}
 	case pTargets:
 		return []col{{"NAME", 0, 1}, {"URL", 0, 3}, {"STATUS", 13, 0}, {"SECRET", 0, 1}, {"POLL", 7, 0}, {"SYNCED", 7, 0},
 			{"VOLUMES", 7, 0}, {"BY", 6, 0}, {"MESSAGE", 0, 3}}
@@ -180,6 +184,9 @@ func (m *model) viewPage(p *page) string {
 			t += "  " + sErr.Render(m.settingsErr.Error())
 		}
 		b.WriteString(t + "\n")
+		b.WriteString(sDim.Render(" "+strings.Repeat("─", max(m.width-2, 0))) + "\n")
+	case pPrefs:
+		b.WriteString(m.prefsTitle() + "\n")
 		b.WriteString(sDim.Render(" "+strings.Repeat("─", max(m.width-2, 0))) + "\n")
 	case pTargets:
 		b.WriteString(m.targetsTitle() + "\n")

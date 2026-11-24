@@ -106,6 +106,7 @@ const (
 	pDrain
 	pContexts
 	pThemes
+	pPrefs
 	pHelp
 )
 
@@ -767,6 +768,9 @@ func (m *model) handleKey(k tea.KeyPressMsg) tea.Cmd {
 	case "T":
 		m.openThemePicker()
 		return nil
+	case ",":
+		m.push(&page{kind: pPrefs})
+		return nil
 	case "1":
 		m.root(pVolumes)
 		return nil
@@ -971,7 +975,7 @@ func (m *model) listHeight() int {
 		h--
 	}
 	switch p.kind {
-	case pDisk, pActivity, pSettings, pHealth, pDrain, pOrphans, pBackupVols, pBackupList, pJobs, pTargets:
+	case pDisk, pActivity, pSettings, pHealth, pDrain, pOrphans, pBackupVols, pBackupList, pJobs, pTargets, pPrefs:
 		h -= 2 // title + rule
 	case pMatrix:
 		h -= 2

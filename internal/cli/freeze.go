@@ -37,6 +37,28 @@ anything. Made for Longhorn upgrades and other maintenance:
   lhtx --rw freeze --node worker-3                          # volumes attached there
   lhtx --rw freeze shop/db-data shop/uploads
 
+Clean shutdown of clustered apps: each app's pods are stopped one by one,
+highest ordinal first (like a StatefulSet scales down), each with its normal
+grace period; apps run in parallel. CloudNativePG clusters are hibernated
+(cnpg.io/hibernation: on) so the operator stops them itself. Hooks add app
+knowledge – a command run with sh -c via pods/exec in one pod of the app:
+
+  lhtx.io/pre-freeze:    "[container:] command"   before its pods stop
+  lhtx.io/post-unfreeze: "[container:] command"   once a pod is ready again
+  lhtx.io/hook-timeout:  "2m"
+
+lhtx looks for them on the pod, then up the owners (ReplicaSet → Deployment,
+StatefulSet, the operator's resource), then in the ConfigMap lhtx-hooks in
+the Longhorn namespace (key hooks.yaml) for charts that cannot annotate:
+
+  - namespace: search
+    selector: {app.kubernetes.io/name: opensearch}
+    container: opensearch
+    preFreeze: curl -s -XPUT localhost:9200/_cluster/settings -H 'Content-Type: application/json' -d '{"persistent":{"cluster.routing.allocation.enable":"primaries"}}' && curl -s -XPOST localhost:9200/_flush
+    postUnfreeze: curl -s -XPUT localhost:9200/_cluster/settings -H 'Content-Type: application/json' -d '{"persistent":{"cluster.routing.allocation.enable":null}}'
+
+A failing pre-freeze hook stops the freeze before anything is stopped.
+
 unfreeze removes the policy and nudges the owners of the deleted pods
 (annotation lhtx.io/unfrozen-at) so they start their pods at once instead of
 after their back-off, then waits until the volumes are attached again.
@@ -62,13 +84,17 @@ be ended from any machine. Needs cluster-admin rights.`,
 			}
 			fmt.Printf("Freeze %d PVCs · %s\n\n", len(p.PVCs), c.Cluster.Context)
 			fmt.Printf("  PVCs:   %s\n", strings.Join(short(p.PVCs, 8), ", "))
-			fmt.Printf("  pods:   %d to delete%s\n", len(p.Pods), listSuffix(p.Pods))
-			var owners []string
-			for _, o := range p.Owners {
-				owners = append(owners, o.Kind+" "+o.Namespace+"/"+o.Name)
-			}
-			fmt.Printf("  owners: %d (they cannot start pods until unfreeze)%s\n", len(owners), listSuffix(owners))
+			fmt.Printf("  pods:   %d to stop\n", len(p.Pods))
+
 			fmt.Printf("  volumes attached now: %d – lhtx waits until they are detached\n", len(p.Attached))
+			fmt.Println("\n  apps (stopped in parallel, each in order; pods get their normal grace period):")
+			for _, l := range p.GroupLines() {
+				fmt.Println("    " + l)
+			}
+			if with, without := p.HookCount(); without > 0 {
+				fmt.Printf("  %d of %d apps have no hooks – add lhtx.io/pre-freeze / lhtx.io/post-unfreeze if they need a clean shutdown (lhtx freeze --help)\n",
+					without, with+without)
+			}
 			fmt.Printf("  policy: deny pods mounting them, deny PVC create/delete except by %s\n\n", p.User)
 			for _, w := range p.Warnings {
 				fmt.Println("⚠ " + w)

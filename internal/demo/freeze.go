@@ -154,7 +154,20 @@ func (s *sim) admissionReactors(ctx context.Context) {
 	// a nudged owner starts its pods again (the policy may still deny it)
 	s.dyn.PrependReactor("patch", "*", func(act k8stesting.Action) (bool, runtime.Object, error) {
 		pa, ok := act.(k8stesting.PatchActionImpl)
-		if !ok || !strings.Contains(string(pa.GetPatch()), "lhtx.io/unfrozen-at") {
+		if !ok {
+			return false, nil, nil
+		}
+		// CloudNativePG: hibernation stops the instances, waking starts them
+		if patch := string(pa.GetPatch()); strings.Contains(patch, "cnpg.io/hibernation") {
+			key := pa.GetNamespace() + "/Cluster/" + pa.GetName()
+			if strings.Contains(patch, `"on"`) {
+				go s.stopOwned(ctx, key)
+			} else {
+				go s.restart(ctx, key)
+			}
+			return false, nil, nil
+		}
+		if !strings.Contains(string(pa.GetPatch()), "lhtx.io/unfrozen-at") {
 			return false, nil, nil
 		}
 		kind := map[string]string{"replicasets": "ReplicaSet", "statefulsets": "StatefulSet", "clusters": "Cluster",
@@ -162,6 +175,22 @@ func (s *sim) admissionReactors(ctx context.Context) {
 		go s.restart(ctx, pa.GetNamespace()+"/"+kind+"/"+pa.GetName())
 		return false, nil, nil
 	})
+}
+
+// stopOwned deletes the running pods of an owner (an operator stopping them).
+func (s *sim) stopOwned(ctx context.Context, key string) {
+	time.Sleep(700 * time.Millisecond)
+	s.adm.mu.Lock()
+	var names []*podInfo
+	for _, pi := range s.adm.pods {
+		if pi.ownerKey == key {
+			names = append(names, pi)
+		}
+	}
+	s.adm.mu.Unlock()
+	for _, pi := range names {
+		_ = s.dyn.Resource(gvrPod).Namespace(pi.ns).Delete(ctx, pi.name, metav1.DeleteOptions{})
+	}
 }
 
 func (s *sim) restart(ctx context.Context, key string) {
@@ -188,9 +217,14 @@ func (s *sim) restart(ctx context.Context, key string) {
 	}
 }
 
-// operatorObjects are the owners the demo's operator pods point to.
+// operatorObjects are the owners the demo's operator pods point to, and a
+// lhtx-hooks ConfigMap with a rule for nextcloud (maintenance mode).
 func operatorObjects() []runtime.Object {
 	return []runtime.Object{
+		u(map[string]any{"apiVersion": "v1", "kind": "ConfigMap",
+			"metadata": map[string]any{"name": "lhtx-hooks", "namespace": ns},
+			"data": map[string]any{"hooks.yaml": "- namespace: cloud\n  selector: {app: nextcloud}\n" +
+				"  preFreeze: php occ maintenance:mode --on\n  postUnfreeze: php occ maintenance:mode --off\n  timeout: 1m\n"}}),
 		u(map[string]any{"apiVersion": "postgresql.cnpg.io/v1", "kind": "Cluster",
 			"metadata": map[string]any{"name": "postgres", "namespace": "databases"}, "spec": map[string]any{"instances": int64(2)}}),
 		u(map[string]any{"apiVersion": "monitoring.coreos.com/v1", "kind": "Prometheus",

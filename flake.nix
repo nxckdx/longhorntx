@@ -24,7 +24,7 @@
 
             # Update after changing go.mod: set to pkgs.lib.fakeHash, run
             # `nix build`, copy the "got:" hash.
-            vendorHash = "sha256-JxRD67jJljPRydc8seGKLZI0BgOAjZSBt6yXWiah1l8=";
+            vendorHash = "sha256-oZyKGD/4lqf9UYsxCanGYbWmHk2xgZOk1kHVqkIYJss=";
 
             subPackages = [ "cmd/lhtx" ];
             env.CGO_ENABLED = 0;

@@ -49,6 +49,7 @@ type Client struct {
 	coreErr    error
 
 	meta metadata.Interface // secret names (secrets.go), created on first use
+	exec ExecFunc           // replaces pods/exec (demo, tests)
 }
 
 func NewClient(c *kube.Cluster, namespace string) (*Client, error) {

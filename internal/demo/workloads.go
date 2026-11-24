@@ -117,8 +117,14 @@ func (d *data) workloadObjects() []runtime.Object {
 					owner("postgresql.cnpg.io/v1", "Cluster", w.name)))
 			}
 		case w.kind == "StatefulSet":
+			meta := map[string]any{"name": w.name, "namespace": nsName, "labels": labels}
+			if w.name == "loki" { // hooks as annotations on the StatefulSet
+				meta["annotations"] = map[string]any{
+					"lhtx.io/pre-freeze":    "loki: wget -qO- --post-data= localhost:3100/flush",
+					"lhtx.io/post-unfreeze": "loki: wget -qO- localhost:3100/ready"}
+			}
 			sts := map[string]any{"apiVersion": "apps/v1", "kind": "StatefulSet",
-				"metadata": map[string]any{"name": w.name, "namespace": nsName, "labels": labels},
+				"metadata": meta,
 				"spec":     map[string]any{"replicas": int64(1)}, "status": map[string]any{"readyReplicas": int64(1)}}
 			if w.operator != "" {
 				sts["metadata"].(map[string]any)["ownerReferences"] = owner("monitoring.coreos.com/v1", w.operator, w.name)
@@ -150,10 +156,19 @@ func (d *data) pod(nsName, name, node string, pvcs []string, owners []any) *unst
 	for i, p := range pvcs {
 		vols = append(vols, map[string]any{"name": fmt.Sprintf("data%d", i), "persistentVolumeClaim": map[string]any{"claimName": p}})
 	}
+	app := name
+	if len(owners) > 0 {
+		o := owners[0].(map[string]any)
+		app = o["name"].(string)
+		if o["kind"] == "ReplicaSet" {
+			app = app[:strings.LastIndex(app, "-")]
+		}
+	}
 	return u(map[string]any{"apiVersion": "v1", "kind": "Pod",
-		"metadata": map[string]any{"name": name, "namespace": nsName, "ownerReferences": owners},
+		"metadata": map[string]any{"name": name, "namespace": nsName, "ownerReferences": owners, "labels": map[string]any{"app": app}},
 		"spec":     map[string]any{"nodeName": node, "volumes": vols},
-		"status":   map[string]any{"phase": "Running"}})
+		"status": map[string]any{"phase": "Running",
+			"conditions": []any{map[string]any{"type": "Ready", "status": "True"}}}})
 }
 
 // ---------------------------------------------------------------- simulation

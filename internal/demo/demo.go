@@ -56,7 +56,8 @@ func NewClient(ctx context.Context) *longhorn.Client {
 		gvrReplicaSet: "ReplicaSetList", gvrDeployment: "DeploymentList", gvrStatefulSet: "StatefulSetList",
 		gvrHPA: "HorizontalPodAutoscalerList", gvrKS: "KustomizationList", gvrHR: "HelmReleaseList",
 		gvrVAP: "ValidatingAdmissionPolicyList", gvrVAPB: "ValidatingAdmissionPolicyBindingList",
-		gvrCluster: "ClusterList", gvrProm: "PrometheusList"} {
+		gvrCluster: "ClusterList", gvrProm: "PrometheusList",
+		{Version: "v1", Resource: "configmaps"}: "ConfigMapList"} {
 		kinds[g] = k
 	}
 	objs := append(d.objects(), operatorObjects()...)
@@ -175,6 +176,11 @@ func NewClient(ctx context.Context) *longhorn.Client {
 	sch.AddKnownTypeWithName(schema.GroupVersionKind{Version: "v1", Kind: "Secret"}, &metav1.PartialObjectMetadata{})
 	sch.AddKnownTypeWithName(schema.GroupVersionKind{Version: "v1", Kind: "SecretList"}, &metav1.PartialObjectMetadataList{})
 	c.SetMetadataClient(metafake.NewSimpleMetadataClient(sch, secrets...))
+	// hooks run with pods/exec; the demo only pretends
+	c.SetExec(func(_ context.Context, _, pod, _, cmd string) (string, error) {
+		time.Sleep(400 * time.Millisecond)
+		return "ok (demo: " + cmd + ")", nil
+	})
 	go s.run(ctx)
 	return c
 }

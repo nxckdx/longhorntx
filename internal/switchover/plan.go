@@ -257,7 +257,21 @@ func (p *Plan) Steps() []string {
 	if p.Freeze != nil && len(p.Freeze.Pods) > 0 {
 		pods = fmt.Sprintf("delete its %d pod(s): %s", len(p.Freeze.Pods), strings.Join(firstN(p.Freeze.Pods, 3), ", "))
 	}
+	if p.Freeze != nil {
+		for _, g := range p.Freeze.Groups {
+			if g.Pre != nil {
+				add("pre-freeze hook of %s: %s", g.name(), g.Pre)
+			}
+		}
+	}
 	add("freeze %s (admission policy: no pod may mount it, only lhtx may delete/create it) and %s", p.PVCRef(), pods)
+	if p.Freeze != nil {
+		for _, g := range p.Freeze.Groups {
+			if g.Hibernate {
+				add("hibernate the CloudNativePG cluster %s (the operator stops it cleanly)", g.Owner.Name)
+			}
+		}
+	}
 	add("wait until volume %s is detached", p.OldVolume)
 	if p.OldReclaim != "Retain" {
 		add("PV %s: reclaim policy %s → Retain (keeps volume %s)", p.OldPV, p.OldReclaim, p.OldVolume)
@@ -278,6 +292,13 @@ func (p *Plan) Steps() []string {
 		owners = strings.Join(firstN(o, 3), ", ")
 	}
 	add("unfreeze; %s start the pods again (nudged), wait until the volume is attached", owners)
+	if p.Freeze != nil {
+		for _, g := range p.Freeze.Groups {
+			if g.Post != nil {
+				add("post-unfreeze hook of %s: %s", g.name(), g.Post)
+			}
+		}
+	}
 	add("keep volume %s for a rollback (lhtx switch %s --to-volume %s)", p.OldVolume, p.PVCRef(), p.OldVolume)
 	return out
 }

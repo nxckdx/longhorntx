@@ -169,8 +169,15 @@ func (m *model) confirmFreeze(msg freezePlanMsg) {
 		fmt.Sprintf("owners:  %d (Deployments, StatefulSets, operators … – their specs stay unchanged)", len(p.Owners)),
 		fmt.Sprintf("volumes: %d attached now – lhtx waits until they are detached", len(p.Attached)),
 		"policy:  no pod may mount them; only " + p.User + " may create/delete these PVCs",
+		"apps (in parallel, each stopped in order with its grace period):",
+	}
+	for _, l := range p.GroupLines() {
+		lines = append(lines, "  "+l)
 	}
 	warns := append([]string{"until unfreeze (Z) these workloads stay down – also if lhtx stops"}, p.Warnings...)
+	if with, without := p.HookCount(); without > 0 && with+without > 1 {
+		warns = append(warns, fmt.Sprintf("%d of %d apps have no pre-freeze/post-unfreeze hooks (annotations lhtx.io/…, see lhtx freeze --help)", without, with+without))
+	}
 	sum := &longhorn.Action{Title: "Freeze " + msg.label, Verb: longhorn.VerbCreate,
 		Header: "ValidatingAdmissionPolicy + delete pods", Lines: lines, Warnings: warns, Destructive: true}
 	c := m.client

@@ -73,7 +73,8 @@ func world(extra ...runtime.Object) *cluster {
 	kinds := map[schema.GroupVersionResource]string{
 		gvrPod: "PodList", gvrPVC: "PersistentVolumeClaimList", gvrPV: "PersistentVolumeList", gvrRS: "ReplicaSetList",
 		GVRPolicy: "ValidatingAdmissionPolicyList", GVRBinding: "ValidatingAdmissionPolicyBindingList",
-		longhorn.GVRVolume: "VolumeList", longhorn.GVREngine: "EngineList",
+		longhorn.GVRVolume: "VolumeList", longhorn.GVREngine: "EngineList", gvrConfigMap: "ConfigMapList",
+		{Group: "postgresql.cnpg.io", Version: "v1", Resource: "clusters"}: "ClusterList",
 	}
 	objs := []runtime.Object{
 		obj("v1", "PersistentVolumeClaim", "app", "data", fluxLabels, map[string]any{
@@ -150,7 +151,10 @@ func world(extra ...runtime.Object) *cluster {
 	// a nudged ReplicaSet starts its pod again (rejected while frozen)
 	dyn.PrependReactor("patch", "replicasets", func(k8stesting.Action) (bool, runtime.Object, error) {
 		go func() {
-			if _, err := dyn.Resource(gvrPod).Namespace("app").Create(ctx, pod("app-123-new", "data", "ReplicaSet", "app-123"), metav1.CreateOptions{}); err == nil {
+			np := pod("app-123-new", "data", "ReplicaSet", "app-123")
+			np.SetLabels(map[string]string{"app": "web"})
+			_ = unstructured.SetNestedSlice(np.Object, []any{map[string]any{"type": "Ready", "status": "True"}}, "status", "conditions")
+			if _, err := dyn.Resource(gvrPod).Namespace("app").Create(ctx, np, metav1.CreateOptions{}); err == nil {
 				k.setState("app", "data", "attached")
 			}
 		}()
@@ -394,5 +398,121 @@ func TestChecks(t *testing.T) {
 	}
 	if strings.Join(got, ",") != "switch,freeze" {
 		t.Errorf("%v", got)
+	}
+}
+
+func TestStopOrder(t *testing.T) {
+	pods := []string{"ns/kafka-0", "ns/kafka-2", "ns/kafka-10", "ns/kafka-1", "ns/web-abc12"}
+	sortStopOrder(pods)
+	if strings.Join(pods, ",") != "ns/kafka-10,ns/kafka-2,ns/kafka-1,ns/kafka-0,ns/web-abc12" {
+		t.Error(pods)
+	}
+	h := parseHook("opensearch: curl -XPOST localhost:9200/_flush", "30s", "x")
+	if h.Container != "opensearch" || h.Command != "curl -XPOST localhost:9200/_flush" || h.Timeout != 30*time.Second {
+		t.Errorf("%+v", h)
+	}
+	if h := parseHook("echo a: b", "", "x"); h.Container != "" || h.Command != "echo a: b" {
+		t.Errorf("no container: %+v", h)
+	}
+}
+
+func TestFreezeHooks(t *testing.T) {
+	// pre-freeze on the pod, post-unfreeze from the lhtx-hooks ConfigMap
+	k := world(obj("v1", "ConfigMap", lhNS, HooksConfigMap, nil, map[string]any{"data": map[string]any{
+		"hooks.yaml": "- namespace: app\n  selector: {app: web}\n  container: main\n  postUnfreeze: echo settled\n"}}))
+	ctx := context.Background()
+	p0 := get(t, k.dyn, gvrPod, "app", "app-123-abc")
+	p0.SetAnnotations(map[string]string{AnnPreFreeze: "main: echo flush"})
+	p0.SetLabels(map[string]string{"app": "web"})
+	_, _ = k.dyn.Resource(gvrPod).Namespace("app").Update(ctx, p0, metav1.UpdateOptions{})
+	var mu sync.Mutex
+	var ran []string
+	k.c.SetExec(func(_ context.Context, ns, pod, container, cmd string) (string, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		ran = append(ran, pod+"/"+container+": "+cmd)
+		if cmd == "fail" {
+			return "boom", errors.New("exit 1")
+		}
+		return "ok", nil
+	})
+	p, err := PlanFreeze(ctx, k.c, []string{"app/data"}, "t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := p.Groups[0]
+	if g.Pre == nil || g.Pre.Source != "pod annotation" || g.Post == nil || g.Post.Source != "ConfigMap lhtx-hooks" || g.Post.Container != "main" {
+		t.Fatalf("hooks: %+v %+v", g.Pre, g.Post)
+	}
+	if _, err := ApplyFreeze(ctx, k.c, p, fastF); err != nil {
+		t.Fatal(err)
+	}
+	fs, _ := ActiveFreezes(ctx, k.dyn)
+	if len(fs) != 1 || len(fs[0].PostHooks) != 1 {
+		t.Fatalf("post hooks not stored: %+v", fs)
+	}
+	if err := Unfreeze(ctx, k.c, fs[0], fastF); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	got := strings.Join(ran, " | ")
+	mu.Unlock()
+	if got != "app-123-abc/main: echo flush | app-123-new/main: echo settled" {
+		t.Errorf("ran: %s", got)
+	}
+
+	// a failing pre-freeze hook stops before anything is deleted
+	k = world()
+	p0 = get(t, k.dyn, gvrPod, "app", "app-123-abc")
+	p0.SetAnnotations(map[string]string{AnnPreFreeze: "fail"})
+	_, _ = k.dyn.Resource(gvrPod).Namespace("app").Update(ctx, p0, metav1.UpdateOptions{})
+	k.c.SetExec(func(_ context.Context, _, _, _, cmd string) (string, error) { return "boom", errors.New("exit 1") })
+	p, _ = PlanFreeze(ctx, k.c, []string{"app/data"}, "t")
+	if _, err := ApplyFreeze(ctx, k.c, p, fastF); err == nil || !strings.Contains(err.Error(), "nothing stopped") {
+		t.Fatalf("want abort, got %v", err)
+	}
+	if fs, _ := ActiveFreezes(ctx, k.dyn); len(fs) != 0 {
+		t.Error("policy left after a failed hook")
+	}
+	if _, err := k.dyn.Resource(gvrPod).Namespace("app").Get(ctx, "app-123-abc", metav1.GetOptions{}); err != nil {
+		t.Error("pod deleted although the hook failed")
+	}
+}
+
+func TestFreezeCNPGHibernation(t *testing.T) {
+	gvrCluster := schema.GroupVersionResource{Group: "postgresql.cnpg.io", Version: "v1", Resource: "clusters"}
+	dbPod := ownedBy(obj("v1", "Pod", "app", "db-1", nil, map[string]any{
+		"spec": map[string]any{"volumes": []any{map[string]any{"persistentVolumeClaim": map[string]any{"claimName": "db"}}}},
+	}), "postgresql.cnpg.io/v1", "Cluster", "db")
+	k := world(dbPod, obj("postgresql.cnpg.io/v1", "Cluster", "app", "db", nil, map[string]any{"spec": map[string]any{"instances": int64(1)}}))
+	ctx := context.Background()
+	// the operator stops its instance when hibernation is requested
+	k.dyn.PrependReactor("patch", "clusters", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if strings.Contains(string(a.(k8stesting.PatchActionImpl).GetPatch()), `"on"`) {
+			go func() { _ = k.dyn.Resource(gvrPod).Namespace("app").Delete(ctx, "db-1", metav1.DeleteOptions{}) }()
+		}
+		return false, nil, nil
+	})
+	p, err := PlanFreeze(ctx, k.c, []string{"app/db"}, "t")
+	if err != nil || len(p.Groups) != 1 || !p.Groups[0].Hibernate {
+		t.Fatalf("%v %+v", err, p)
+	}
+	if _, err := ApplyFreeze(ctx, k.c, p, fastF); err != nil {
+		t.Fatal(err)
+	}
+	cl := get(t, k.dyn, gvrCluster, "app", "db")
+	if cl.GetAnnotations()[annCNPG] != "on" {
+		t.Error("not hibernated")
+	}
+	fs, _ := ActiveFreezes(ctx, k.dyn)
+	if len(fs) != 1 || len(fs[0].Hibernated) != 1 {
+		t.Fatalf("%+v", fs)
+	}
+	if err := Unfreeze(ctx, k.c, fs[0], FreezeOptions{Poll: 10 * time.Millisecond, Wait: 200 * time.Millisecond}); err != nil &&
+		!strings.Contains(err.Error(), "not attached") {
+		t.Fatal(err)
+	}
+	if get(t, k.dyn, gvrCluster, "app", "db").GetAnnotations()[annCNPG] != "off" {
+		t.Error("not woken up")
 	}
 }

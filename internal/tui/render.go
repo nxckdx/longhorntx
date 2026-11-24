@@ -117,8 +117,12 @@ func (m *model) viewFooter() string {
 		keys = [][2]string{{"n", "new job"}, {"enter", "edit"}, {"X", "delete"}, {"ctrl+r", "reload"}, {"esc", "back"}, {"W", "write mode off"}}
 	case p.kind == pJobs:
 		keys = [][2]string{{"W", "write mode to change"}, {"ctrl+r", "reload"}, {"/", "filter"}, {"esc", "back"}}
+	case p.kind == pTargets && m.rw:
+		keys = [][2]string{{"n", "new"}, {"enter", "edit"}, {"s", "sync now"}, {"X", "delete"}, {"esc", "back"}, {"W", "write mode off"}}
+	case p.kind == pTargets:
+		keys = [][2]string{{"W", "write mode to change"}, {"ctrl+r", "reload"}, {"esc", "back"}}
 	case p.kind == pBackupVols:
-		keys = [][2]string{{"enter", "backups"}, {"J", "recurring jobs"}, {"/", "filter"}, {"ctrl+r", "reload"}, {"1-7", "views"}, {"?", "help"}}
+		keys = [][2]string{{"enter", "backups"}, {"J", "recurring jobs"}, {"t", "targets"}, {"/", "filter"}, {"ctrl+r", "reload"}, {"1-7", "views"}, {"?", "help"}}
 	case p.kind == pThemes:
 		keys = [][2]string{{"↑↓", "preview"}, {"enter", "keep"}, {"esc", "back"}}
 	case p.kind == pContexts:
@@ -395,7 +399,8 @@ func (m *model) viewHelp() string {
  Views
    1  Volumes   2  Nodes → disks → replicas   3  Activity   4  Settings   5  Health
    6  Backups (backup volumes, also of deleted volumes; enter: their backups)
-      J there: recurring jobs (write mode: n new, enter edit, X delete)
+      J there: recurring jobs, t: backup targets (write mode: n new,
+      enter edit, X delete; targets also s sync now)
    7  Orphans (only shown when there are any)
 
  Navigation

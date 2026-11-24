@@ -110,6 +110,9 @@ func (m *model) actionKey(p *page, key string) (tea.Cmd, bool) {
 	if cmd, ok := m.jobsKey(p, key); ok {
 		return cmd, true
 	}
+	if cmd, ok := m.targetsKey(p, key); ok {
+		return cmd, true
+	}
 	if p.kind == pOrphans && (key == "X" || key == "ctrl+x") {
 		if !m.requireRW() {
 			return nil, true
@@ -823,6 +826,9 @@ func (m *model) applyActionDone(msg actionDoneMsg) tea.Cmd {
 		}
 		if p.kind == pJobs {
 			return m.loadJobs()
+		}
+		if p.kind == pTargets {
+			return m.loadTargets()
 		}
 	}
 	return nil

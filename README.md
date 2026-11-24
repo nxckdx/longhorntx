@@ -200,6 +200,8 @@ lhtx jobs create NAME --task backup --cron "0 2 * * *" --retain 14 --groups defa
 lhtx jobs edit NAME [--cron …] [--retain …] [--groups …]   # only the given flags change
 lhtx jobs delete NAME                      # preview lists the volumes that lose the job
 lhtx jobs next "0 2 * * 1-5"               # when a cron runs (UTC like Longhorn) in your time zone
+lhtx targets create NAME --url s3://bucket@region/ --secret S [--poll 5m]
+lhtx targets edit|delete|sync NAME         # sync = re-read the store now
 lhtx cordon|uncordon NODE[:DISK]           # replica scheduling off/on
 lhtx evict NODE[:DISK] [--cancel]          # also disables scheduling (Longhorn requires it)
 
@@ -218,7 +220,11 @@ filesystem). Attach/detach add or remove the attachment ticket `longhorn-ui`
 in the VolumeAttachment CR, exactly like the web UI, so both can undo each
 other's attach. Patches carry the `resourceVersion` the decision was
 based on, so they fail instead of overwriting a newer state. Deletes use a
-UID precondition.
+UID precondition. Changes to objects owned by Flux, Argo CD or Helm (labels
+and annotations of those tools) carry a warning: the next reconcile reverts
+them, change them in Git instead. The credential secret picker for backup
+targets reads secret **names** through the metadata API – secret data never
+travels.
 
 Orphans: `DataCleanable` only says Longhorn *can* delete the data, not that
 it is safe. Replica data of a volume that is deleted, faulted, degraded or
@@ -232,8 +238,8 @@ TUI:
 
 | Key | |
 |---|---|
-| `1` … `7` | Volumes · Nodes → disks → replicas · Activity · Settings · Health · Backups (backup volumes → backups, `J` recurring jobs) · Orphans (only if there are any) |
-| `n`, `enter`, `X` | recurring jobs page (write mode): new job, edit, delete – a form with live cron check and the next runs |
+| `1` … `7` | Volumes · Nodes → disks → replicas · Activity · Settings · Health · Backups (backup volumes → backups, `J` recurring jobs, `t` backup targets) · Orphans (only if there are any) |
+| `n`, `enter`, `X` | recurring jobs / backup targets pages (write mode): new, edit, delete – forms with live checks (cron: next runs; targets: secret picker); `s` syncs a target now |
 | `↑↓`/`jk`, `g`/`G` | move |
 | `enter` | open (volume detail, disk, …) |
 | `esc` / `q` | back (quit on the top level) |

@@ -102,6 +102,7 @@ const (
 	pBackupList
 	pMatrix
 	pJobs
+	pTargets
 	pDrain
 	pContexts
 	pThemes
@@ -196,6 +197,13 @@ type model struct {
 	jobsLoading bool
 	jobsErr     error
 	jobsAt      time.Time
+
+	// backup targets page (6 → t), loaded on demand
+	tgRaw     []*longhorn.BackupTarget
+	tgSecrets []string
+	tgLoading bool
+	tgErr     error
+	tgAt      time.Time
 
 	// backups tab (6), loaded on demand
 	bvRaw     []*longhorn.BackupVolume
@@ -393,6 +401,7 @@ func (m *model) switchContext(name string) tea.Cmd {
 	m.health, m.healthLoading, m.fcache = nil, false, nil
 	m.bvRaw, m.bvLoading, m.bvErr, m.bvAt = nil, false, nil, time.Time{}
 	m.jobsRaw, m.jobsLoading, m.jobsErr, m.jobsAt = nil, false, nil, time.Time{}
+	m.tgRaw, m.tgSecrets, m.tgLoading, m.tgErr, m.tgAt = nil, nil, false, nil, time.Time{}
 	m.autoNoted = false
 	return connect(m.ctx, m.opts, name)
 }
@@ -513,6 +522,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case overviewMsg:
 		m.applyOverview(msg)
+		return m, nil
+
+	case targetsMsg:
+		m.applyTargets(msg)
 		return m, nil
 
 	case jobsMsg:
@@ -857,6 +870,10 @@ func (m *model) handleKey(k tea.KeyPressMsg) tea.Cmd {
 	if p.kind == pBackupVols && key == "ctrl+r" {
 		return m.loadBackupVols()
 	}
+	if p.kind == pBackupVols && key == "t" {
+		m.push(&page{kind: pTargets})
+		return m.loadTargets()
+	}
 	if p.kind == pBackupVols && key == "J" {
 		m.push(&page{kind: pJobs})
 		return m.loadJobs()
@@ -946,7 +963,7 @@ func (m *model) listHeight() int {
 		h--
 	}
 	switch p.kind {
-	case pDisk, pActivity, pSettings, pHealth, pDrain, pOrphans, pBackupVols, pBackupList, pJobs:
+	case pDisk, pActivity, pSettings, pHealth, pDrain, pOrphans, pBackupVols, pBackupList, pJobs, pTargets:
 		h -= 2 // title + rule
 	case pMatrix:
 		h -= 2

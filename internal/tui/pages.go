@@ -78,6 +78,8 @@ func (m *model) rowsFor(p *page) []row {
 		rows = m.matrixRows()
 	case pJobs:
 		rows = m.jobRows()
+	case pTargets:
+		rows = m.targetRows()
 	case pBackupVols:
 		rows = m.backupVolRows()
 	case pBackupList:
@@ -143,6 +145,9 @@ func (m *model) colsFor(p *page) []col {
 		return m.panelCols(p)
 	case pMatrix:
 		return m.matrixCols()
+	case pTargets:
+		return []col{{"NAME", 0, 1}, {"URL", 0, 3}, {"STATUS", 13, 0}, {"SECRET", 0, 1}, {"POLL", 7, 0}, {"SYNCED", 7, 0},
+			{"VOLUMES", 7, 0}, {"BY", 6, 0}, {"MESSAGE", 0, 3}}
 	case pJobs:
 		return []col{{"NAME", 0, 2}, {"TASK", 20, 0}, {"CRON", 0, 1}, {"NEXT", 16, 0}, {"RETAIN", 6, 0}, {"CONC", 5, 0},
 			{"GROUPS", 0, 1}, {"VOLUMES", 7, 0}, {"RUNS", 6, 0}}
@@ -175,6 +180,9 @@ func (m *model) viewPage(p *page) string {
 			t += "  " + sErr.Render(m.settingsErr.Error())
 		}
 		b.WriteString(t + "\n")
+		b.WriteString(sDim.Render(" "+strings.Repeat("─", max(m.width-2, 0))) + "\n")
+	case pTargets:
+		b.WriteString(m.targetsTitle() + "\n")
 		b.WriteString(sDim.Render(" "+strings.Repeat("─", max(m.width-2, 0))) + "\n")
 	case pJobs:
 		b.WriteString(m.jobsTitle() + "\n")
@@ -213,6 +221,7 @@ func (m *model) viewPage(p *page) string {
 		pBackupVols: "no backup volumes (no backups in the backup store)",
 		pBackupList: "no backups",
 		pJobs:       "no recurring jobs",
+		pTargets:    "no backup targets",
 	}[p.kind]
 	b.WriteString(m.renderList(p, m.colsFor(p), m.rowsFor(p), empty))
 	return b.String()

@@ -231,7 +231,7 @@ func jobsCmd(g *globals) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "jobs [VOLUME]",
 		Aliases: []string{"recurringjobs", "recurring-jobs", "rj"},
-		Short:   "List recurring jobs (or the jobs that apply to a volume)",
+		Short:   "List and manage recurring jobs (or the jobs that apply to a volume)",
 		Args:    cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := g.checkOutput(); err != nil {
@@ -277,7 +277,7 @@ func targetsCmd(g *globals) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "targets",
 		Aliases: []string{"backuptargets", "bt"},
-		Short:   "List backup targets",
+		Short:   "List and manage backup targets",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if err := g.checkOutput(); err != nil {

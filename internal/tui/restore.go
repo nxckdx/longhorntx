@@ -54,6 +54,7 @@ func (m *model) restoreForm(msg restorePlanMsg) {
 		m.setFlash("restore: "+msg.err.Error(), true)
 		return
 	}
+	m.flash = "" // "preparing restore …" is done
 	p, c := msg.plan, msg.client
 	b := p.Backup
 	pvc := ""

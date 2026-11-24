@@ -28,7 +28,11 @@ internal/longhorn   slim CRD structs (no longhorn-manager import), Client (one-s
                     Store (informers), joins (view.go, nodes.go, activity.go),
                     write actions (actions.go), health/drain/backup-age checks
                     (doctor.go), diagnostics bundle (diag.go),
-                    volume poll mode (volumes_poll.go)
+                    volume poll mode (volumes_poll.go), recurring jobs / backup
+                    targets writes (jobs_write.go, targets_write.go), restore and
+                    clone into new volumes (restore.go, clone.go), GitOps owner
+                    detection for warnings (gitops.go), secret names via the
+                    metadata API only (secrets.go)
 internal/fuzzy      fzf-style matching (TUI filter, CLI volume fallback)
 internal/demo       --demo: fake dynamic client with made-up data and a
                     simulated rebuild loop (README GIFs: docs/*.tape + docs/tapes/,
@@ -44,6 +48,8 @@ internal/cli        cobra commands (read: volumes.go, nodes.go, data.go, activit
 internal/tui        Bubble Tea v2 (charm.land/*): tui.go model/update/keys,
                     pages.go list pages, render.go header/footer/detail,
                     panels.go detail panels, actions.go write mode/dialogs,
+                    form.go multi-field form dialog, backups.go/jobs.go/targets.go/
+                    restore.go backups tab pages, theme.go themes + picker,
                     loading.go async startup, health.go tab 5
 ```
 

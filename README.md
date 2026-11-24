@@ -309,6 +309,7 @@ TUI:
 | `1` … `7` | Volumes · Nodes → disks → replicas · Activity · Settings · Health · Backups (backup volumes → backups, `J` recurring jobs, `t` backup targets) · Orphans (only if there are any) |
 | `C` | snapshots panel (write mode): clone the snapshot into a new volume (+ PV/PVC) – look at old data without reverting |
 | `B` | health tab (write mode): back up all attached volumes whose backup is late or missing (one confirmation) |
+| `Z` | volume list / details (write mode): freeze the selected volumes, this one, all on its node or ALL (Longhorn upgrade) – plan, `Y`, live log; `Z` again lists active freezes to unfreeze; the header shows `❄ N frozen` |
 | `w` | volume details (write mode): switch a PVC to this volume – back to the old one after a restore, or to a clone |
 | `r` … then `switch` | in the restore form choose "switch NS/PVC to it": restore + switch with a step preview, live log, `x` cancels (rolls back until the old PVC is deleted); lhtx does not quit while it runs |
 | `r` | backups tab (write mode): restore the newest backup of the backup volume, or the selected backup in a backup list, into a new volume (+ PV/PVC) |

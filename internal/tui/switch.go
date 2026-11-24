@@ -19,14 +19,18 @@ import (
 // rolls back until the old PVC is deleted. lhtx does not quit while a
 // switch runs.
 
+// switchRun is a long background run with a live log: a switch, a freeze
+// or an unfreeze.
 type switchRun struct {
-	plan   *switchover.Plan
-	lines  []string
-	done   bool
-	err    error
-	cancel context.CancelFunc
-	ch     chan string
-	start  time.Time
+	title      string // "Switching a → b"
+	okMsg      string // flash when done
+	cancelHint string // what x does
+	lines      []string
+	done       bool
+	err        error
+	cancel     context.CancelFunc
+	ch         chan string
+	start      time.Time
 }
 
 type switchLogMsg struct {
@@ -71,23 +75,30 @@ func (m *model) confirmSwitch(p *switchover.Plan, restore *longhorn.Action) {
 }
 
 func (m *model) startSwitch(p *switchover.Plan, restore *longhorn.Action) tea.Cmd {
+	c := m.client
+	return m.startRun(fmt.Sprintf("Switching %s → %s", p.PVCRef(), p.NewVolume), p.PVCRef()+" now uses "+p.NewVolume,
+		"x cancel (rolls back until the old PVC is deleted)",
+		func(ctx context.Context, log func(string, ...any)) error {
+			if restore != nil {
+				if err := c.Apply(ctx, restore, longhorn.DryRunNone); err != nil {
+					return err
+				}
+				log("✔ %s", restore.Title)
+			}
+			return switchover.Run(ctx, c, p, switchover.Options{Journal: journalPath(p), Log: log})
+		})
+}
+
+// startRun runs fn in the background; its log lines stream into the
+// dialog. lhtx does not quit while it runs.
+func (m *model) startRun(title, okMsg, cancelHint string, fn func(context.Context, func(string, ...any)) error) tea.Cmd {
 	ctx, cancel := context.WithCancel(context.WithoutCancel(m.ctx))
-	r := &switchRun{plan: p, cancel: cancel, ch: make(chan string, 64), start: time.Now()}
+	r := &switchRun{title: title, okMsg: okMsg, cancelHint: cancelHint, cancel: cancel, ch: make(chan string, 64), start: time.Now()}
 	m.switching = r
 	m.modal = nil
-	c := m.client
 	run := func() tea.Msg {
 		defer close(r.ch)
-		if restore != nil {
-			if err := c.Apply(ctx, restore, longhorn.DryRunNone); err != nil {
-				return switchDoneMsg{run: r, err: err}
-			}
-			r.ch <- "✔ " + restore.Title
-		}
-		err := switchover.Run(ctx, c, p, switchover.Options{
-			Journal: journalPath(p),
-			Log:     func(f string, a ...any) { r.ch <- fmt.Sprintf(f, a...) },
-		})
+		err := fn(ctx, func(f string, a ...any) { r.ch <- fmt.Sprintf(f, a...) })
 		return switchDoneMsg{run: r, err: err}
 	}
 	return tea.Batch(run, m.nextSwitchLine(r))
@@ -108,13 +119,14 @@ func (m *model) onSwitchLog(msg switchLogMsg) tea.Cmd {
 	return m.nextSwitchLine(msg.run)
 }
 
-func (m *model) onSwitchDone(msg switchDoneMsg) {
+func (m *model) onSwitchDone(msg switchDoneMsg) tea.Cmd {
 	msg.run.done, msg.run.err = true, msg.err
 	if msg.err != nil {
-		m.setFlash("switch: "+msg.err.Error(), true)
+		m.setFlash(msg.err.Error(), true)
 	} else {
-		m.setFlash("✔ "+msg.run.plan.PVCRef()+" now uses "+msg.run.plan.NewVolume, false)
+		m.setFlash("✔ "+msg.run.okMsg, false)
 	}
+	return m.loadFreezes() // the header shows what is still frozen
 }
 
 // switchKey: x cancels (rollback), esc closes a finished run.
@@ -125,9 +137,9 @@ func (m *model) switchKey(key string) tea.Cmd {
 		m.switching = nil
 	case !r.done && key == "x":
 		r.cancel()
-		r.lines = append(r.lines, "… cancelling: rolling back if the old PVC still exists")
+		r.lines = append(r.lines, "… cancelling")
 	case !r.done && (key == "q" || key == "ctrl+c"):
-		m.setFlash("a switch is running – x cancels it (rolls back), lhtx does not quit meanwhile", true)
+		m.setFlash("still running – "+r.cancelHint+"; lhtx does not quit meanwhile", true)
 	}
 	return nil
 }
@@ -135,7 +147,7 @@ func (m *model) switchKey(key string) tea.Cmd {
 func (m *model) viewSwitch(w, h int) string {
 	r := m.switching
 	var b strings.Builder
-	title := fmt.Sprintf("Switching %s → %s", r.plan.PVCRef(), r.plan.NewVolume)
+	title := r.title
 	switch {
 	case r.done && r.err == nil:
 		title = fg(cOK, "✔ "+title+" – done")
@@ -166,7 +178,7 @@ func (m *model) viewSwitch(w, h int) string {
 	if r.done {
 		b.WriteString(sDim.Render("[esc] close"))
 	} else {
-		b.WriteString(sDim.Render("[x] cancel (rolls back until the old PVC is deleted) – lhtx stays open until it is done"))
+		b.WriteString(sDim.Render("[" + r.cancelHint + "] – lhtx stays open until it is done"))
 	}
 	return b.String()
 }

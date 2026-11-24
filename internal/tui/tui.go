@@ -17,6 +17,7 @@ import (
 	"github.com/nxckdx/longhorntx/internal/kube"
 	"github.com/nxckdx/longhorntx/internal/longhorn"
 	"github.com/nxckdx/longhorntx/internal/overview"
+	"github.com/nxckdx/longhorntx/internal/switchover"
 	"github.com/nxckdx/longhorntx/internal/update"
 )
 
@@ -185,6 +186,8 @@ type model struct {
 	autoNoted            bool       // flash shown when auto switched to polling
 	themePicked          bool       // a theme was picked: keep it across contexts
 	switching            *switchRun // restore + switch running (switch.go)
+	freezes              []switchover.Freeze
+	freezesAt            time.Time
 	themeBefore          string
 	themeCursor          int
 
@@ -405,6 +408,7 @@ func (m *model) switchContext(name string) tea.Cmd {
 	m.jobsRaw, m.jobsLoading, m.jobsErr, m.jobsAt = nil, false, nil, time.Time{}
 	m.tgRaw, m.tgSecrets, m.tgLoading, m.tgErr, m.tgAt = nil, nil, false, nil, time.Time{}
 	m.autoNoted = false
+	m.freezes, m.freezesAt = nil, time.Time{}
 	return connect(m.ctx, m.opts, name)
 }
 
@@ -435,7 +439,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.lastRX = 0
 		m.applySettings(msg.eff)
 		m.refresh()
-		return m, tea.Batch(waitChange(m.store), fetchVersion(m.ctx, m.client))
+		return m, tea.Batch(waitChange(m.store), fetchVersion(m.ctx, m.client), m.loadFreezes())
 
 	case versionMsg:
 		if msg.client != m.client {
@@ -473,6 +477,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.store != nil && !m.store.AllSynced() {
 			return m, tea.Tick(250*time.Millisecond, func(t time.Time) tea.Msg { return tickMsg(t) })
+		}
+		if m.client != nil && !m.paused && time.Since(m.freezesAt) > 5*time.Minute && m.switching == nil {
+			m.freezesAt = time.Now() // no second request while this one runs
+			return m, tea.Batch(tick(), m.loadFreezes())
 		}
 		return m, tick()
 
@@ -526,6 +534,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.applyOverview(msg)
 		return m, nil
 
+	case freezesMsg:
+		m.applyFreezes(msg)
+		return m, nil
+
+	case freezePlanMsg:
+		m.confirmFreeze(msg)
+		return m, nil
+
 	case switchPlanMsg:
 		m.onSwitchPlan(msg)
 		return m, nil
@@ -534,8 +550,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.onSwitchLog(msg)
 
 	case switchDoneMsg:
-		m.onSwitchDone(msg)
-		return m, nil
+		return m, m.onSwitchDone(msg)
 
 	case clonePlanMsg:
 		m.cloneForm(msg)

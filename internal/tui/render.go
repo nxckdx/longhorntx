@@ -14,7 +14,7 @@ import (
 // ---------------------------------------------------------------- header / footer
 
 func (m *model) viewHeader() string {
-	l := contextStyle(m.ctxLabel()).Render(m.ctxLabel()) + m.rwBadge() + " " + sBold.Render("lhtx")
+	l := contextStyle(m.ctxLabel()).Render(m.ctxLabel()) + m.rwBadge() + m.freezeBadge() + " " + sBold.Render("lhtx")
 
 	if m.store != nil {
 		root := m.stack[0].kind
@@ -137,7 +137,7 @@ func (m *model) viewFooter() string {
 			keys = append(keys, [2]string{"ctrl+r", "reload"})
 		}
 		if m.rw {
-			keys = append(keys, [2]string{"S", "snapshot"}, [2]string{"B", "backup"}, [2]string{"R", "replicas"}, [2]string{"U", "engine"}, [2]string{"E", "expand"}, [2]string{"A", "attach"}, [2]string{"w", "switch PVC here"}, [2]string{"[ ]", "select"}, [2]string{"X", "del replica"})
+			keys = append(keys, [2]string{"S", "snapshot"}, [2]string{"B", "backup"}, [2]string{"R", "replicas"}, [2]string{"U", "engine"}, [2]string{"E", "expand"}, [2]string{"A", "attach"}, [2]string{"w", "switch PVC here"}, [2]string{"Z", "freeze"}, [2]string{"[ ]", "select"}, [2]string{"X", "del replica"})
 			if p.panel == panelSnapshots {
 				keys = append(keys, [2]string{"D", "del snapshot"}, [2]string{"C", "clone"})
 			}
@@ -156,7 +156,7 @@ func (m *model) viewFooter() string {
 	case p.kind == pVolumes && len(m.marked) > 0:
 		keys = [][2]string{{"space", "toggle"}, {"ctrl+a", "all/none"}, {"esc", "clear"}}
 		if m.rw {
-			keys = append(keys, [2]string{"S", "snapshot"}, [2]string{"B", "backup"}, [2]string{"R", "replicas"}, [2]string{"U", "engine image"}, [2]string{"E", "expand"}, [2]string{"A", "attach/detach"})
+			keys = append(keys, [2]string{"S", "snapshot"}, [2]string{"B", "backup"}, [2]string{"R", "replicas"}, [2]string{"U", "engine image"}, [2]string{"E", "expand"}, [2]string{"A", "attach/detach"}, [2]string{"Z", "freeze"})
 		} else {
 			keys = append(keys, [2]string{"W", "write mode for actions"})
 		}
@@ -172,7 +172,7 @@ func (m *model) viewFooter() string {
 		}
 		keys = [][2]string{{"enter", "open"}, {"/", "filter"}, {"p", sortLbl}, {"1-7", "views"}, {"c", "context"}, {"?", "help"}, {"q", "quit"}}
 	case m.rw && (p.kind == pVolumes || p.kind == pActivity):
-		keys = [][2]string{{"S", "snapshot"}, {"B", "backup"}, {"R", "replicas"}, {"U", "engine"}, {"E", "expand"}, {"A", "attach"}, {"space", "select"}, {"enter", "open"}, {"/", "filter"}, {"W", "write mode off"}}
+		keys = [][2]string{{"S", "snapshot"}, {"B", "backup"}, {"R", "replicas"}, {"U", "engine"}, {"E", "expand"}, {"A", "attach"}, {"Z", "freeze"}, {"space", "select"}, {"enter", "open"}, {"/", "filter"}, {"W", "write mode off"}}
 	case m.rw && p.kind == pDisk:
 		keys = [][2]string{{"X", "delete replica"}, {"enter", "open"}, {"esc", "back"}, {"W", "write mode off"}}
 	default:
@@ -438,6 +438,9 @@ func (m *model) viewHelp() string {
    r (backups panel / backups tab) restore into a new volume (+ PV/PVC),
      optionally switching the original PVC to it (workload + Flux handled)
    w (volume details) switch a PVC to this volume – e.g. back to the old one
+   Z freeze: stop every pod using the selected / this / a node's / ALL volumes
+     with an admission policy (no scaling – works with any operator/GitOps);
+     Z again lists active freezes to unfreeze. Header: ❄ while frozen
    C scheduling on/off, E eviction on/off (nodes view)   enter edit (settings)
    X delete orphan, ctrl+x delete all cleanable orphans (orphans tab)
    Every action shows the request first: y apply (Y for destructive ones),

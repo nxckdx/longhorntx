@@ -53,6 +53,8 @@ type DoctorInput struct {
 	Orphans      int
 	Now          time.Time
 	BackupMaxAge time.Duration // 0: only check volumes with a backup recurring job
+	// Extra findings from outside Longhorn (Flux, switch journals)
+	Extra []Finding
 
 	// thresholds (zero values use defaults)
 	DiskWarnPct, DiskCritPct  int
@@ -195,6 +197,7 @@ func Diagnose(in DoctorInput) []Finding {
 	}
 	f = append(f, backupAgeFindings(in, views)...)
 
+	f = append(f, in.Extra...)
 	if in.Orphans > 0 {
 		add(SevInfo, "orphans", fmt.Sprintf("%d orphans", in.Orphans), "orphaned replica data or instances exist", "they use disk space; review with kubectl -n longhorn-system get orphans.longhorn.io")
 	}

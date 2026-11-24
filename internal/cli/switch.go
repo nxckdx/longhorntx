@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -17,6 +16,7 @@ import (
 func switchCmd(g *globals) *cobra.Command {
 	var to string
 	var wait time.Duration
+	var status bool
 	cmd := &cobra.Command{
 		Use:   "switch NAMESPACE/PVC --to-volume VOLUME",
 		Short: "Point a PVC to another Longhorn volume (restored/cloned), workload and Flux included (needs --rw)",
@@ -39,9 +39,15 @@ operator, …), HPAs, bare pods, Argo CD / Flux Operator ResourceSets.
 
 Every step is written to a journal in $XDG_STATE_HOME/lhtx/switch/.
 --dry-run shows the plan only.`,
-		Args:              cobra.ExactArgs(1),
+		Args:              cobra.MaximumNArgs(1),
 		ValidArgsFunction: g.completeVolumes,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if status {
+				return printSwitchStatus()
+			}
+			if len(args) != 1 {
+				return fmt.Errorf("give the PVC as NAMESPACE/NAME (or --status)")
+			}
 			ns, pvc, ok := strings.Cut(args[0], "/")
 			if !ok || ns == "" || pvc == "" {
 				return fmt.Errorf("give the PVC as NAMESPACE/NAME")
@@ -62,6 +68,7 @@ Every step is written to a journal in $XDG_STATE_HOME/lhtx/switch/.
 	}
 	cmd.Flags().StringVar(&to, "to-volume", "", "the Longhorn volume the PVC should use")
 	cmd.Flags().DurationVar(&wait, "wait", 10*time.Minute, "how long to wait for pods to stop / the PVC to bind")
+	cmd.Flags().BoolVar(&status, "status", false, "list the switches of this machine (journals), newest first")
 	return cmd
 }
 
@@ -139,14 +146,35 @@ func (g *globals) runSwitch(ctx context.Context, c *longhorn.Client, p *switchov
 	return err
 }
 
-func switchJournal(p *switchover.Plan) string {
-	dir := os.Getenv("XDG_STATE_HOME")
-	if dir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return ""
-		}
-		dir = filepath.Join(home, ".local", "state")
+func switchJournal(p *switchover.Plan) string { return switchover.NewJournalPath(p) }
+
+func printSwitchStatus() error {
+	dir := switchover.JournalDir()
+	js := switchover.Journals(dir)
+	if len(js) == 0 {
+		fmt.Println("no switches recorded in", dir)
+		return nil
 	}
-	return filepath.Join(dir, "lhtx", "switch", fmt.Sprintf("%s-%s-%s.json", time.Now().Format("20060102-150405"), p.Namespace, p.PVC))
+	w := newTab(os.Stdout)
+	fmt.Fprintln(w, "WHEN\tCONTEXT\tPVC\tFROM\tTO\tRESULT")
+	for _, e := range js {
+		res := "✔ finished"
+		switch {
+		case e.RolledBack:
+			res = "↺ rolled back: " + e.Error
+		case e.Error != "":
+			res = "✖ " + e.Error
+		case !e.Finished:
+			res = "… not finished (last: " + e.LastStep + ")"
+		}
+		if len(res) > 100 {
+			res = res[:97] + "…"
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", e.At.Local().Format("2006-01-02 15:04"), dash(e.Context), e.PVC, e.From, e.To, res)
+	}
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	fmt.Println("\njournals:", dir)
+	return nil
 }

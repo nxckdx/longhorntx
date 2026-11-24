@@ -36,10 +36,12 @@ type Options struct {
 
 // journal is what the journal file holds.
 type journal struct {
-	Plan  *Plan     `json:"plan"`
-	Steps []string  `json:"steps"`
-	Error string    `json:"error,omitempty"`
-	At    time.Time `json:"updated"`
+	Context    string    `json:"context"` // kubeconfig context
+	Plan       *Plan     `json:"plan"`
+	Steps      []string  `json:"steps"`
+	Error      string    `json:"error,omitempty"`
+	RolledBack bool      `json:"rolledBack,omitempty"` // failed, but everything was undone
+	At         time.Time `json:"updated"`
 }
 
 type runner struct {
@@ -78,7 +80,7 @@ func Run(ctx context.Context, c *longhorn.Client, p *Plan, o Options) error {
 	if o.Poll == 0 {
 		o.Poll = 3 * time.Second
 	}
-	r := &runner{ctx: ctx, c: c, dyn: c.Dynamic(), p: p, o: o, j: journal{Plan: p}}
+	r := &runner{ctx: ctx, c: c, dyn: c.Dynamic(), p: p, o: o, j: journal{Plan: p, Context: c.Cluster.Context}}
 	err := r.run()
 	if err != nil {
 		r.j.Error = err.Error()
@@ -179,6 +181,7 @@ func (r *runner) rollback(cause error) error {
 	if len(errs) > 0 {
 		return fmt.Errorf("%w; rollback incomplete: %s (journal: %s)", cause, strings.Join(errs, "; "), r.o.Journal)
 	}
+	r.j.RolledBack = true
 	return fmt.Errorf("%w (rolled back: workloads and Flux as before, the PVC untouched; volume %s stays – delete it if not needed)", cause, r.p.NewVolume)
 }
 

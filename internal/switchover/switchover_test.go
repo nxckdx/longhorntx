@@ -2,6 +2,7 @@ package switchover
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -241,5 +242,33 @@ func TestSwitchBlockers(t *testing.T) {
 	}
 	if _, err := Build(ctx, c, "app", "data", "pvc-nope"); err == nil {
 		t.Error("missing target volume accepted")
+	}
+}
+
+func TestChecks(t *testing.T) {
+	c, dyn := world()
+	ctx := context.Background()
+	dir := t.TempDir()
+	// an unfinished switch of this context, a rolled back one, one of another context
+	p := &Plan{Namespace: "app", PVC: "data", NewVolume: "pvc-new"}
+	write := func(name string, j journal) {
+		b, _ := json.Marshal(j)
+		_ = os.WriteFile(filepath.Join(dir, name), b, 0o644)
+	}
+	write("a.json", journal{Context: "t", Plan: p, Steps: []string{"PVC deleted"}, At: time.Now()})
+	write("b.json", journal{Context: "t", Plan: p, Error: "x", RolledBack: true, At: time.Now()})
+	write("c.json", journal{Context: "other", Plan: p, At: time.Now()})
+	// a suspended Kustomization
+	ks := get(t, dyn, GVRKustomization, "flux-system", "apps")
+	_ = unstructured.SetNestedField(ks.Object, true, "spec", "suspend")
+	_, _ = dyn.Resource(GVRKustomization).Namespace("flux-system").Update(ctx, ks, metav1.UpdateOptions{})
+
+	fs := Checks(ctx, c, dir)
+	var got []string
+	for _, f := range fs {
+		got = append(got, f.Check+":"+f.Object)
+	}
+	if strings.Join(got, ",") != "switch:app/data,flux:Kustomization flux-system/apps" {
+		t.Errorf("%v", got)
 	}
 }

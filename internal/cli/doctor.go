@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/nxckdx/longhorntx/internal/longhorn"
+	"github.com/nxckdx/longhorntx/internal/switchover"
 )
 
 // exitError carries a process exit code without printing an error.
@@ -68,6 +69,7 @@ func runDoctor(cmd *cobra.Command, g *globals, backupMaxAge time.Duration, minSe
 		return err
 	}
 	in.BackupMaxAge = backupMaxAge
+	in.Extra = switchover.Checks(cmd.Context(), c, switchover.JournalDir())
 	all := longhorn.Diagnose(in)
 	var fs []longhorn.Finding
 	for _, f := range all {

@@ -9,6 +9,7 @@ import (
 
 	"github.com/nxckdx/longhorntx/internal/format"
 	"github.com/nxckdx/longhorntx/internal/longhorn"
+	"github.com/nxckdx/longhorntx/internal/switchover"
 )
 
 // Health tab: longhorn.Diagnose over the live store data (free) plus extras
@@ -20,6 +21,7 @@ type healthExtra struct {
 	jobs      []*longhorn.RecurringJob
 	orphans   int
 	snapshots []*longhorn.VolumeSnapshot
+	extra     []longhorn.Finding // Flux suspended, unfinished switches
 	loadedAt  time.Time
 	err       error
 }
@@ -46,6 +48,7 @@ func (m *model) loadHealth() tea.Cmd {
 			x.err = err
 		}
 		x.orphans, _, _ = c.ListCount(ctx, "orphans")
+		x.extra = switchover.Checks(ctx, c, switchover.JournalDir())
 		for _, v := range rebuilding {
 			if s, err := c.Snapshots(ctx, v); err == nil {
 				x.snapshots = append(x.snapshots, s...)
@@ -81,7 +84,7 @@ func (m *model) computeFindings() []longhorn.Finding {
 	}
 	in := longhorn.DoctorInput{State: m.state, Now: time.Now()}
 	if x := m.health; x != nil {
-		in.Targets, in.Jobs, in.Orphans, in.Snapshots = x.targets, x.jobs, x.orphans, x.snapshots
+		in.Targets, in.Jobs, in.Orphans, in.Snapshots, in.Extra = x.targets, x.jobs, x.orphans, x.snapshots, x.extra
 	}
 	if len(m.orphans) > 0 || in.Orphans == 0 {
 		in.Orphans = len(m.orphans) // live from the store

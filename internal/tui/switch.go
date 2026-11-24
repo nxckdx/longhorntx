@@ -3,8 +3,6 @@ package tui
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -173,17 +171,7 @@ func (m *model) viewSwitch(w, h int) string {
 	return b.String()
 }
 
-func journalPath(p *switchover.Plan) string {
-	dir := os.Getenv("XDG_STATE_HOME")
-	if dir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return ""
-		}
-		dir = filepath.Join(home, ".local", "state")
-	}
-	return filepath.Join(dir, "lhtx", "switch", fmt.Sprintf("%s-%s-%s.json", time.Now().Format("20060102-150405"), p.Namespace, p.PVC))
-}
+func journalPath(p *switchover.Plan) string { return switchover.NewJournalPath(p) }
 
 func (m *model) viewSwitchBox(h int) string {
 	w := min(max(m.width-8, 40), 120)

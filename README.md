@@ -262,7 +262,10 @@ The old volume is kept: `lhtx switch NS/PVC --to-volume OLD` switches back
 `$XDG_STATE_HOME/lhtx/switch/`. Refused up front, with the reason: workloads
 of operators (CloudNativePG clusters, the Prometheus operator, …), HPAs, bare
 pods, jobs, Argo CD and Flux Operator ResourceSets (not supported yet).
-`--dry-run` shows the plan.
+`--dry-run` shows the plan. `lhtx switch --status` lists the switches of this
+machine; `lhtx doctor` and the Health tab warn about unfinished ones (of the
+current context) and list suspended Flux Kustomizations/HelmReleases – a
+forgotten `flux suspend` is easy to miss.
 
 Orphans: `DataCleanable` only says Longhorn *can* delete the data, not that
 it is safe. Replica data of a volume that is deleted, faulted, degraded or

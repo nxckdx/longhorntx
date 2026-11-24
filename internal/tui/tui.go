@@ -526,6 +526,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.applyOverview(msg)
 		return m, nil
 
+	case switchPlanMsg:
+		m.onSwitchPlan(msg)
+		return m, nil
+
 	case switchLogMsg:
 		return m, m.onSwitchLog(msg)
 

@@ -190,3 +190,55 @@ func (m *model) viewSwitchBox(h int) string {
 	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(cBorder).Padding(1, 2).Width(w).Render(m.viewSwitch(w, h))
 	return lipgloss.Place(m.width, h, lipgloss.Center, lipgloss.Center, box)
 }
+
+// ---------------------------------------------------------------- w: switch a PVC to this volume
+
+type switchPlanMsg struct {
+	client *longhorn.Client
+	plan   *switchover.Plan
+	err    error
+}
+
+// switchToVolumeKey: w in the volume details – point a PVC at this volume
+// (switching back to an old volume, or to a restored/cloned one). The PVC
+// comes from Longhorn's record of the volume's last PVC, else it is asked.
+func (m *model) switchToVolumeKey(vol string) tea.Cmd {
+	if !m.requireRW() {
+		return nil
+	}
+	vv := m.findView(vol)
+	if vv == nil {
+		return nil
+	}
+	if vv.State == "attached" {
+		m.setFlash("this volume is attached – a PVC can only be switched to a detached volume", true)
+		return nil
+	}
+	initial := vv.PVC
+	m.prompt("Switch which PVC to volume "+vol+"? (namespace/name; its workload is stopped meanwhile)", initial, func(s string) error {
+		ns, pvc, ok := strings.Cut(strings.TrimSpace(s), "/")
+		if !ok || ns == "" || pvc == "" {
+			return fmt.Errorf("namespace/name")
+		}
+		c, ctx := m.client, m.ctx
+		m.setFlash("planning the switch …", false)
+		m.afterSubmit = func() tea.Msg {
+			p, err := switchover.Build(ctx, c, ns, pvc, vol)
+			return switchPlanMsg{client: c, plan: p, err: err}
+		}
+		return nil
+	})
+	return nil
+}
+
+func (m *model) onSwitchPlan(msg switchPlanMsg) {
+	if msg.client != m.client {
+		return
+	}
+	if msg.err != nil {
+		m.setFlash("switch: "+msg.err.Error(), true)
+		return
+	}
+	m.flash = ""
+	m.confirmSwitch(msg.plan, nil)
+}

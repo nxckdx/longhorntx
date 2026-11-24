@@ -137,7 +137,7 @@ func (m *model) viewFooter() string {
 			keys = append(keys, [2]string{"ctrl+r", "reload"})
 		}
 		if m.rw {
-			keys = append(keys, [2]string{"S", "snapshot"}, [2]string{"B", "backup"}, [2]string{"R", "replicas"}, [2]string{"U", "engine"}, [2]string{"E", "expand"}, [2]string{"A", "attach"}, [2]string{"[ ]", "select"}, [2]string{"X", "del replica"})
+			keys = append(keys, [2]string{"S", "snapshot"}, [2]string{"B", "backup"}, [2]string{"R", "replicas"}, [2]string{"U", "engine"}, [2]string{"E", "expand"}, [2]string{"A", "attach"}, [2]string{"w", "switch PVC here"}, [2]string{"[ ]", "select"}, [2]string{"X", "del replica"})
 			if p.panel == panelSnapshots {
 				keys = append(keys, [2]string{"D", "del snapshot"}, [2]string{"C", "clone"})
 			}
@@ -435,7 +435,9 @@ func (m *model) viewHelp() string {
    X delete replica ([ ] selects in volume details)   D delete snapshot (in panel)
    C (snapshots panel) clone the snapshot into a new volume (+ PV/PVC)
    B (health tab) back up every attached volume with a late/missing backup
-   r (backups panel / backups tab) restore into a new volume (+ PV/PVC)
+   r (backups panel / backups tab) restore into a new volume (+ PV/PVC),
+     optionally switching the original PVC to it (workload + Flux handled)
+   w (volume details) switch a PVC to this volume – e.g. back to the old one
    C scheduling on/off, E eviction on/off (nodes view)   enter edit (settings)
    X delete orphan, ctrl+x delete all cleanable orphans (orphans tab)
    Every action shows the request first: y apply (Y for destructive ones),

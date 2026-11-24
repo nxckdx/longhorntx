@@ -180,6 +180,14 @@ func (s *sim) workloadReactors(ctx context.Context) {
 			return false, nil, nil
 		})
 	}
+	// deleting a PVC releases its PV (like the PV controller)
+	s.dyn.PrependReactor("delete", "persistentvolumeclaims", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if !isDryRun(a) {
+			da := a.(k8stesting.DeleteActionImpl)
+			go s.releasePV(ctx, da.GetNamespace(), da.GetName())
+		}
+		return false, nil, nil
+	})
 	s.dyn.PrependReactor("create", "persistentvolumeclaims", func(a k8stesting.Action) (bool, runtime.Object, error) {
 		if obj, ok := a.(k8stesting.CreateActionImpl).GetObject().(*unstructured.Unstructured); ok && !isDryRun(a) {
 			_ = unstructured.SetNestedField(obj.Object, "Bound", "status", "phase")
@@ -241,6 +249,22 @@ func (s *sim) scaled(ctx context.Context, gvr schema.GroupVersionResource, nsNam
 	_ = s.patchUnstructured(ctx, gvr, nsName, name, func(o *unstructured.Unstructured) {
 		_ = unstructured.SetNestedField(o.Object, n, "status", "readyReplicas")
 	})
+}
+
+func (s *sim) releasePV(ctx context.Context, nsName, claim string) {
+	time.Sleep(300 * time.Millisecond)
+	pvs, err := s.dyn.Resource(gvrPV).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return
+	}
+	for _, pv := range pvs.Items {
+		n, _, _ := unstructured.NestedString(pv.Object, "spec", "claimRef", "namespace")
+		c, _, _ := unstructured.NestedString(pv.Object, "spec", "claimRef", "name")
+		if n == nsName && c == claim {
+			_ = unstructured.SetNestedField(pv.Object, "Released", "status", "phase")
+			_, _ = s.dyn.Resource(gvrPV).Update(ctx, &pv, metav1.UpdateOptions{})
+		}
+	}
 }
 
 // setVolumeState attaches/detaches the Longhorn volume behind a PVC.

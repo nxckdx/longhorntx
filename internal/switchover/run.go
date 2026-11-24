@@ -179,7 +179,7 @@ func (r *runner) rollback(cause error) error {
 	if len(errs) > 0 {
 		return fmt.Errorf("%w; rollback incomplete: %s (journal: %s)", cause, strings.Join(errs, "; "), r.o.Journal)
 	}
-	return fmt.Errorf("%w (rolled back, nothing changed)", cause)
+	return fmt.Errorf("%w (rolled back: workloads and Flux as before, the PVC untouched; volume %s stays – delete it if not needed)", cause, r.p.NewVolume)
 }
 
 // stuck explains the state after the point of no return.
@@ -214,7 +214,14 @@ func (r *runner) waitTargetReady() error {
 		}
 		if time.Since(last) > 15*time.Second {
 			last = time.Now()
-			r.o.Log("… waiting for %s: %s%s", v.Name, v.Status.State, r.restoreProgress(v.Name))
+			state := v.Status.State
+			switch {
+			case state == "":
+				state = "creating"
+			case v.Status.RestoreRequired:
+				state = "restoring"
+			}
+			r.o.Log("… waiting for %s: %s%s", v.Name, state, r.restoreProgress(v.Name))
 		}
 		if err := r.sleep(); err != nil {
 			return err

@@ -54,6 +54,9 @@ type modal struct {
 	busyText string
 
 	form *form // modalForm
+
+	// onConfirm replaces applying the action (multi-step runs like a switch)
+	onConfirm func() tea.Cmd
 }
 
 type actionDoneMsg struct {
@@ -744,6 +747,10 @@ func (m *model) modalKey(k tea.KeyPressMsg) tea.Cmd {
 		m.modal = nil
 		m.setFlash("cancelled", false)
 	case "d":
+		if md.onConfirm != nil {
+			m.setFlash("no server dry run for a multi-step switch – its steps depend on each other", true)
+			return nil
+		}
 		m.modal = &modal{kind: modalBusy, busyText: "server dry run …"}
 		if md.batch != nil {
 			return m.runBatch(md.batch, a.Title, longhorn.DryRunServer)
@@ -753,6 +760,9 @@ func (m *model) modalKey(k tea.KeyPressMsg) tea.Cmd {
 		if a.Destructive && key != "Y" {
 			m.setFlash("destructive action: press capital Y to confirm", true)
 			return nil
+		}
+		if md.onConfirm != nil {
+			return md.onConfirm()
 		}
 		if len(md.backupVols) > 0 {
 			vols := md.backupVols
@@ -965,7 +975,11 @@ func (m *model) viewModal(bodyHeight int) string {
 		if a.Destructive {
 			yes = sErr.Render("[Y]") + " apply (capital Y)"
 		}
-		b.WriteString(yes + "   " + sKey.Render("[d]") + " server dry run   " + sKey.Render("[esc]") + " cancel")
+		if md.onConfirm != nil {
+			b.WriteString(yes + "   " + sKey.Render("[esc]") + " cancel")
+		} else {
+			b.WriteString(yes + "   " + sKey.Render("[d]") + " server dry run   " + sKey.Render("[esc]") + " cancel")
+		}
 	}
 	border := cBorder
 	if md.kind == modalConfirm && md.action.Destructive {

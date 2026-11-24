@@ -203,7 +203,7 @@ func TestSwitchRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = Run(ctx, c, p, Options{Poll: 10 * time.Millisecond, Wait: 2 * time.Second})
-	if err == nil || !strings.Contains(err.Error(), "rolled back") {
+	if err == nil || !strings.Contains(err.Error(), "rolled back:") {
 		t.Fatalf("want rollback, got %v", err)
 	}
 	if n, _, _ := unstructured.NestedInt64(get(t, dyn, gvrDeployment, "app", "app").Object, "spec", "replicas"); n != 2 {

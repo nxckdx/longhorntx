@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/nxckdx/longhorntx/internal/longhorn"
+	"github.com/nxckdx/longhorntx/internal/switchover"
 )
 
 // Restore (write mode): r in a backup list restores the selected backup,
@@ -61,16 +62,35 @@ func (m *model) restoreForm(msg restorePlanMsg) {
 	if p.Spec.PVCNamespace != "" {
 		pvc = p.Spec.PVCNamespace + "/" + p.Spec.Name
 	}
-	f := &form{title: fmt.Sprintf("Restore %s (%s) into a new volume", b.Name, backupWhen(b)), fields: []formField{
+	// switching is offered when the backed-up volume still has its PVC
+	srcPVC := ""
+	if vv := m.findView(b.Volume()); vv != nil {
+		srcPVC = vv.PVC
+		p.Spec.Replicas = vv.Volume.Spec.NumberOfReplicas // like the volume it may replace
+	}
+	const newOnly = "new volume (+ PVC below)"
+	switchTo := "switch " + srcPVC + " to it"
+	fields := []formField{
 		{key: "name", label: "new volume", value: p.Spec.Name, hint: "also the PV name"},
 		{key: "replicas", label: "replicas", value: fmt.Sprint(p.Spec.Replicas)},
 		{key: "pvc", label: "PVC", value: pvc, hint: "namespace/name, empty = volume only"},
 		{key: "sc", label: "storage class", value: p.Spec.StorageClass, hint: "of PV and PVC"},
-	}}
-	f.live = func(map[string]string) []string {
+	}
+	if srcPVC != "" {
+		fields = append(fields, formField{key: "then", label: "then", value: newOnly, options: []string{newOnly, switchTo},
+			hint: "←→: switch = workload down, PVC re-created on the restored data, Flux paused meanwhile"})
+	}
+	f := &form{title: fmt.Sprintf("Restore %s (%s) into a new volume", b.Name, backupWhen(b)), fields: fields}
+	f.live = func(v map[string]string) []string {
+		if v["then"] == switchTo {
+			return []string{"enter shows every step of the switch before anything happens"}
+		}
 		return []string{"the original volume and its workload are not touched"}
 	}
 	f.submitBatch = func(v map[string]string) (string, []*longhorn.Action, error) {
+		if v["then"] == switchTo {
+			return "", nil, m.planRestoreSwitch(c, p, srcPVC, v)
+		}
 		p.Spec.Name = strings.TrimSpace(v["name"])
 		n, err := strconv.Atoi(strings.TrimSpace(v["replicas"]))
 		if err != nil {
@@ -204,4 +224,28 @@ func (m *model) cloneForm(msg clonePlanMsg) {
 		return acts[0].Title, acts, nil
 	}
 	m.openForm(f)
+}
+
+// planRestoreSwitch plans restore + switch and opens the step preview.
+func (m *model) planRestoreSwitch(c *longhorn.Client, p *longhorn.RestorePlan, srcPVC string, v map[string]string) error {
+	p.Spec.Name = strings.TrimSpace(v["name"])
+	n, err := strconv.Atoi(strings.TrimSpace(v["replicas"]))
+	if err != nil {
+		return fmt.Errorf("replicas: a number")
+	}
+	p.Spec.Replicas, p.Spec.PVCNamespace, p.Spec.PVCName = n, "", ""
+	ctx, cancel := context.WithTimeout(m.ctx, 20*time.Second)
+	defer cancel()
+	acts, err := c.BuildRestore(ctx, p)
+	if err != nil {
+		return err
+	}
+	ns, pvc, _ := strings.Cut(srcPVC, "/")
+	sw, err := switchover.BuildPending(ctx, c, ns, pvc, p.Spec.Name, int64(p.Backup.Status.VolumeSize))
+	if err != nil {
+		return err
+	}
+	acts[0].Warnings = nil
+	m.confirmSwitch(sw, acts[0])
+	return errFormDone
 }

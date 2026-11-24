@@ -182,8 +182,9 @@ type model struct {
 	eff                  config.Effective // settings of the connected context
 	budget               int64            // traffic budget in bytes, 0 = off
 	budgetWarned, paused bool
-	autoNoted            bool // flash shown when auto switched to polling
-	themePicked          bool // a theme was picked: keep it across contexts
+	autoNoted            bool       // flash shown when auto switched to polling
+	themePicked          bool       // a theme was picked: keep it across contexts
+	switching            *switchRun // restore + switch running (switch.go)
 	themeBefore          string
 	themeCursor          int
 
@@ -525,6 +526,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.applyOverview(msg)
 		return m, nil
 
+	case switchLogMsg:
+		return m, m.onSwitchLog(msg)
+
+	case switchDoneMsg:
+		m.onSwitchDone(msg)
+		return m, nil
+
 	case clonePlanMsg:
 		m.cloneForm(msg)
 		return m, nil
@@ -648,6 +656,9 @@ func (m *model) shownPct(key string, real int) float64 {
 
 func (m *model) handleKey(k tea.KeyPressMsg) tea.Cmd {
 	key := k.String()
+	if m.switching != nil {
+		return m.switchKey(key) // nothing else while a switch runs
+	}
 	if key == "ctrl+c" {
 		return tea.Quit
 	}
@@ -1023,6 +1034,9 @@ func (m *model) View() tea.View {
 	}
 	if m.modal != nil && m.height > 2 {
 		body = m.viewModal(m.height - 2)
+	}
+	if m.switching != nil && m.height > 2 {
+		body = m.viewSwitchBox(m.height - 2)
 	}
 	content := m.viewHeader() + "\n" + body
 	lines := strings.Split(content, "\n")

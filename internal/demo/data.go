@@ -462,7 +462,8 @@ func (d *data) objects() []runtime.Object {
 		size := resource.NewQuantity(int64(v.Spec.Size), resource.BinarySI).String()
 		out = append(out, &unstructured.Unstructured{Object: map[string]any{
 			"apiVersion": "v1", "kind": "PersistentVolumeClaim",
-			"metadata": map[string]any{"name": ks.PVCName, "namespace": ks.Namespace, "resourceVersion": "100"},
+			"metadata": map[string]any{"name": ks.PVCName, "namespace": ks.Namespace, "resourceVersion": "100",
+				"labels": fluxLabels(workloadOf(ks.PVCName))},
 			"spec": map[string]any{
 				"accessModes": []any{mode}, "storageClassName": "longhorn", "volumeName": v.Name,
 				"resources": map[string]any{"requests": map[string]any{"storage": size}},
@@ -470,7 +471,7 @@ func (d *data) objects() []runtime.Object {
 			"status": map[string]any{"phase": "Bound", "capacity": map[string]any{"storage": size}},
 		}})
 	}
-	return out
+	return append(out, d.workloadObjects()...)
 }
 
 // addBackups adds 4 daily backups and the BackupVolume of a volume.

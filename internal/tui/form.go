@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -11,6 +12,9 @@ import (
 // A form dialog with several fields (recurring jobs, backup targets,
 // restore). enter builds the action; if that fails the error is shown in
 // the form and nothing is lost, otherwise the usual confirm dialog opens.
+
+// errFormDone: a submit opened the next dialog itself.
+var errFormDone = errors.New("form handled")
 
 type formField struct {
 	key, label string
@@ -69,6 +73,9 @@ func (m *model) formKey(k tea.KeyPressMsg) tea.Cmd {
 	case "enter":
 		if f.submitBatch != nil {
 			title, acts, err := f.submitBatch(f.values())
+			if errors.Is(err, errFormDone) {
+				return nil // the submit opened its own dialog
+			}
 			if err != nil {
 				f.err = err.Error()
 				return nil

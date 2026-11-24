@@ -52,6 +52,11 @@ func NewClient(ctx context.Context) *longhorn.Client {
 	}
 	kinds[longhorn.GVRPVC] = "PersistentVolumeClaimList"
 	kinds[longhorn.GVRStorageClass] = "StorageClassList"
+	for g, k := range map[schema.GroupVersionResource]string{gvrPod: "PodList", gvrPV: "PersistentVolumeList",
+		gvrReplicaSet: "ReplicaSetList", gvrDeployment: "DeploymentList", gvrStatefulSet: "StatefulSetList",
+		gvrHPA: "HorizontalPodAutoscalerList", gvrKS: "KustomizationList", gvrHR: "HelmReleaseList"} {
+		kinds[g] = k
+	}
 	dyn := dynfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), kinds, d.objects()...)
 	// The fake client ignores label selectors on watches; lhtx relies on
 	// them for the per-volume engine watches.
@@ -79,7 +84,8 @@ func NewClient(ctx context.Context) *longhorn.Client {
 		})
 	}
 
-	s := &sim{d: d, dyn: dyn}
+	s := &sim{d: d, dyn: dyn, claimsOf: map[string][]string{}, nodeOf: map[string]string{}}
+	s.workloadReactors(ctx)
 	// Expanding a PVC: grow the volume a moment later, like the CSI resizer.
 	dyn.PrependReactor("patch", "persistentvolumeclaims", func(a k8stesting.Action) (bool, runtime.Object, error) {
 		pa := a.(k8stesting.PatchActionImpl)
@@ -225,6 +231,10 @@ type sim struct {
 	mu  sync.Mutex
 	d   *data
 	dyn *dynfake.FakeDynamicClient
+
+	// workloads scaled to 0: their PVCs and node, to start them again
+	claimsOf map[string][]string
+	nodeOf   map[string]string
 }
 
 func (s *sim) reconcileAttachment(ctx context.Context, name string) {
@@ -359,20 +369,28 @@ func (s *sim) runBackup(ctx context.Context, name string) {
 // PVC once one is bound).
 func (s *sim) restored(ctx context.Context, name string, ks map[string]any) {
 	time.Sleep(600 * time.Millisecond)
-	res := s.dyn.Resource(longhorn.GVRVolume).Namespace(ns)
-	u, err := res.Get(ctx, name, metav1.GetOptions{})
-	if err != nil {
+	if ks != nil { // a PVC was bound to it
+		s.patchStatus(ctx, longhorn.GVRVolume, name, func(u *unstructured.Unstructured) {
+			_ = unstructured.SetNestedMap(u.Object, ks, "status", "kubernetesStatus")
+		})
 		return
 	}
-	size, _, _ := unstructured.NestedString(u.Object, "spec", "size")
-	_ = unstructured.SetNestedField(u.Object, "detached", "status", "state")
-	_ = unstructured.SetNestedField(u.Object, "unknown", "status", "robustness")
-	_ = unstructured.SetNestedField(u.Object, size, "status", "actualSize")
-	if ks != nil {
-		_ = unstructured.SetNestedMap(u.Object, ks, "status", "kubernetesStatus")
-	}
-	u.SetResourceVersion(strconv.FormatInt(rv.Add(1)+48211, 10))
-	_, _ = res.Update(ctx, u, metav1.UpdateOptions{})
+	// restoring/cloning: attached to a node while data is copied, then detached
+	s.patchStatus(ctx, longhorn.GVRVolume, name, func(u *unstructured.Unstructured) {
+		_ = unstructured.SetNestedField(u.Object, "attached", "status", "state")
+		_ = unstructured.SetNestedField(u.Object, "worker-2", "status", "currentNodeID")
+		_ = unstructured.SetNestedField(u.Object, "healthy", "status", "robustness")
+		_ = unstructured.SetNestedField(u.Object, true, "status", "restoreRequired")
+	})
+	time.Sleep(6 * time.Second)
+	s.patchStatus(ctx, longhorn.GVRVolume, name, func(u *unstructured.Unstructured) {
+		size, _, _ := unstructured.NestedString(u.Object, "spec", "size")
+		_ = unstructured.SetNestedField(u.Object, "detached", "status", "state")
+		_ = unstructured.SetNestedField(u.Object, "", "status", "currentNodeID")
+		_ = unstructured.SetNestedField(u.Object, "unknown", "status", "robustness")
+		_ = unstructured.SetNestedField(u.Object, false, "status", "restoreRequired")
+		_ = unstructured.SetNestedField(u.Object, size, "status", "actualSize")
+	})
 }
 
 func (s *sim) update(ctx context.Context, g schema.GroupVersionResource, obj any) {

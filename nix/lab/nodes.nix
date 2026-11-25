@@ -77,7 +77,7 @@ let
         # backup target for Longhorn: nfs://10.77.0.11:/export/backups
         services.nfs.server = lib.mkIf (n == 1) {
           enable = true;
-          exports = "/export/backups 10.77.0.0/24(rw,sync,no_subtree_check,no_root_squash,fsid=1)";
+          exports = "/export/backups *(rw,sync,no_subtree_check,no_root_squash,insecure,fsid=1)";
         };
         systemd.tmpfiles.settings.lab-backups = lib.mkIf (n == 1) {
           "/export/backups".d = { mode = "0777"; };

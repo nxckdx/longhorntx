@@ -61,6 +61,7 @@ type SwitchSpec struct {
 	ToVolume   string `json:"toVolume,omitempty"`   // an existing Longhorn volume, or
 	FromBackup string `json:"fromBackup,omitempty"` // a Backup to restore into a new volume first
 	Replicas   int    `json:"replicas,omitempty"`   // of the restored volume (default: like the PVC's volume)
+	VolumeName string `json:"volumeName,omitempty"` // of the restored volume (default <pvc>-restore-<MMDD>)
 	Wait       string `json:"wait,omitempty"`       // waits for pods/PVCs (default 10m)
 
 	RequestedBy     string   `json:"requestedBy"`
@@ -325,6 +326,9 @@ func (a *Agent) prepareTarget(ctx context.Context, lg *switchLog, s *Switch, adm
 			return "", err
 		}
 		plan.Spec.Name = longhorn.RestoreName(pvc, b.Volume(), time.Now())
+		if s.Spec.VolumeName != "" {
+			plan.Spec.Name = s.Spec.VolumeName
+		}
 		if s.Spec.Replicas > 0 {
 			plan.Spec.Replicas = s.Spec.Replicas
 		} else if v, err := a.c.Volume(ctx, b.Volume()); err == nil && v.Spec.NumberOfReplicas > 0 {

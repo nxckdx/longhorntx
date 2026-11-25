@@ -82,6 +82,9 @@ func startAgent(ctx context.Context, c *longhorn.Client) {
 		_, _ = c.Dynamic().Resource(gvrLease).Namespace(ns).Patch(ctx, agent.LeaseName, "application/merge-patch+json", b, metav1.PatchOptions{})
 	}
 	renew(true)
+	// installed with the agent: vouches for Switch requesters
+	_, _ = c.Dynamic().Resource(gvrVAP).Create(ctx, u(map[string]any{"apiVersion": "admissionregistration.k8s.io/v1",
+		"kind": "ValidatingAdmissionPolicy", "metadata": map[string]any{"name": agent.RequesterPolicy}}), metav1.CreateOptions{})
 	go func() {
 		t := time.NewTicker(10 * time.Second)
 		defer t.Stop()

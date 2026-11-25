@@ -65,6 +65,10 @@ spec:
                   description: A Longhorn Backup to restore into a new volume first.
                   type: string
                   maxLength: 63
+                volumeName:
+                  description: Name of the restored volume (fromBackup).
+                  type: string
+                  maxLength: 40
                 replicas:
                   type: integer
                   minimum: 1

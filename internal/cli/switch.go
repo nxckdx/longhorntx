@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/nxckdx/longhorntx/internal/agent"
 	"github.com/nxckdx/longhorntx/internal/longhorn"
 	"github.com/nxckdx/longhorntx/internal/switchover"
 )
@@ -16,7 +17,7 @@ import (
 func switchCmd(g *globals) *cobra.Command {
 	var to string
 	var wait time.Duration
-	var status bool
+	var status, local bool
 	cmd := &cobra.Command{
 		Use:   "switch NAMESPACE/PVC --to-volume VOLUME",
 		Short: "Point a PVC to another Longhorn volume (restored/cloned) while its apps are frozen (needs --rw)",
@@ -64,18 +65,26 @@ Every step is written to a journal in $XDG_STATE_HOME/lhtx/switch/.
 			if err != nil {
 				return err
 			}
-			return g.runSwitch(cmd.Context(), c, p, nil, wait)
+			return g.runSwitch(cmd.Context(), c, p, nil, wait, local, switchTarget{})
 		},
 	}
 	cmd.Flags().StringVar(&to, "to-volume", "", "the Longhorn volume the PVC should use")
 	cmd.Flags().DurationVar(&wait, "wait", 10*time.Minute, "how long to wait for pods to stop / the PVC to bind")
+	cmd.Flags().BoolVar(&local, "local", false, "run the switch here even if an lhtx agent could do it")
 	cmd.Flags().BoolVar(&status, "status", false, "list the switches of this machine (journals), newest first")
 	return cmd
 }
 
 // runSwitch previews (restore action if any, then the switch steps),
 // confirms by typing the PVC, applies the restore and runs the switch.
-func (g *globals) runSwitch(ctx context.Context, c *longhorn.Client, p *switchover.Plan, restore *longhorn.Action, wait time.Duration) error {
+// switchTarget: what the agent needs to redo the switch (the volume, or the
+// backup to restore and the new volume's name and replicas).
+type switchTarget struct {
+	backup   string
+	replicas int
+}
+
+func (g *globals) runSwitch(ctx context.Context, c *longhorn.Client, p *switchover.Plan, restore *longhorn.Action, wait time.Duration, local bool, tgt switchTarget) error {
 	title := fmt.Sprintf("Switch PVC %s from volume %s to %s", p.PVCRef(), p.OldVolume, p.NewVolume)
 	if restore != nil {
 		title = restore.Title + ", then switch PVC " + p.PVCRef() + " to it"
@@ -123,9 +132,40 @@ func (g *globals) runSwitch(ctx context.Context, c *longhorn.Client, p *switchov
 		}
 		return fmt.Errorf("--dry-run=server is not possible for the switch (its steps depend on each other): use --dry-run")
 	}
+	byAgent := false
+	if !local {
+		if ag := agent.Detect(ctx, c); ag != nil && agent.SwitchesAvailable(ctx, c, p.Namespace) {
+			byAgent = true
+			fmt.Printf("\ncarried out by the lhtx agent %s – lhtx only follows (Ctrl+C stops following, not the switch; --local runs it here)\n", ag.Holder)
+		}
+	}
 	fmt.Println("\nThe apps using the PVC are down from the freeze until the unfreeze at the end.")
 	if err := g.confirm(true, p.PVCRef()); err != nil {
 		return err
+	}
+	if byAgent {
+		spec := agent.SwitchSpec{PVC: p.PVC, Wait: wait.String()}
+		if restore != nil {
+			spec.FromBackup, spec.VolumeName, spec.Replicas = tgt.backup, p.NewVolume, tgt.replicas
+		} else {
+			spec.ToVolume = p.NewVolume
+		}
+		name, err := agent.RequestSwitch(ctx, c, p.Namespace, spec)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("requested Switch %s/%s from the agent\n", p.Namespace, name)
+		sw, err := agent.FollowSwitch(ctx, c, p.Namespace, name, plainLog)
+		switch {
+		case ctx.Err() != nil:
+			fmt.Printf("\nstopped following – the agent goes on (kubectl -n %s get switch %s)\n", p.Namespace, name)
+			return nil
+		case err != nil:
+			return err
+		case sw.Status.Phase != agent.SwitchDone:
+			return fmt.Errorf("switch %s: %s", sw.Status.Phase, sw.Status.Message)
+		}
+		return nil
 	}
 	if restore != nil {
 		if err := c.Apply(ctx, restore, longhorn.DryRunNone); err != nil {

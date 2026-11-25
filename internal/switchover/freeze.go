@@ -757,8 +757,9 @@ func Unfreeze(ctx context.Context, c *longhorn.Client, f Freeze, o FreezeOptions
 	}
 	// Controllers that failed to create pods during the freeze may still
 	// be in their back-off (a ReplicaSet waits for its "expectations" up to
-	// 5 minutes and ignores a nudge until then): nudge the owners in the
-	// namespaces of the volumes still missing again, every Renudge.
+	// 5 minutes and ignores a nudge until then). Every Renudge, owners in
+	// the namespaces of the volumes still missing that have no pod at all
+	// are nudged again – one with a pod (starting, attaching) is left alone.
 	lastNudge := time.Now()
 	renudge := func(left []string) {
 		if time.Since(lastNudge) < o.Renudge {
@@ -770,14 +771,26 @@ func Unfreeze(ctx context.Context, c *longhorn.Client, f Freeze, o FreezeOptions
 			ns, _, _ := strings.Cut(x, "/")
 			nss[ns] = true
 		}
+		hasPod := map[string]bool{}
+		for ns := range nss {
+			pods, err := dyn.Resource(gvrPod).Namespace(ns).List(ctx, metav1.ListOptions{})
+			if err != nil {
+				return
+			}
+			for i := range pods.Items {
+				if co, ok := controllerOf(&pods.Items[i]); ok && pods.Items[i].GetDeletionTimestamp() == nil {
+					hasPod[co.Kind+" "+ns+"/"+co.Name] = true
+				}
+			}
+		}
 		n := 0
 		for _, ow := range f.Owners {
-			if nss[ow.Namespace] && !woken[ow.String()] && nudge(ctx, c, ow) == nil {
+			if nss[ow.Namespace] && !woken[ow.String()] && !hasPod[ow.String()] && nudge(ctx, c, ow) == nil {
 				n++
 			}
 		}
 		if n > 0 {
-			o.Log("↻ %d owners nudged again (controllers may still be in their back-off)", n)
+			o.Log("↻ %d owners without a pod nudged again (controllers may still be in their back-off)", n)
 		}
 	}
 	if err := waitVolumes(ctx, c, f.Attached, "attached", o, func(left []string) error {

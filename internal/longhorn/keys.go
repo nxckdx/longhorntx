@@ -87,16 +87,25 @@ func (c *Client) SecretManager(ctx context.Context, r SecretRef) string {
 	if err != nil {
 		return ""
 	}
-	for _, ref := range o.OwnerReferences {
+	return managerOf(o.OwnerReferences, o.ManagedFields)
+}
+
+// managerOf: the controller owning an object, else the last field manager
+// that is not a person's tool.
+func managerOf(owners []metav1.OwnerReference, fields []metav1.ManagedFieldsEntry) string {
+	for _, ref := range owners {
 		if ref.Controller != nil && *ref.Controller {
 			return ref.Kind + " " + ref.Name
 		}
 	}
 	mgr := ""
-	for _, f := range o.ManagedFields {
+	for _, f := range fields {
 		if !personTool(f.Manager) {
 			mgr = f.Manager
 		}
+	}
+	if mgr != "" {
+		mgr = "(last written by) " + mgr
 	}
 	return mgr
 }

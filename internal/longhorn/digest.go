@@ -1,9 +1,14 @@
 package longhorn
 
 import (
+	"bytes"
+	"compress/gzip"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
+	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -28,6 +33,8 @@ var GVRVolumeDigest = schema.GroupVersionResource{Group: "lhtx.io", Version: "v1
 // DigestSizeStep: actual size changes below this (and below 1 %) are not
 // written to the digest.
 const DigestSizeStep = 64 << 20
+
+const digestGzipPrefix = "gz:"
 
 // Slim keeps only what a digest carries: the modeled fields, metadata
 // without annotations, managedFields, owners and finalizers.
@@ -61,10 +68,17 @@ func DigestChanged(old, new *Volume) bool {
 // DigestObject builds the VolumeDigest for a volume (owned by it, so it
 // goes when the volume goes).
 func DigestObject(v *Volume) (*unstructured.Unstructured, error) {
-	data, err := json.Marshal(Slim(v))
+	raw, err := json.Marshal(Slim(v))
 	if err != nil {
 		return nil, err
 	}
+	// gzip + base64: watch events are not compressed by the API server,
+	// and the JSON in a string would be escaped (~45 % smaller this way)
+	var buf bytes.Buffer
+	zw, _ := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+	_, _ = zw.Write(raw)
+	_ = zw.Close()
+	data := digestGzipPrefix + base64.StdEncoding.EncodeToString(buf.Bytes())
 	f := false
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "lhtx.io/v1alpha1", "kind": "VolumeDigest",
@@ -72,7 +86,7 @@ func DigestObject(v *Volume) (*unstructured.Unstructured, error) {
 			"labels": map[string]any{"app.kubernetes.io/managed-by": "lhtx-agent"},
 			"ownerReferences": []any{map[string]any{"apiVersion": Group + "/" + Version, "kind": "Volume",
 				"name": v.Name, "uid": string(v.UID), "blockOwnerDeletion": f}}},
-		"data": string(data),
+		"data": data,
 	}}, nil
 }
 
@@ -82,8 +96,22 @@ func ConvertVolume(u *unstructured.Unstructured) (*Volume, error) { return conve
 // VolumeFromDigest reads the volume out of a VolumeDigest.
 func VolumeFromDigest(u *unstructured.Unstructured) (*Volume, error) {
 	data, _, _ := unstructured.NestedString(u.Object, "data")
+	raw := []byte(data)
+	if b64, ok := strings.CutPrefix(data, digestGzipPrefix); ok {
+		z, err := base64.StdEncoding.DecodeString(b64)
+		if err != nil {
+			return nil, fmt.Errorf("VolumeDigest %s: %w", u.GetName(), err)
+		}
+		zr, err := gzip.NewReader(bytes.NewReader(z))
+		if err != nil {
+			return nil, fmt.Errorf("VolumeDigest %s: %w", u.GetName(), err)
+		}
+		if raw, err = io.ReadAll(zr); err != nil {
+			return nil, fmt.Errorf("VolumeDigest %s: %w", u.GetName(), err)
+		}
+	}
 	v := &Volume{}
-	if err := json.Unmarshal([]byte(data), v); err != nil {
+	if err := json.Unmarshal(raw, v); err != nil {
 		return nil, fmt.Errorf("VolumeDigest %s: %w", u.GetName(), err)
 	}
 	return v, nil

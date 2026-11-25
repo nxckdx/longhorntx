@@ -24,6 +24,6 @@ spec:
           type: object
           properties:
             data:
-              description: The volume's fields lhtx uses, as JSON.
+              description: The volume's fields lhtx uses – gzipped JSON, base64 (prefix gz:).
               type: string
 {{- end }}

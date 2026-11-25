@@ -62,8 +62,27 @@ func (a *Agent) runDigests(ctx context.Context) error {
 	}); err != nil {
 		return err
 	}
+	// a digest deleted by someone is written again at once
+	dinf := f.ForResource(longhorn.GVRVolumeDigest).Informer()
+	if _, err := dinf.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		DeleteFunc: func(obj any) {
+			u, ok := obj.(*unstructured.Unstructured)
+			if t, isT := obj.(cache.DeletedFinalStateUnknown); isT {
+				u, ok = t.Obj.(*unstructured.Unstructured)
+			}
+			if !ok {
+				return
+			}
+			mu.Lock()
+			delete(written, u.GetName())
+			mu.Unlock()
+			q.Add(u.GetName())
+		},
+	}); err != nil {
+		return err
+	}
 	f.Start(ctx.Done())
-	if !cache.WaitForCacheSync(ctx.Done(), inf.HasSynced) {
+	if !cache.WaitForCacheSync(ctx.Done(), inf.HasSynced, dinf.HasSynced) {
 		return nil
 	}
 	a.Logf("keeping volume digests (%d volumes)", len(inf.GetStore().ListKeys()))

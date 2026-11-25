@@ -314,3 +314,31 @@ func TestAgentDigests(t *testing.T) {
 		}
 	}
 }
+
+// A deleted digest comes back.
+func TestAgentDigestRecreated(t *testing.T) {
+	t.Setenv("LHTX_DEMO_AGENT", "1")
+	ctx := t.Context()
+	c := demo.NewClient(ctx)
+	res := c.Dynamic().Resource(longhorn.GVRVolumeDigest).Namespace(c.Namespace)
+	vols := mustVolumes(t, ctx, c)
+	wait := func(n int) {
+		deadline := time.Now().Add(20 * time.Second)
+		for {
+			l, _ := res.List(ctx, metav1.ListOptions{})
+			if len(l.Items) == n {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("%d digests, want %d", len(l.Items), n)
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	wait(len(vols))
+	if err := res.Delete(ctx, vols[0].Name, metav1.DeleteOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	wait(len(vols))
+}

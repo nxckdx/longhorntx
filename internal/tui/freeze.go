@@ -33,6 +33,10 @@ type freezePlanMsg struct {
 	label  string
 	agent  *agent.Info // the lhtx agent carries the freeze out (nil: lhtx itself)
 	err    error
+	// with the agent: end the freeze on its own after this ("" = never);
+	// asked once before the confirmation
+	autoUnfreeze string
+	asked        bool
 }
 
 func (m *model) loadFreezes() tea.Cmd {
@@ -168,6 +172,18 @@ func (m *model) confirmFreeze(msg freezePlanMsg) {
 		return
 	}
 	m.flash = ""
+	if msg.agent != nil && !msg.asked {
+		opts := []pickOption{{label: "never – until I unfreeze", value: ""}}
+		for _, d := range []string{"1h", "4h", "12h", "24h"} {
+			opts = append(opts, pickOption{label: "after " + d, value: d})
+		}
+		m.modal = &modal{kind: modalPick, label: "End the freeze on its own (a watchdog in the lhtx agent)?", options: opts,
+			onPick: func(v string) {
+				msg.autoUnfreeze, msg.asked = v, true
+				m.confirmFreeze(msg)
+			}}
+		return
+	}
 	p := msg.plan
 	lines := []string{
 		fmt.Sprintf("PVCs:    %d – %s", len(p.PVCs), strings.Join(firstNS(p.PVCs, 4), ", ")),
@@ -179,6 +195,9 @@ func (m *model) confirmFreeze(msg freezePlanMsg) {
 	if msg.agent != nil {
 		lines[len(lines)-1] = "policy:  no pod may mount them; only the agent may create/delete these PVCs"
 		lines = append(lines, "agent:   carried out by the lhtx agent "+msg.agent.Holder+" – x only stops following")
+		if msg.autoUnfreeze != "" {
+			lines = append(lines, "auto:    the agent ends the freeze on its own "+msg.autoUnfreeze+" after it is frozen")
+		}
 	}
 	lines = append(lines, "apps (in parallel, each stopped in order with its grace period):")
 	for _, l := range p.GroupLines() {
@@ -199,7 +218,7 @@ func (m *model) confirmFreeze(msg freezePlanMsg) {
 		m.modal = &modal{kind: modalConfirm, action: sum, onConfirm: func() tea.Cmd {
 			return m.startRun("Freezing "+msg.label+" (lhtx agent)", msg.label+" frozen by the agent – Z unfreezes", "x stop following (the agent goes on)",
 				func(ctx context.Context, log func(string, ...any)) error {
-					name, err := agent.Request(ctx, c, agent.Spec{PVCs: p.PVCs, Reason: p.Reason}, p.User)
+					name, err := agent.Request(ctx, c, agent.Spec{PVCs: p.PVCs, Reason: p.Reason, AutoUnfreezeAfter: msg.autoUnfreeze}, p.User)
 					if err != nil {
 						return err
 					}

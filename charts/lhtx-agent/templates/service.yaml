@@ -1,0 +1,21 @@
+{{- if .Values.metrics.service }}
+# the read-only health/metrics port (/healthz, /readyz, /metrics)
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "lhtx-agent.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "lhtx-agent.labels" . | nindent 4 }}
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8081"
+    prometheus.io/path: /metrics
+spec:
+  selector:
+    {{- include "lhtx-agent.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: health
+      port: 8081
+      targetPort: health
+{{- end }}

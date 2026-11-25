@@ -15,10 +15,10 @@ metadata:
   name: lhtx-agent
 rules:
   - apiGroups: [lhtx.io]
-    resources: [freezes, switches]
+    resources: [freezes, switches, logqueries]
     verbs: [get, list, watch, patch, update, delete]
   - apiGroups: [lhtx.io]
-    resources: [freezes/status, freezes/finalizers, switches/status]
+    resources: [freezes/status, freezes/finalizers, switches/status, logqueries/status]
     verbs: [get, patch, update]
   - apiGroups: [lhtx.io]
     resources: [volumedigests, volumehistories]
@@ -38,6 +38,9 @@ rules:
   - apiGroups: [""]
     resources: [pods/exec]
     verbs: [get, create]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get] # LogQueries (lhtx diag): read and filter in the cluster
   - apiGroups: [""]
     resources: [persistentvolumeclaims]
     verbs: [get, list, create, delete] # create/delete: switches

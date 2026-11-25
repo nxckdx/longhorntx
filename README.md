@@ -267,8 +267,9 @@ highest ordinal first (like a StatefulSet scales down), each with its normal
 grace period; apps run in parallel. CloudNativePG clusters are hibernated
 (`cnpg.io/hibernation: on`), so the operator stops them itself and keeps the
 PVCs. App knowledge comes from **hooks** – a command run with `sh -c` via
-`pods/exec` in one pod of the app; a failing pre-freeze hook stops the freeze
-before anything is stopped:
+`pods/exec` in a ready pod of the app; a failing pre-freeze hook stops the
+freeze before anything is stopped. Keep hooks idempotent: the agent runs the
+pre-freeze hooks again if it restarts in the middle of a freeze:
 
 ```yaml
 metadata:
@@ -538,7 +539,9 @@ Two flake packages:
 
 Write actions, freezes and the agent can be tried on a throwaway cluster:
 three NixOS VMs (qemu/KVM, 4 GiB each) with k3s, Longhorn v1.12.1, an NFS
-backup target and test apps with hooks, all defined in `nix/lab/`.
+backup target, test apps with hooks, encrypted StorageClasses, External
+Secrets and CloudNativePG – plus an optional second one-node cluster for
+migrations (`lhtx-lab start2`), all defined in `nix/lab/`.
 
 ```
 nix run .#lab -- start      # or `lhtx-lab start` in `nix develop`; first start pulls images

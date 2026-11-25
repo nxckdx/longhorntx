@@ -82,6 +82,9 @@ func Checks(ctx context.Context, c *longhorn.Client, journalDir string) []longho
 		if e.Context != c.Cluster.Context || e.Finished || e.RolledBack || time.Since(e.At) > 30*24*time.Hour {
 			continue
 		}
+		if e.Error != "" && e.LastStep == "" {
+			continue // failed before it changed anything
+		}
 		msg := "switch to " + e.To + " did not finish"
 		if e.Error != "" {
 			msg += ": " + firstLine(e.Error)
@@ -89,7 +92,7 @@ func Checks(ctx context.Context, c *longhorn.Client, journalDir string) []longho
 			msg += " (last step: " + e.LastStep + ")"
 		}
 		f = append(f, longhorn.Finding{Severity: longhorn.SevWarning, Check: "switch", Object: e.PVC, Message: msg,
-			Hint: "see " + e.Path + "; check the workload's replicas and suspended Flux objects"})
+			Hint: "see " + e.Path + "; check the PVC and active freezes (lhtx freeze --status)"})
 	}
 	// active freezes: pods of these PVCs cannot start until unfrozen
 	if fs, err := ActiveFreezes(ctx, c.Dynamic()); err == nil {

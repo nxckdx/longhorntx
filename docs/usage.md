@@ -133,3 +133,8 @@ instance-manager/longhorn-manager logs from those nodes, filtered to lines that
 mention the volume. Logs are limited (`--since 6h`, `--log-limit 5MiB` per
 container, `--no-logs`, `--full-logs`). Use it to capture a stuck rebuild or
 snapshot removal before trying to fix it.
+
+With the [lhtx agent](agent.md) the logs are read and filtered in the
+cluster and only the matching lines travel (a `LogQuery`; in the lab 187 KiB
+instead of 2.5 MiB for the same bundle). `--local-logs` reads them here;
+`--full-logs` always does.

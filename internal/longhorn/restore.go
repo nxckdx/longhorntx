@@ -34,6 +34,11 @@ type RestoreSpec struct {
 
 var volNameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*[a-z0-9]$`)
 
+// MaxVolumeName: Longhorn's webhook shortens longer volume names (to 31
+// characters + "-" + a hash) – lhtx would then look for a volume that does
+// not exist. Found in the lab with "<pvc-uuid>-restore-<MMDD>".
+const MaxVolumeName = 40
+
 // RestoreName suggests a name for the restored volume: "<pvc>-restore-<MMDD>".
 func RestoreName(pvc, volume string, now time.Time) string {
 	base := volume
@@ -41,8 +46,8 @@ func RestoreName(pvc, volume string, now time.Time) string {
 		base = n
 	}
 	suffix := "-restore-" + now.Format("0102")
-	if len(base)+len(suffix) > 63 {
-		base = strings.TrimRight(base[:63-len(suffix)], "-")
+	if len(base)+len(suffix) > MaxVolumeName {
+		base = strings.TrimRight(base[:MaxVolumeName-len(suffix)], "-")
 	}
 	return base + suffix
 }
@@ -80,8 +85,8 @@ func RestoreBackup(b *Backup, bv *BackupVolume, s RestoreSpec, exists func(kind 
 	if b.Status.URL == "" {
 		return nil, fmt.Errorf("backup %s has no URL yet (the backup target was not synced)", b.Name)
 	}
-	if !volNameRE.MatchString(s.Name) || len(s.Name) > 63 {
-		return nil, fmt.Errorf("volume name %q: lowercase letters, digits and '-', at most 63 characters", s.Name)
+	if !volNameRE.MatchString(s.Name) || len(s.Name) > MaxVolumeName {
+		return nil, fmt.Errorf("volume name %q: lowercase letters, digits and '-', at most %d characters", s.Name, MaxVolumeName)
 	}
 	if exists("volume") {
 		return nil, fmt.Errorf("volume %s exists – choose another name", s.Name)
@@ -251,6 +256,11 @@ func (c *Client) PlanRestore(ctx context.Context, b *Backup, now time.Time) (*Re
 	pvc := ""
 	if p.BackupVolume != nil {
 		pvc = p.BackupVolume.LastPVC()
+	}
+	if pvc == "" { // the backup volume does not always know it; the volume does
+		if v, err := c.Volume(ctx, b.Volume()); err == nil {
+			pvc = v.BoundPVC()
+		}
 	}
 	rc, _ := c.Setting(ctx, "default-replica-count")
 	sc, _ := c.Setting(ctx, "default-longhorn-static-storage-class")

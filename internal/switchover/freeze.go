@@ -46,6 +46,7 @@ const (
 	annHibernated  = "lhtx.io/hibernated" // JSON []Owner: CNPG clusters to wake up
 	annCNPG        = "cnpg.io/hibernation"
 	annUser        = "lhtx.io/user"
+	annRequest     = "lhtx.io/request" // name of the Freeze resource the agent works on
 	denyMarker     = "frozen by lhtx"
 )
 
@@ -99,6 +100,9 @@ type Freeze struct {
 	Reason     string      `json:"reason"`
 	User       string      `json:"user"`
 	Created    time.Time   `json:"created"`
+	// Request is set when the lhtx agent owns the freeze: the name of its
+	// Freeze resource (unfreeze = delete that resource).
+	Request string `json:"request,omitempty"`
 }
 
 // FreezePlan is what a freeze will do, for the preview.
@@ -311,7 +315,7 @@ func firstN(s []string, n int) []string {
 }
 
 // policyObjects builds the ValidatingAdmissionPolicy and its binding.
-func policyObjects(name string, p *FreezePlan, now time.Time) (*unstructured.Unstructured, *unstructured.Unstructured) {
+func policyObjects(name string, p *FreezePlan, now time.Time, request string) (*unstructured.Unstructured, *unstructured.Unstructured) {
 	keys := make([]string, len(p.PVCs))
 	nss := map[string]bool{}
 	for i, x := range p.PVCs {
@@ -343,6 +347,9 @@ func policyObjects(name string, p *FreezePlan, now time.Time) (*unstructured.Uns
 			annAttached: strings.Join(p.Attached, ","), annReason: p.Reason, annUser: p.User,
 			annPostHooks: string(postJSON), annHibernated: string(hibJSON),
 			"lhtx.io/created": now.UTC().Format(time.RFC3339)}}
+	if request != "" {
+		meta["annotations"].(map[string]any)[annRequest] = request
+	}
 	msg := denyMarker + " (" + name + "): the PVC is frozen for maintenance – lhtx unfreeze ends it"
 	pol := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "admissionregistration.k8s.io/v1", "kind": "ValidatingAdmissionPolicy",
@@ -386,6 +393,11 @@ type FreezeOptions struct {
 	Log  func(format string, a ...any)
 	Wait time.Duration // waits for detach / pods to come back (default 10 min)
 	Poll time.Duration // default 3 s
+	// Name of the policy; empty = lhtx-freeze-<UTC time>. With a name an
+	// existing policy is taken over (the agent resuming after a restart).
+	Name string
+	// Request: the agent's Freeze resource, stored on the policy.
+	Request string
 }
 
 func (o *FreezeOptions) defaults() {
@@ -407,23 +419,39 @@ func ApplyFreeze(ctx context.Context, c *longhorn.Client, p *FreezePlan, o Freez
 	o.defaults()
 	dyn := c.Dynamic()
 	now := time.Now()
-	name := freezePrefix + now.UTC().Format("20060102-150405")
-	pol, bind := policyObjects(name, p, now)
-	if _, err := dyn.Resource(GVRPolicy).Create(ctx, pol, metav1.CreateOptions{FieldManager: "lhtx"}); err != nil {
+	name := o.Name
+	if name == "" {
+		name = freezePrefix + now.UTC().Format("20060102-150405")
+	}
+	pol, bind := policyObjects(name, p, now, o.Request)
+	var prev *Freeze
+	if _, err := dyn.Resource(GVRPolicy).Create(ctx, pol, metav1.CreateOptions{FieldManager: "lhtx"}); apierrors.IsAlreadyExists(err) && o.Name != "" {
+		if prev, err = takeOver(ctx, dyn, name, p); err != nil {
+			return nil, err
+		}
+	} else if err != nil {
 		return nil, fmt.Errorf("create ValidatingAdmissionPolicy (needs Kubernetes ≥ 1.30 and cluster-admin rights): %w", err)
 	}
-	if _, err := dyn.Resource(GVRBinding).Create(ctx, bind, metav1.CreateOptions{FieldManager: "lhtx"}); err != nil {
-		_ = dyn.Resource(GVRPolicy).Delete(context.WithoutCancel(ctx), name, metav1.DeleteOptions{})
+	if _, err := dyn.Resource(GVRBinding).Create(ctx, bind, metav1.CreateOptions{FieldManager: "lhtx"}); err != nil && !(prev != nil && apierrors.IsAlreadyExists(err)) {
+		if prev == nil {
+			_ = dyn.Resource(GVRPolicy).Delete(context.WithoutCancel(ctx), name, metav1.DeleteOptions{})
+		}
 		return nil, fmt.Errorf("create policy binding: %w", err)
 	}
-	f := &Freeze{Name: name, PVCs: p.PVCs, Owners: p.Owners, Attached: p.Attached, Reason: p.Reason, User: p.User, Created: now}
-	o.Log("✔ policy %s created (%d PVCs)", name, len(p.PVCs))
+	f := &Freeze{Name: name, PVCs: p.PVCs, Owners: p.Owners, Attached: p.Attached, Reason: p.Reason, User: p.User, Created: now, Request: o.Request}
+	if prev != nil {
+		f.Owners, f.Attached, f.Created = p.Owners, p.Attached, prev.Created
+		o.Log("✔ policy %s exists – resuming (%d PVCs)", name, len(p.PVCs))
+	} else {
+		o.Log("✔ policy %s created (%d PVCs)", name, len(p.PVCs))
+	}
 	if err := verifyEnforced(ctx, dyn, p, o); err != nil {
-		_ = removePolicy(context.WithoutCancel(ctx), dyn, name)
+		if prev == nil {
+			_ = removePolicy(context.WithoutCancel(ctx), dyn, name)
+		}
 		return nil, err
 	}
 	o.Log("✔ the API server enforces it (test pod rejected in a dry run)")
-	f.Hibernated = nil
 	for _, g := range p.Groups {
 		if g.Post != nil {
 			f.PostHooks = append(f.PostHooks, groupHook{Owner: g.Owner, Hook: g.Post})
@@ -432,6 +460,9 @@ func ApplyFreeze(ctx context.Context, c *longhorn.Client, p *FreezePlan, o Freez
 			f.Hibernated = append(f.Hibernated, g.Owner)
 		}
 	}
+	if prev != nil {
+		f.PostHooks, f.Hibernated = mergeHooks(prev.PostHooks, f.PostHooks), mergeOwners(prev.Hibernated, f.Hibernated)
+	}
 	// pre-freeze hooks first: if one fails nothing is stopped
 	for _, g := range p.Groups {
 		if g.Pre == nil {
@@ -439,6 +470,9 @@ func ApplyFreeze(ctx context.Context, c *longhorn.Client, p *FreezePlan, o Freez
 		}
 		ns, pod, _ := strings.Cut(g.Pods[len(g.Pods)-1], "/") // the lowest ordinal: stopped last
 		if err := runHook(ctx, c, g.Pre, ns, pod, "pre-freeze", o.Log); err != nil {
+			if prev != nil {
+				return f, err
+			}
 			_ = removePolicy(context.WithoutCancel(ctx), dyn, name)
 			return nil, fmt.Errorf("%w – policy removed, nothing stopped", err)
 		}
@@ -548,20 +582,99 @@ func ActiveFreezes(ctx context.Context, dyn dynamic.Interface) ([]Freeze, error)
 		return nil, err
 	}
 	var out []Freeze
-	for _, it := range l.Items {
-		if !strings.HasPrefix(it.GetName(), freezePrefix) {
+	for i := range l.Items {
+		if !strings.HasPrefix(l.Items[i].GetName(), freezePrefix) {
 			continue
 		}
-		a := it.GetAnnotations()
-		f := Freeze{Name: it.GetName(), Reason: a[annReason], User: a[annUser], PVCs: splitList(a[annPVCs]), Attached: splitList(a[annAttached])}
-		_ = json.Unmarshal([]byte(a[annOwners]), &f.Owners)
-		_ = json.Unmarshal([]byte(a[annPostHooks]), &f.PostHooks)
-		_ = json.Unmarshal([]byte(a[annHibernated]), &f.Hibernated)
-		f.Created, _ = time.Parse(time.RFC3339, a["lhtx.io/created"])
-		out = append(out, f)
+		out = append(out, freezeOf(&l.Items[i]))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Created.Before(out[j].Created) })
 	return out, nil
+}
+
+// freezeOf reads a freeze from its policy's annotations.
+func freezeOf(it *unstructured.Unstructured) Freeze {
+	a := it.GetAnnotations()
+	f := Freeze{Name: it.GetName(), Reason: a[annReason], User: a[annUser], PVCs: splitList(a[annPVCs]),
+		Attached: splitList(a[annAttached]), Request: a[annRequest]}
+	_ = json.Unmarshal([]byte(a[annOwners]), &f.Owners)
+	_ = json.Unmarshal([]byte(a[annPostHooks]), &f.PostHooks)
+	_ = json.Unmarshal([]byte(a[annHibernated]), &f.Hibernated)
+	f.Created, _ = time.Parse(time.RFC3339, a["lhtx.io/created"])
+	return f
+}
+
+// GetFreeze reads one freeze by its policy name (nil if there is none).
+func GetFreeze(ctx context.Context, dyn dynamic.Interface, name string) (*Freeze, error) {
+	u, err := dyn.Resource(GVRPolicy).Get(ctx, name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	f := freezeOf(u)
+	return &f, nil
+}
+
+// takeOver continues with an existing policy (the agent restarted during a
+// freeze): pods already deleted are no longer in the new plan, so their
+// owners, attached volumes and hooks are merged into the plan and stored.
+func takeOver(ctx context.Context, dyn dynamic.Interface, name string, p *FreezePlan) (*Freeze, error) {
+	prev, err := GetFreeze(ctx, dyn, name)
+	if err != nil || prev == nil {
+		return nil, fmt.Errorf("policy %s: %v", name, err)
+	}
+	if strings.Join(prev.PVCs, ",") != strings.Join(p.PVCs, ",") {
+		return nil, fmt.Errorf("policy %s exists for other PVCs", name)
+	}
+	p.Owners = mergeOwners(prev.Owners, p.Owners)
+	p.Attached = mergeStrings(prev.Attached, p.Attached)
+	owners, _ := json.Marshal(p.Owners)
+	patch, _ := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": map[string]any{
+		annOwners: string(owners), annAttached: strings.Join(p.Attached, ",")}}})
+	if _, err := dyn.Resource(GVRPolicy).Patch(ctx, name, types.MergePatchType, patch, metav1.PatchOptions{FieldManager: "lhtx"}); err != nil {
+		return nil, fmt.Errorf("update policy %s: %w", name, err)
+	}
+	return prev, nil
+}
+
+func mergeOwners(a, b []Owner) []Owner {
+	seen := map[string]bool{}
+	var out []Owner
+	for _, o := range append(append([]Owner{}, a...), b...) {
+		if !seen[o.String()] {
+			seen[o.String()] = true
+			out = append(out, o)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].String() < out[j].String() })
+	return out
+}
+
+func mergeHooks(a, b []groupHook) []groupHook {
+	seen := map[string]bool{}
+	var out []groupHook
+	for _, h := range append(append([]groupHook{}, a...), b...) {
+		if !seen[h.Owner.String()] {
+			seen[h.Owner.String()] = true
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
+func mergeStrings(a, b []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, x := range append(append([]string{}, a...), b...) {
+		if !seen[x] {
+			seen[x] = true
+			out = append(out, x)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 func splitList(s string) []string {

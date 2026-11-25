@@ -330,7 +330,7 @@ func TestFreezeUnfreeze(t *testing.T) {
 	if len(p.Pods) != 1 || len(p.Attached) != 1 {
 		t.Fatalf("%+v", p)
 	}
-	pol, _ := policyObjects("x", p, time.Now())
+	pol, _ := policyObjects("x", p, time.Now(), "")
 	vals, _, _ := unstructured.NestedSlice(pol.Object, "spec", "validations")
 	if e := vals[1].(map[string]any)["expression"].(string); !strings.Contains(e, "'tester'") {
 		t.Errorf("own user not exempt: %s", e)
@@ -514,5 +514,46 @@ func TestFreezeCNPGHibernation(t *testing.T) {
 	}
 	if get(t, k.dyn, gvrCluster, "app", "db").GetAnnotations()[annCNPG] != "off" {
 		t.Error("not woken up")
+	}
+}
+
+// The agent restarts in the middle of a freeze: the second run takes the
+// existing policy over and keeps the owners of the pods already deleted.
+func TestFreezeResume(t *testing.T) {
+	k := world()
+	ctx := context.Background()
+	p, err := PlanFreeze(ctx, k.c, []string{"app/data"}, "upgrade")
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := fastF
+	o.Name, o.Request = freezePrefix+"upgrade", "upgrade"
+	if _, err := ApplyFreeze(ctx, k.c, p, o); err != nil {
+		t.Fatal(err)
+	}
+	p2, err := PlanFreeze(ctx, k.c, []string{"app/data"}, "upgrade")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p2.Pods) != 0 || len(p2.Owners) != 0 {
+		t.Fatalf("pods still there: %+v", p2)
+	}
+	f, err := ApplyFreeze(ctx, k.c, p2, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Owners) != 1 || len(f.Attached) != 1 || f.Request != "upgrade" {
+		t.Fatalf("resumed freeze lost state: %+v", f)
+	}
+	got, _ := GetFreeze(ctx, k.dyn, o.Name)
+	if got == nil || len(got.Owners) != 1 || got.Request != "upgrade" {
+		t.Fatalf("stored: %+v", got)
+	}
+	p3, err := PlanFreeze(ctx, k.c, []string{"app/other"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ApplyFreeze(ctx, k.c, p3, o); err == nil {
+		t.Error("took over a policy of other PVCs")
 	}
 }

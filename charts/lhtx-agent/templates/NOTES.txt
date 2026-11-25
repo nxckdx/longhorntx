@@ -1,0 +1,9 @@
+The lhtx agent runs in {{ .Release.Namespace }} and keeps its lease in {{ .Values.longhornNamespace }}.
+
+Check it with:  lhtx -n {{ .Values.longhornNamespace }} agent status
+
+lhtx freeze / unfreeze (and Z in the TUI) now hand freezes to the agent.
+{{- if .Values.rbac.freezeRole }}
+Let people freeze without cluster-admin by binding the ClusterRole
+{{ include "lhtx-agent.fullname" . }}-freeze to them.
+{{- end }}

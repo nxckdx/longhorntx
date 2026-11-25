@@ -1,0 +1,62 @@
+# Namespace of Longhorn. The agent reads Longhorn volumes and the hooks
+# ConfigMap lhtx-hooks there, and keeps its lease there – lhtx looks for the
+# lease in the Longhorn namespace it is configured for. The agent itself
+# runs in the release namespace.
+longhornNamespace: longhorn-system
+
+image:
+  repository: ghcr.io/nxckdx/lhtx
+  tag: "" # default: the chart's appVersion
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# More than one replica: the others wait as standby (leader election).
+replicaCount: 1
+
+crds:
+  # Install/upgrade the Freeze CRD with the chart. It is kept on uninstall
+  # (deleting it would delete all Freeze resources).
+  install: true
+
+serviceAccount:
+  create: true
+  name: "" # default: the release's full name
+  annotations: {}
+
+rbac:
+  create: true
+  # Let every authenticated user read the agent's lease (only that one
+  # object), so lhtx finds the agent. Without it, users need their own get
+  # on leases/lhtx-agent in the Longhorn namespace.
+  leaseReaderForAllUsers: true
+  # ClusterRole "<fullname>-freeze" (create/delete Freeze resources) for you
+  # to bind to the people who may freeze.
+  freezeRole: true
+
+extraArgs: []
+extraEnv: []
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    memory: 256Mi
+
+podAnnotations: {}
+podLabels: {}
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]
+priorityClassName: ""
+nodeSelector: {}
+tolerations: []
+affinity: {}

@@ -1,0 +1,9 @@
+apiVersion: v2
+name: lhtx-agent
+description: Optional in-cluster agent for lhtx – carries out Longhorn PVC freezes so they do not depend on a laptop
+type: application
+version: 0.5.0
+appVersion: "0.5.0"
+home: https://github.com/nxckdx/longhorntx
+sources: [https://github.com/nxckdx/longhorntx]
+keywords: [longhorn, storage, freeze, maintenance]

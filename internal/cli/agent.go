@@ -59,11 +59,9 @@ lhtx-freeze to them. The agent itself needs rights like cluster-admin
 			if noLeader {
 				return a.Run(cmd.Context())
 			}
-			ns := os.Getenv("POD_NAMESPACE")
-			if ns == "" {
-				ns = g.namespace
-			}
-			return a.RunWithLeaderElection(cmd.Context(), ns)
+			// the lease lives in the Longhorn namespace, where lhtx looks for it
+			// (the agent itself may run elsewhere)
+			return a.RunWithLeaderElection(cmd.Context(), g.namespace)
 		},
 	}
 	cmd.Flags().BoolVar(&noLeader, "no-leader-election", false, "run without the lease (only one agent may run; lhtx will not detect it)")

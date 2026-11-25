@@ -50,6 +50,15 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Helm chart of the agent as OCI artifact: oci://ghcr.io/nxckdx/charts/lhtx-agent
+      - uses: azure/setup-helm@v4
+      - name: Push the Helm chart
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$TOKEN" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+          helm package charts/lhtx-agent --destination "$RUNNER_TEMP"
+          helm push "$RUNNER_TEMP"/lhtx-agent-*.tgz oci://ghcr.io/nxckdx/charts
 
   # nix/release.json pins the release archives for the `lhtx-bin` flake
   # package; it can only be written after goreleaser uploaded them.

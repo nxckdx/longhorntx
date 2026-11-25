@@ -26,6 +26,14 @@ jobs:
           version: "~> v2"
           args: check
 
+  helm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - run: helm lint charts/lhtx-agent
+      - run: helm template x charts/lhtx-agent --namespace lhtx-system > /dev/null
+
   nix:
     runs-on: ubuntu-latest
     steps:

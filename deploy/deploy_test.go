@@ -1,6 +1,7 @@
 package deploy
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -37,5 +38,21 @@ func TestManifests(t *testing.T) {
 	}
 	if !strings.Contains(out, "ghcr.io/nxckdx/lhtx:1.2.3") || strings.Contains(out, "longhorn-system") {
 		t.Error("tag or namespace not filled in")
+	}
+}
+
+// The Helm chart carries the same CRD (wrapped in an if, with a keep
+// annotation).
+func TestChartCRD(t *testing.T) {
+	b, err := os.ReadFile("../charts/lhtx-agent/templates/crd.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	chart := strings.Replace(string(b), "  annotations:\n    helm.sh/resource-policy: keep\n", "", 1)
+	chart = strings.TrimPrefix(chart, "{{- if .Values.crds.install }}\n")
+	chart = strings.TrimSuffix(chart, "{{- end }}\n")
+	want := crd[strings.Index(crd, "apiVersion:"):]
+	if chart != want {
+		t.Error("charts/lhtx-agent/templates/crd.yaml differs from deploy/crd.yaml – copy it over")
 	}
 }

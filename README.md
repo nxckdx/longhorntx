@@ -360,6 +360,27 @@ with Argo CD and Flux; the CRD is a normal template (updated on upgrade, kept
 on uninstall). Try it without a cluster:
 `LHTX_DEMO_AGENT=1 lhtx --demo`.
 
+**Encrypted volumes** (Longhorn's dm-crypt with the key in a Kubernetes
+Secret, one for all volumes or one per PVC via `${pvc.name}` in the
+StorageClass): Longhorn records only *that* a volume or backup is encrypted –
+which Secret holds the key is on the PV. lhtx carries it over:
+
+- restore and clone create encrypted volumes for encrypted sources, and the
+  new PV refers to the key Secret of the source PV
+- one Secret per PVC: a new PVC name gets a copy of the Secret under that
+  name (read only when applied, never shown, annotated `lhtx.io/copied-from`)
+- the source PV is gone (volume deleted, only the backup left): name the
+  key with `--secret NAMESPACE/NAME` – lhtx refuses instead of creating a
+  volume that can never be attached
+- switch keeps the PV's key refs (same PVC name, same Secret) and refuses
+  to mix encrypted and plain volumes
+- `lhtx doctor` / Health tab: encrypted volumes whose key Secret is missing
+  (names via the metadata API only); `lhtx volumes -o wide` and the volume
+  details show 🔒 encrypted
+
+Back up the key Secrets themselves: a backup of an encrypted volume is
+useless without its key.
+
 **Restore and switch** (`lhtx restore VOLUME --switch`, `lhtx switch`): the
 web UI makes you restore under another name, detach, delete the PVC and
 create PV/PVC by hand. lhtx does it in one confirmed run:

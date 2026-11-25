@@ -120,7 +120,8 @@ names of volumes, PVCs or people):
 | `lhtx_agent_operations_total{kind,result}` | finished freezes, unfreezes, switches … |
 | `lhtx_agent_volume_events_total`, `lhtx_agent_digest_writes_total` | volume updates the agent saw vs digests written – the traffic lhtx saves |
 | `lhtx_agent_digest_volumes` | volumes with a digest |
-| `lhtx_agent_history_events_total` | history events recorded |
+| `lhtx_agent_history_events_total{kind}` | history events by kind (rebuilt, replica-failed, backup-failed, …) |
+| `lhtx_agent_rebuild_seconds` (sum/count) | durations of finished rebuilds |
 | `lhtx_agent_build_info{version}` | |
 
 Chart values: `metrics.service` (on; a Service with `prometheus.io/scrape`

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -51,7 +52,8 @@ func ownedBy(u *unstructured.Unstructured, apiVersion, kind, name string) *unstr
 
 func pod(name, claim string, ownerKind, ownerName string) *unstructured.Unstructured {
 	return ownedBy(obj("v1", "Pod", "app", name, nil, map[string]any{
-		"spec": map[string]any{"volumes": []any{map[string]any{"name": "d", "persistentVolumeClaim": map[string]any{"claimName": claim}}}},
+		"spec":   map[string]any{"volumes": []any{map[string]any{"name": "d", "persistentVolumeClaim": map[string]any{"claimName": claim}}}},
+		"status": map[string]any{"conditions": []any{map[string]any{"type": "Ready", "status": "True"}}},
 	}), "apps/v1", ownerKind, ownerName)
 }
 
@@ -591,5 +593,36 @@ func TestUnfreezeRenudge(t *testing.T) {
 	defer mu.Unlock()
 	if patches < 2 {
 		t.Errorf("nudged %d times", patches)
+	}
+}
+
+// A pre-freeze hook runs only in a ready pod; an app that is not running
+// has nothing to prepare, the freeze goes on.
+func TestPreHookSkippedWithoutReadyPod(t *testing.T) {
+	k := world()
+	ctx := context.Background()
+	p, err := PlanFreeze(ctx, k.c, []string{"app/data"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Groups[0].Pre = &Hook{Command: "false", Timeout: time.Second, Source: "test"}
+	for _, x := range p.Pods {
+		ns, n, _ := strings.Cut(x, "/")
+		u, _ := k.dyn.Resource(gvrPod).Namespace(ns).Get(ctx, n, metav1.GetOptions{})
+		_ = unstructured.SetNestedSlice(u.Object, []any{map[string]any{"type": "Ready", "status": "False"}}, "status", "conditions")
+		_, _ = k.dyn.Resource(gvrPod).Namespace(ns).Update(ctx, u, metav1.UpdateOptions{})
+	}
+	var logs []string
+	o := fastF
+	o.Log = func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) }
+	k.c.SetExec(func(context.Context, string, string, string, string) (string, error) {
+		t.Error("hook ran in a pod that is not ready")
+		return "", nil
+	})
+	if _, err := ApplyFreeze(ctx, k.c, p, o); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(logs, "\n"), "hook skipped") {
+		t.Errorf("no skip logged: %v", logs)
 	}
 }

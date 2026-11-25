@@ -474,7 +474,12 @@ func ApplyFreeze(ctx context.Context, c *longhorn.Client, p *FreezePlan, o Freez
 		if g.Pre == nil {
 			continue
 		}
-		ns, pod, _ := strings.Cut(g.Pods[len(g.Pods)-1], "/") // the lowest ordinal: stopped last
+		target := readyPod(ctx, dyn, g.Pods)
+		if target == "" {
+			o.Log("⚠ %s: no ready pod – the app is not running, pre-freeze hook skipped", g.name())
+			continue
+		}
+		ns, pod, _ := strings.Cut(target, "/")
 		if err := runHook(ctx, c, g.Pre, ns, pod, "pre-freeze", o.Log); err != nil {
 			if prev != nil {
 				return f, err
@@ -489,6 +494,20 @@ func ApplyFreeze(ctx context.Context, c *longhorn.Client, p *FreezePlan, o Freez
 	return f, waitVolumes(ctx, c, p.Attached, "detached", o, func(left []string) error {
 		return fmt.Errorf("still attached after %s: %s (frozen anyway: lhtx unfreeze %s)", o.Wait, strings.Join(firstN(left, 5), ", "), name)
 	}, nil)
+}
+
+// readyPod picks the pod a pre-freeze hook runs in: a ready one, the
+// lowest ordinal first (it is stopped last). Read live – the plan may be
+// minutes old. "" if none is ready.
+func readyPod(ctx context.Context, dyn dynamic.Interface, pods []string) string {
+	for i := len(pods) - 1; i >= 0; i-- {
+		ns, n, _ := strings.Cut(pods[i], "/")
+		p, err := dyn.Resource(gvrPod).Namespace(ns).Get(ctx, n, metav1.GetOptions{})
+		if err == nil && p.GetDeletionTimestamp() == nil && podReady(p) {
+			return pods[i]
+		}
+	}
+	return ""
 }
 
 // verifyEnforced creates a test pod that mounts a frozen PVC in a server

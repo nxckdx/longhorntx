@@ -29,13 +29,42 @@ spec:
               description: The volume's fields lhtx uses – gzipped JSON, base64 (prefix gz:).
               type: string
 ---
-# Read the digests (who uses lhtx; bind it yourself if those people may not
-# read Longhorn volumes already – they show the same data).
+# VolumeHistory: kept by the lhtx agent – one per volume (its last 50
+# events: rebuilds, failures, backups, …) and one cluster-wide (lhtx-cluster,
+# the last 300 notable events). lhtx history / the History panel read them.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: volumehistories.lhtx.io
+  labels:
+    app.kubernetes.io/name: lhtx-agent
+spec:
+  group: lhtx.io
+  scope: Namespaced
+  names:
+    kind: VolumeHistory
+    listKind: VolumeHistoryList
+    plural: volumehistories
+    singular: volumehistory
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            events:
+              description: The events – gzipped JSON, base64 (prefix gz:).
+              type: string
+---
+# Read the digests and histories (who uses lhtx; bind it yourself if those
+# people may not read Longhorn volumes already).
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: lhtx-view
 rules:
   - apiGroups: [lhtx.io]
-    resources: [volumedigests]
+    resources: [volumedigests, volumehistories]
     verbs: [get, list, watch]

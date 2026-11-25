@@ -21,7 +21,7 @@ rules:
     resources: [freezes/status, freezes/finalizers, switches/status]
     verbs: [get, patch, update]
   - apiGroups: [lhtx.io]
-    resources: [volumedigests]
+    resources: [volumedigests, volumehistories]
     verbs: [get, list, watch, create, update, delete]
   - apiGroups: [authorization.k8s.io]
     resources: [subjectaccessreviews]
@@ -51,8 +51,11 @@ rules:
     resources: [volumes]
     verbs: [get, list, watch, create] # watch: VolumeDigests; create: restore for a Switch # create: restore for a Switch
   - apiGroups: [longhorn.io]
-    resources: [settings, backups, backupvolumes, engines]
+    resources: [settings, backupvolumes, engines]
     verbs: [get, list]
+  - apiGroups: [longhorn.io]
+    resources: [replicas, backups]
+    verbs: [get, list, watch] # history: rebuilds, failed replicas, backups
   # owners of the stopped pods: read the chain, nudge on unfreeze,
   # CloudNativePG hibernation annotation
   - apiGroups: ["*"]

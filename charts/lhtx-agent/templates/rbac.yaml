@@ -22,7 +22,7 @@ rules:
     resources: [subjectaccessreviews]
     verbs: [create]
   - apiGroups: [lhtx.io]
-    resources: [volumedigests]
+    resources: [volumedigests, volumehistories]
     verbs: [get, list, watch, create, update, delete]
   - apiGroups: [admissionregistration.k8s.io]
     resources: [validatingadmissionpolicies, validatingadmissionpolicybindings]
@@ -49,8 +49,11 @@ rules:
     resources: [volumes]
     verbs: [get, list, watch, create] # watch: VolumeDigests; create: restore for a Switch
   - apiGroups: [longhorn.io]
-    resources: [settings, backups, backupvolumes, engines]
+    resources: [settings, backupvolumes, engines]
     verbs: [get, list]
+  - apiGroups: [longhorn.io]
+    resources: [replicas, backups]
+    verbs: [get, list, watch] # history: rebuilds, failed replicas, backups
   - apiGroups: ["*"]
     resources: ["*"]
     verbs: [get, patch]
@@ -199,7 +202,7 @@ metadata:
     {{- include "lhtx-agent.labels" . | nindent 4 }}
 rules:
   - apiGroups: [lhtx.io]
-    resources: [volumedigests]
+    resources: [volumedigests, volumehistories]
     verbs: [get, list, watch]
 ---
 # Bind it with a RoleBinding in a namespace: who may switch PVCs there.

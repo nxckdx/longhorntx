@@ -30,7 +30,7 @@ func TestManifests(t *testing.T) {
 		}
 		kinds[o.Kind]++
 	}
-	for k, n := range map[string]int{"CustomResourceDefinition": 3, "ServiceAccount": 1, "ClusterRole": 4, "ValidatingAdmissionPolicy": 1, "ValidatingAdmissionPolicyBinding": 1,
+	for k, n := range map[string]int{"CustomResourceDefinition": 4, "ServiceAccount": 1, "ClusterRole": 4, "ValidatingAdmissionPolicy": 1, "ValidatingAdmissionPolicyBinding": 1,
 		"ClusterRoleBinding": 1, "Role": 2, "RoleBinding": 2, "Deployment": 1, "Service": 1} {
 		if kinds[k] != n {
 			t.Errorf("%d %s, want %d", kinds[k], k, n)
@@ -84,5 +84,25 @@ func TestChartDigestCRD(t *testing.T) {
 	want := crdDoc[strings.Index(crdDoc, "apiVersion:"):] + "\n"
 	if chart != want {
 		t.Error("charts/lhtx-agent/templates/crd-digest.yaml differs from the CRD in deploy/digest.yaml")
+	}
+}
+
+func TestChartHistoryCRD(t *testing.T) {
+	b, err := os.ReadFile("../charts/lhtx-agent/templates/crd-history.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	chart := strings.Replace(string(b), "  annotations:\n    helm.sh/resource-policy: keep\n", "", 1)
+	chart = strings.TrimPrefix(chart, "{{- if .Values.crds.install }}\n")
+	chart = strings.TrimSuffix(chart, "{{- end }}\n")
+	var crdDoc string
+	for _, d := range strings.Split(digestRes, "\n---\n") {
+		if strings.Contains(d, "volumehistories.lhtx.io") {
+			crdDoc = d
+		}
+	}
+	want := crdDoc[strings.Index(crdDoc, "apiVersion:"):] + "\n"
+	if chart != want {
+		t.Error("charts/lhtx-agent/templates/crd-history.yaml differs from the CRD in deploy/digest.yaml")
 	}
 }

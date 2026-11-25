@@ -20,15 +20,21 @@ in
     text = ''
       STATE=''${LHTX_LAB_DIR:-''${XDG_STATE_HOME:-$HOME/.local/state}/lhtx-lab}
       KCFG=$STATE/shared/kubeconfig
+      CTX=lhtx-lab
       NODES="lab-1 lab-2 lab-3"
+      WANT=3
       declare -A RUN=(
         [lab-1]=${vm "lab-1"}/bin/run-lab-1-vm
         [lab-2]=${vm "lab-2"}/bin/run-lab-2-vm
         [lab-3]=${vm "lab-3"}/bin/run-lab-3-vm
+        [lab-4]=${vm "lab-4"}/bin/run-lab-4-vm
       )
+      second() { KCFG=$STATE/shared/kubeconfig2; CTX=lhtx-lab2; NODES="lab-4"; WANT=1; }
+      # lhtx sees both clusters (contexts lhtx-lab and lhtx-lab2)
+      BOTH=$STATE/shared/kubeconfig:$STATE/shared/kubeconfig2
 
       running() { [ -f "$STATE/$1.pid" ] && kill -0 "$(cat "$STATE/$1.pid")" 2>/dev/null; }
-      k() { KUBECONFIG=$KCFG kubectl --context lhtx-lab "$@"; }
+      k() { KUBECONFIG=$KCFG kubectl --context "$CTX" "$@"; }
       sshn() {
         local n=$1; shift
         ssh -q -i "$STATE/shared/lab_key" -p $((2220 + n)) -o StrictHostKeyChecking=no \
@@ -48,15 +54,15 @@ in
         done
         echo "waiting for k3s …"
         for _ in $(seq 120); do [ -s "$KCFG" ] && k get --raw /readyz >/dev/null 2>&1 && break; sleep 5; done
-        echo "waiting for 3 nodes Ready …"
+        echo "waiting for $WANT node(s) Ready …"
         for _ in $(seq 120); do
-          [ "$(k get nodes --no-headers 2>/dev/null | grep -c ' Ready')" = 3 ] && break; sleep 5
+          [ "$(k get nodes --no-headers 2>/dev/null | grep -c ' Ready')" = "$WANT" ] && break; sleep 5
         done
         k get nodes
         echo "waiting for Longhorn (first start pulls images, a few minutes) …"
         for _ in $(seq 180); do
           k -n longhorn-system get deploy longhorn-driver-deployer >/dev/null 2>&1 &&
-            [ "$(k -n longhorn-system get nodes.longhorn.io --no-headers 2>/dev/null | wc -l)" = 3 ] && break
+            [ "$(k -n longhorn-system get nodes.longhorn.io --no-headers 2>/dev/null | wc -l)" = "$WANT" ] && break
           sleep 5
         done
         k -n longhorn-system rollout status ds/longhorn-manager --timeout=15m || true
@@ -85,7 +91,7 @@ in
           echo; k -n longhorn-system get volumes.longhorn.io 2>/dev/null || true
           echo; k -n lab-apps get pods,pvc 2>/dev/null || true
           echo
-          echo "kubeconfig: $KCFG (context lhtx-lab)"
+          echo "kubeconfig: $KCFG (context $CTX)"
           echo "  lhtx-lab lhtx …      lhtx against the lab"
           echo "  lhtx-lab kubectl …   kubectl against the lab"
           echo "  eval \"\$(lhtx-lab env)\" sets KUBECONFIG in this shell"
@@ -97,14 +103,15 @@ in
       lhtx-lab – local 3-node k3s + Longhorn cluster in NixOS VMs (state: $STATE)
 
         start          start the VMs, wait for k3s and Longhorn
+        start2 | stop2 | status2   the second one-node cluster lhtx-lab2 (migrations)
         stop           shut the VMs down (disks are kept)
         status         VMs, nodes, Longhorn volumes, test apps
         destroy        stop and delete the disks (next start is a fresh cluster)
         ssh N [cmd]    root shell on lab-N
         log N          follow the console of lab-N
         env            export KUBECONFIG=… (eval "\$(lhtx-lab env)")
-        kubectl …      kubectl against the lab
-        lhtx …         lhtx (this checkout) against the lab
+        kubectl …      kubectl against the lab (kubectl2 … for lhtx-lab2)
+        lhtx …         lhtx (this checkout) against the lab; --context lhtx-lab2 for the second
         agent          install the lhtx agent (image built from this checkout)
       EOF
       }
@@ -114,15 +121,23 @@ in
         start) start ;;
         stop) stop ;;
         status) status ;;
+        start2) second; start ;;
+        stop2) second; stop ;;
+        status2) second; status ;;
+        kubectl2) second; k "$@" ;;
         destroy)
           stop
-          rm -rf "''${STATE:?}"/lab-*.qcow2 "$STATE"/tmp-* "$STATE"/shared/kubeconfig
+          second; stop
+          rm -rf "''${STATE:?}"/lab-*.qcow2 "$STATE"/tmp-* "$STATE"/shared/kubeconfig "$STATE"/shared/kubeconfig2
           echo "disks deleted" ;;
         ssh) n=''${1:?node number}; shift; sshn "$n" "$@" ;;
         log) tail -f "$STATE/lab-''${1:?node number}.log" ;;
-        env) echo "export KUBECONFIG=$KCFG" ;;
+        env) echo "export KUBECONFIG=$BOTH" ;;
         kubectl) k "$@" ;;
-        lhtx) exec lhtx --kubeconfig "$KCFG" --context lhtx-lab "$@" ;;
+        lhtx)
+          ctx=lhtx-lab
+          for a in "$@"; do case $a in --context|--context=*) ctx= ;; esac; done
+          KUBECONFIG=$BOTH exec lhtx ''${ctx:+--context $ctx} "$@" ;;
         agent)
           lhtx --kubeconfig "$KCFG" --context lhtx-lab agent manifests --tag lab |
             sed 's/imagePullPolicy: .*//; s#image: ghcr.io/nxckdx/lhtx:lab#image: ghcr.io/nxckdx/lhtx:lab\n          imagePullPolicy: Never#' |

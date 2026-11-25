@@ -1,4 +1,7 @@
-# Applied by k3s on lab-1 at start: Longhorn (Helm chart) and test apps.
+# Applied by k3s on the server at start: Longhorn (Helm chart) and test
+# apps; the second cluster (lab-4) gets Longhorn with the same backup
+# target only.
+{ second ? false }:
 let
   ns = name: { apiVersion = "v1"; kind = "Namespace"; metadata.name = name; };
   pvc = namespace: name: size: {
@@ -27,8 +30,8 @@ in
       createNamespace = true;
       valuesContent = builtins.toJSON {
         defaultBackupStore.backupTarget = "nfs://10.77.0.11:/export/backups";
-        persistence.defaultClassReplicaCount = 2;
-        defaultSettings.defaultReplicaCount = 2;
+        persistence.defaultClassReplicaCount = if second then 1 else 2;
+        defaultSettings.defaultReplicaCount = if second then 1 else 2;
         preUpgradeChecker.jobEnabled = false;
         longhornUI.replicas = 0;
         csi = { attacherReplicaCount = 1; provisionerReplicaCount = 1; resizerReplicaCount = 1; snapshotterReplicaCount = 1; };
@@ -36,6 +39,7 @@ in
     };
   };
 
+} // (if second then { } else {
   # test apps: a Deployment with a PVC and hooks on the Deployment, a
   # StatefulSet with two replicas (ordered stop), a bare PVC without a pod
   apps.content = [
@@ -144,4 +148,20 @@ in
       (cpvc "vault-data" "longhorn-crypto-per-pvc")
       (app "vault" "vault-data")
     ];
-}
+
+  # External Secrets Operator: keys from an external source (fake provider)
+  # and generated keys (Password generator), for the key handling tests
+  eso.content = {
+    apiVersion = "helm.cattle.io/v1";
+    kind = "HelmChart";
+    metadata = { name = "external-secrets"; namespace = "kube-system"; };
+    spec = {
+      repo = "https://charts.external-secrets.io";
+      chart = "external-secrets";
+      version = "2.15.0";
+      targetNamespace = "external-secrets";
+      createNamespace = true;
+      valuesContent = builtins.toJSON { installCRDs = true; webhook.create = false; certController.create = false; };
+    };
+  };
+})

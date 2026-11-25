@@ -5,6 +5,9 @@
 #   lab-1  10.77.0.11  k3s server (API on host 127.0.0.1:16443), Longhorn
 #   lab-2  10.77.0.12  k3s agent
 #   lab-3  10.77.0.13  k3s agent
+#   lab-4  10.77.0.14  a second, one-node cluster "lhtx-lab2" (API on host
+#                      127.0.0.1:16444) with the same backup target – for
+#                      migrations between clusters (lhtx-lab start2)
 #
 # Each VM: eth0 = qemu user network (internet, port forwards), eth1 = the lab
 # LAN (a qemu multicast socket shared by the three VMs on this host).
@@ -13,6 +16,9 @@ let
   lib = nixpkgs.lib;
   token = "lhtx-lab-not-secret";
   ip = n: "10.77.0.1${toString n}";
+  server = n: n == 1 || n == 4;
+  apiPort = n: if n == 4 then 16444 else 16443;
+  ctxName = n: if n == 4 then "lhtx-lab2" else "lhtx-lab";
 
   node = n: lib.nixosSystem {
     inherit system;
@@ -29,8 +35,8 @@ let
           graphics = false;
           forwardPorts = [
             { from = "host"; host.address = "127.0.0.1"; host.port = 2220 + n; guest.port = 22; }
-          ] ++ lib.optional (n == 1)
-            { from = "host"; host.address = "127.0.0.1"; host.port = 16443; guest.port = 6443; };
+          ] ++ lib.optional (server n)
+            { from = "host"; host.address = "127.0.0.1"; host.port = apiPort n; guest.port = 6443; };
           qemu.networkingOptions = [
             "-netdev socket,id=lan,mcast=230.0.0.1:47700,localaddr=127.0.0.1"
             "-device virtio-net-pci,netdev=lan,mac=52:54:00:77:00:1${toString n}"
@@ -41,7 +47,7 @@ let
           usePredictableInterfaceNames = false;
           firewall.enable = false;
           interfaces.eth1.ipv4.addresses = [{ address = ip n; prefixLength = 24; }];
-          extraHosts = lib.concatMapStrings (i: "${ip i} lab-${toString i}\n") [ 1 2 3 ];
+          extraHosts = lib.concatMapStrings (i: "${ip i} lab-${toString i}\n") [ 1 2 3 4 ];
         };
 
         # ssh with the lab key from the shared directory (lhtx-lab ssh N)
@@ -62,16 +68,16 @@ let
 
         services.k3s = {
           enable = true;
-          role = if n == 1 then "server" else "agent";
+          role = if server n then "server" else "agent";
           inherit token;
-          serverAddr = lib.mkIf (n != 1) "https://${ip 1}:6443";
-          extraFlags = [ "--node-ip=${ip n}" "--flannel-iface=eth1" ] ++ lib.optionals (n == 1) [
+          serverAddr = lib.mkIf (!server n) "https://${ip 1}:6443";
+          extraFlags = [ "--node-ip=${ip n}" "--flannel-iface=eth1" ] ++ lib.optionals (server n) [
             "--disable=traefik" "--disable=servicelb" "--disable=local-storage"
             "--write-kubeconfig-mode=0644" "--tls-san=127.0.0.1"
           ];
           # the agent image built from this checkout (ghcr.io/nxckdx/lhtx:lab)
           images = [ agentImage ];
-          manifests = lib.mkIf (n == 1) (import ./manifests.nix);
+          manifests = lib.mkIf (server n) (import ./manifests.nix { second = n == 4; });
         };
 
         # backup target for Longhorn: nfs://10.77.0.11:/export/backups
@@ -84,20 +90,21 @@ let
         };
 
         # kubeconfig for the host: API forwarded to 127.0.0.1:16443
-        systemd.services.lab-kubeconfig = lib.mkIf (n == 1) {
+        systemd.services.lab-kubeconfig = lib.mkIf (server n) {
           wantedBy = [ "multi-user.target" ];
           after = [ "k3s.service" ];
           serviceConfig = { Type = "oneshot"; RemainAfterExit = true; };
           path = [ pkgs.gnused pkgs.coreutils ];
           script = ''
             while [ ! -s /etc/rancher/k3s/k3s.yaml ]; do sleep 2; done
-            sed -e 's#https://127.0.0.1:6443#https://127.0.0.1:16443#' -e 's#: default$#: lhtx-lab#' \
-              /etc/rancher/k3s/k3s.yaml > /tmp/shared/kubeconfig.tmp
-            mv /tmp/shared/kubeconfig.tmp /tmp/shared/kubeconfig
+            f=/tmp/shared/${if n == 4 then "kubeconfig2" else "kubeconfig"}
+            sed -e 's#https://127.0.0.1:6443#https://127.0.0.1:${toString (apiPort n)}#' -e 's#: default$#: ${ctxName n}#' \
+              /etc/rancher/k3s/k3s.yaml > $f.tmp
+            mv $f.tmp $f
           '';
         };
       })
     ];
   };
 in
-lib.genAttrs [ "lab-1" "lab-2" "lab-3" ] (name: node (lib.toInt (lib.removePrefix "lab-" name)))
+lib.genAttrs [ "lab-1" "lab-2" "lab-3" "lab-4" ] (name: node (lib.toInt (lib.removePrefix "lab-" name)))

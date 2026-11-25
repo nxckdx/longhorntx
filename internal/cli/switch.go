@@ -149,7 +149,7 @@ func (g *globals) runSwitch(ctx context.Context, c *longhorn.Client, p *switchov
 	}
 	byAgent := false
 	if !local {
-		if ag := agent.Detect(ctx, c); ag != nil && agent.SwitchesAvailable(ctx, c, p.Namespace) {
+		if ag := agent.DetectRW(ctx, c); ag != nil && agent.SwitchesAvailable(ctx, c, p.Namespace) {
 			byAgent = true
 			fmt.Printf("\ncarried out by the lhtx agent %s – lhtx only follows (Ctrl+C stops following, not the switch; --local runs it here)\n", ag.Holder)
 		}
@@ -225,7 +225,7 @@ func (g *globals) switchFromBackup(cmd *cobra.Command, c *longhorn.Client, ns, p
 // user may switch the PVC (namespace rights) but not read Longhorn.
 func (g *globals) switchViaAgentOnly(cmd *cobra.Command, c *longhorn.Client, ns string, spec agent.SwitchSpec, why error) error {
 	ctx := cmd.Context()
-	ag := agent.Detect(ctx, c)
+	ag := agent.DetectRW(ctx, c)
 	if ag == nil || !agent.SwitchesAvailable(ctx, c, ns) {
 		return fmt.Errorf("%w (without these rights only the lhtx agent can switch it – none found that does switches)", why)
 	}

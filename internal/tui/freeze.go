@@ -157,7 +157,7 @@ func (m *model) planFreeze(choice string) tea.Cmd {
 		p, err := switchover.PlanFreeze(ctx, c, pvcs, "lhtx TUI: "+label)
 		var ag *agent.Info
 		if err == nil {
-			ag = agent.Detect(ctx, c)
+			ag = agent.DetectRW(ctx, c)
 		}
 		return freezePlanMsg{client: c, plan: p, label: label, agent: ag, err: err}
 	}

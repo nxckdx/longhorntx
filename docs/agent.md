@@ -109,6 +109,17 @@ lhtx history shop/db-data          # everything about one volume
 
 In the TUI: `H` in the volume details. `lhtx agent --no-history` turns it off.
 
+## Diagnostics: logs filtered in the cluster
+
+`lhtx diag VOLUME` needs the instance-manager and longhorn-manager logs of
+the volume's nodes – megabytes, of which only the lines mentioning the
+volume are kept. With the agent, lhtx asks for them with a `LogQuery`: the
+agent reads the logs inside the cluster, filters them and answers with only
+those lines (gzipped; the largest logs keep their newest lines if the answer
+gets too big). The requester is vouched for by the admission policy and must
+be allowed to read pod logs in the Longhorn namespace; ClusterRole
+`lhtx-diag` lets people create LogQueries.
+
 ## Metrics and dashboard
 
 The health port also serves Prometheus metrics (`/metrics`, counts only – no

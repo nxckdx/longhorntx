@@ -53,7 +53,8 @@ write actions are not tested.
   switches out, so they do not depend on your laptop, lets namespace users
   switch their own PVCs safely, cuts the volume traffic on busy clusters
   about 24× with volume digests, keeps a history of rebuilds, failures and
-  backups, and has Prometheus metrics with a Grafana dashboard –
+  backups, filters diagnostic logs in the cluster, and has Prometheus
+  metrics with a Grafana dashboard –
   [agent](docs/agent.md)
 - **Low traffic** by design: watches where they are cheap, polling where
   they are not, a traffic budget per context – [traffic](docs/traffic.md)

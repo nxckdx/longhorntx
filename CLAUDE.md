@@ -56,7 +56,8 @@ internal/agent      optional in-cluster agent (`lhtx agent`, image ghcr.io/nxckd
                     CRs (restore + switch in the cluster; requester vouched for by the
                     VAP lhtx-switch-requester, SubjectAccessReview, own-data rule;
                     resumes via switchover.Continue). digest.go: VolumeDigests; history.go:
-                    VolumeHistory (per volume + lhtx-cluster); metrics.go: /metrics.
+                    VolumeHistory (per volume + lhtx-cluster); metrics.go: /metrics; logs.go:
+                    LogQuery (diag logs filtered in the cluster).
 deploy/             agent manifests, embedded (lhtx agent manifests); charts/lhtx-agent
                     is the Helm chart – its templates/crd.yaml must equal deploy/crd.yaml
                     (test). Demo: LHTX_DEMO_AGENT=1 runs the agent in-process.

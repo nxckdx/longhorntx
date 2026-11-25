@@ -45,3 +45,27 @@ func TestMetrics(t *testing.T) {
 		}
 	}
 }
+
+func TestEncodeLogsShortens(t *testing.T) {
+	var big strings.Builder
+	for i := range 200000 {
+		big.WriteString("line " + strings.Repeat("x", 40) + " " + string(rune('a'+i%26)) + "\n")
+	}
+	small := []byte("one line\n")
+	enc, notes := encodeLogs(map[string][]byte{"big": []byte(big.String()), "small": small}, 60<<10)
+	total := 0
+	for _, v := range enc {
+		total += len(v)
+	}
+	if total > 60<<10 || len(notes) == 0 {
+		t.Fatalf("total %d, notes %v", total, notes)
+	}
+	got, err := ungz(enc["small"])
+	if err != nil || string(got) != string(small) {
+		t.Errorf("small log changed: %q %v", got, err)
+	}
+	b, _ := ungz(enc["big"])
+	if !strings.HasSuffix(string(b), big.String()[len(big.String())-100:]) {
+		t.Error("the newest lines of the big log must stay")
+	}
+}

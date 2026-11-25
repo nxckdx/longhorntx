@@ -158,6 +158,20 @@ func (a *Agent) Run(ctx context.Context) error {
 	} else {
 		a.Logf("switches.lhtx.io not available (%v) – only freezes", err)
 	}
+	// LogQueries (lhtx diag): only if their CRD is installed
+	var lqInf cache.SharedIndexInformer
+	if _, err := a.c.Dynamic().Resource(GVRLogQuery).Namespace(a.c.Namespace).List(ctx, metav1.ListOptions{Limit: 1}); err == nil {
+		lf := dynamicinformer.NewFilteredDynamicSharedInformerFactory(a.c.Dynamic(), 0, a.c.Namespace, nil)
+		lqInf = lf.ForResource(GVRLogQuery).Informer()
+		if _, err := lqInf.AddEventHandler(cache.ResourceEventHandlerFuncs{AddFunc: func(obj any) {
+			if u, ok := obj.(*unstructured.Unstructured); ok {
+				a.enqueue("lq:" + u.GetName())
+			}
+		}}); err != nil {
+			return err
+		}
+		lf.Start(ctx.Done())
+	}
 	f.Start(ctx.Done())
 	if !cache.WaitForCacheSync(ctx.Done(), inf.HasSynced) {
 		return fmt.Errorf("Freeze resources did not sync (is the CRD installed?)")
@@ -178,6 +192,8 @@ func (a *Agent) Run(ctx context.Context) error {
 		case n := <-a.kick:
 			if key, ok := strings.CutPrefix(n, "sw:"); ok {
 				a.reconcileSwitch(ctx, key)
+			} else if key, ok := strings.CutPrefix(n, "lq:"); ok {
+				go a.reconcileLogQuery(ctx, key) // reading logs may take a while
 			} else {
 				a.reconcile(ctx, n)
 			}
@@ -185,6 +201,13 @@ func (a *Agent) Run(ctx context.Context) error {
 			// watchdog (autoUnfreezeAfter) and retries
 			for _, o := range inf.GetStore().List() {
 				a.reconcile(ctx, o.(*unstructured.Unstructured).GetName())
+			}
+			if lqInf != nil { // remove old queries
+				for _, o := range lqInf.GetStore().List() {
+					if u := o.(*unstructured.Unstructured); time.Since(u.GetCreationTimestamp().Time) > logQueryTTL {
+						go a.reconcileLogQuery(ctx, u.GetName())
+					}
+				}
 			}
 			if swInf != nil {
 				for _, o := range swInf.GetStore().List() {

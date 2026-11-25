@@ -381,3 +381,24 @@ func TestAgentHistoryBackup(t *testing.T) {
 		time.Sleep(200 * time.Millisecond)
 	}
 }
+
+// lhtx diag asks the agent for the filtered logs (a LogQuery) and gets an
+// answer; the query is removed afterwards.
+func TestAgentLogQuery(t *testing.T) {
+	t.Setenv("LHTX_DEMO_AGENT", "1")
+	ctx := t.Context()
+	c := demo.NewClient(ctx)
+	time.Sleep(500 * time.Millisecond)
+	if !agent.LogQueriesAvailable(ctx, c) {
+		t.Fatal("log queries not available")
+	}
+	logs, notes, err := agent.RemoteLogs(c)(ctx, "pvc-x", []string{"node-1"}, longhorn.DiagOptions{Since: time.Hour})
+	if err != nil {
+		t.Fatalf("remote logs: %v (notes %v)", err, notes)
+	}
+	t.Logf("%d logs, notes %v", len(logs), notes)
+	l, _ := c.Dynamic().Resource(agent.GVRLogQuery).Namespace(c.Namespace).List(ctx, metav1.ListOptions{})
+	if len(l.Items) != 0 {
+		t.Error("query not removed")
+	}
+}

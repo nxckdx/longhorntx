@@ -27,6 +27,9 @@ type DiagOptions struct {
 	NoLogs     bool
 	FullLogs   bool // keep all log lines, not only those mentioning the volume
 	Version    string
+	// RemoteLogs, if set, gets the filtered logs elsewhere (the lhtx agent
+	// filters them in the cluster); on error the logs are read here.
+	RemoteLogs func(ctx context.Context, vol string, nodes []string, opt DiagOptions) (map[string][]byte, []string, error) `json:"-"`
 }
 
 type DiagResult struct {
@@ -148,31 +151,31 @@ func (c *Client) CollectDiag(ctx context.Context, vol *Volume, opt DiagOptions, 
 		return nil, err
 	}
 
-	// logs
+	// logs: filtered in the cluster by the lhtx agent if one can (no full
+	// logs over the wire), else read here
 	if !opt.NoLogs {
-		core, err := c.core()
-		if err != nil {
-			note("logs: %v", err)
-		} else {
-			for _, n := range nodeNames {
-				for _, sel := range []string{"longhorn.io/component=instance-manager,longhorn.io/node=" + n, "app=longhorn-manager"} {
-					pods, err := core.Pods(c.Namespace).List(ctx, metav1.ListOptions{LabelSelector: sel, FieldSelector: "spec.nodeName=" + n})
-					if err != nil {
-						note("pods %s on %s: %v", sel, n, err)
-						continue
-					}
-					for _, p := range pods.Items {
-						container := pickContainer(&p)
-						data, err := c.podLog(ctx, p.Name, container, opt, vol.Name)
-						if err != nil {
-							note("log %s/%s: %v", p.Name, container, err)
-							continue
-						}
-						if err := add("logs/"+p.Name+".log", data); err != nil {
-							return nil, err
-						}
-					}
-				}
+		var logs map[string][]byte
+		var notes []string
+		var err error
+		if opt.RemoteLogs != nil && !opt.FullLogs {
+			logs, notes, err = opt.RemoteLogs(ctx, vol.Name, nodeNames, opt)
+			if err != nil {
+				note("logs through the lhtx agent: %v – reading them here", err)
+				logs = nil
+			} else {
+				note("logs filtered in the cluster by the lhtx agent")
+			}
+		}
+		if logs == nil {
+			logs, notes, err = c.VolumeLogs(ctx, vol.Name, nodeNames, opt)
+			if err != nil {
+				note("logs: %v", err)
+			}
+		}
+		res.Notes = append(res.Notes, notes...)
+		for _, name := range sortedMapKeys(logs) {
+			if err := add("logs/"+name+".log", logs[name]); err != nil {
+				return nil, err
 			}
 		}
 	}
@@ -186,6 +189,37 @@ func (c *Client) CollectDiag(ctx context.Context, vol *Volume, opt DiagOptions, 
 		return nil, err
 	}
 	return res, gz.Close()
+}
+
+// VolumeLogs reads the instance-manager and longhorn-manager logs of the
+// nodes, keeping only lines that mention the volume (unless FullLogs), by
+// pod name. Notes list logs that could not be read.
+func (c *Client) VolumeLogs(ctx context.Context, vol string, nodes []string, opt DiagOptions) (map[string][]byte, []string, error) {
+	core, err := c.core()
+	if err != nil {
+		return nil, nil, err
+	}
+	out := map[string][]byte{}
+	var notes []string
+	for _, n := range nodes {
+		for _, sel := range []string{"longhorn.io/component=instance-manager,longhorn.io/node=" + n, "app=longhorn-manager"} {
+			pods, err := core.Pods(c.Namespace).List(ctx, metav1.ListOptions{LabelSelector: sel, FieldSelector: "spec.nodeName=" + n})
+			if err != nil {
+				notes = append(notes, fmt.Sprintf("pods %s on %s: %v", sel, n, err))
+				continue
+			}
+			for _, p := range pods.Items {
+				container := pickContainer(&p)
+				data, err := c.podLog(ctx, p.Name, container, opt, vol)
+				if err != nil {
+					notes = append(notes, fmt.Sprintf("log %s/%s: %v", p.Name, container, err))
+					continue
+				}
+				out[p.Name] = data
+			}
+		}
+	}
+	return out, notes, nil
 }
 
 func pickContainer(p *corev1.Pod) string {

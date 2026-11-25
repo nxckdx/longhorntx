@@ -5,5 +5,6 @@ resources:
   - crd.yaml
   - switch.yaml
   - digest.yaml
+  - logquery.yaml
   - rbac.yaml
   - agent.yaml

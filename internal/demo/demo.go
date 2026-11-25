@@ -60,7 +60,7 @@ func NewClient(ctx context.Context) *longhorn.Client {
 		gvrCluster: "ClusterList", gvrProm: "PrometheusList",
 		{Version: "v1", Resource: "configmaps"}: "ConfigMapList", {Version: "v1", Resource: "secrets"}: "SecretList",
 		agent.GVRFreeze: "FreezeList", gvrLease: "LeaseList", agent.GVRSwitch: "SwitchList",
-		longhorn.GVRVolumeDigest: "VolumeDigestList", longhorn.GVRVolumeHistory: "VolumeHistoryList"} {
+		longhorn.GVRVolumeDigest: "VolumeDigestList", longhorn.GVRVolumeHistory: "VolumeHistoryList", agent.GVRLogQuery: "LogQueryList"} {
 		kinds[g] = k
 	}
 	objs := append(d.objects(), operatorObjects()...)

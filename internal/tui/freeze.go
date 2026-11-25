@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/nxckdx/longhorntx/internal/agent"
 	"github.com/nxckdx/longhorntx/internal/longhorn"
 	"github.com/nxckdx/longhorntx/internal/switchover"
 )
@@ -30,6 +31,7 @@ type freezePlanMsg struct {
 	client *longhorn.Client
 	plan   *switchover.FreezePlan
 	label  string
+	agent  *agent.Info // the lhtx agent carries the freeze out (nil: lhtx itself)
 	err    error
 }
 
@@ -149,7 +151,11 @@ func (m *model) planFreeze(choice string) tea.Cmd {
 	m.setFlash("planning the freeze …", false)
 	return func() tea.Msg {
 		p, err := switchover.PlanFreeze(ctx, c, pvcs, "lhtx TUI: "+label)
-		return freezePlanMsg{client: c, plan: p, label: label, err: err}
+		var ag *agent.Info
+		if err == nil {
+			ag = agent.Detect(ctx, c)
+		}
+		return freezePlanMsg{client: c, plan: p, label: label, agent: ag, err: err}
 	}
 }
 
@@ -169,18 +175,49 @@ func (m *model) confirmFreeze(msg freezePlanMsg) {
 		fmt.Sprintf("owners:  %d (Deployments, StatefulSets, operators … – their specs stay unchanged)", len(p.Owners)),
 		fmt.Sprintf("volumes: %d attached now – lhtx waits until they are detached", len(p.Attached)),
 		"policy:  no pod may mount them; only " + p.User + " may create/delete these PVCs",
-		"apps (in parallel, each stopped in order with its grace period):",
 	}
+	if msg.agent != nil {
+		lines[len(lines)-1] = "policy:  no pod may mount them; only the agent may create/delete these PVCs"
+		lines = append(lines, "agent:   carried out by the lhtx agent "+msg.agent.Holder+" – x only stops following")
+	}
+	lines = append(lines, "apps (in parallel, each stopped in order with its grace period):")
 	for _, l := range p.GroupLines() {
 		lines = append(lines, "  "+l)
 	}
-	warns := append([]string{"until unfreeze (Z) these workloads stay down – also if lhtx stops"}, p.Warnings...)
+	first := "until unfreeze (Z) these workloads stay down – also if lhtx stops"
+	if msg.agent != nil {
+		first = "until unfreeze (Z) these workloads stay down"
+	}
+	warns := append([]string{first}, p.Warnings...)
 	if with, without := p.HookCount(); without > 0 && with+without > 1 {
 		warns = append(warns, fmt.Sprintf("%d of %d apps have no pre-freeze/post-unfreeze hooks (annotations lhtx.io/…, see lhtx freeze --help)", without, with+without))
 	}
 	sum := &longhorn.Action{Title: "Freeze " + msg.label, Verb: longhorn.VerbCreate,
 		Header: "ValidatingAdmissionPolicy + delete pods", Lines: lines, Warnings: warns, Destructive: true}
 	c := m.client
+	if ag := msg.agent; ag != nil {
+		m.modal = &modal{kind: modalConfirm, action: sum, onConfirm: func() tea.Cmd {
+			return m.startRun("Freezing "+msg.label+" (lhtx agent)", msg.label+" frozen by the agent – Z unfreezes", "x stop following (the agent goes on)",
+				func(ctx context.Context, log func(string, ...any)) error {
+					name, err := agent.Request(ctx, c, agent.Spec{PVCs: p.PVCs, Reason: p.Reason}, p.User)
+					if err != nil {
+						return err
+					}
+					log("requested Freeze %s from the agent %s", name, ag.Holder)
+					fr, _, err := agent.Follow(ctx, c, name, true, log, agent.Settled)
+					if err == nil && (fr == nil || fr.Status.Phase == agent.PhaseFailed) {
+						msg := "the Freeze was removed"
+						if fr != nil {
+							msg = fr.Status.Message
+							_ = agent.End(context.WithoutCancel(ctx), c, name)
+						}
+						err = fmt.Errorf("the agent could not freeze: %s", msg)
+					}
+					return err
+				})
+		}}
+		return
+	}
 	m.modal = &modal{kind: modalConfirm, action: sum, onConfirm: func() tea.Cmd {
 		return m.startRun("Freezing "+msg.label, msg.label+" frozen – Z unfreezes", "x stop waiting (the freeze stays)",
 			func(ctx context.Context, log func(string, ...any)) error {
@@ -207,7 +244,11 @@ func (m *model) confirmUnfreeze(name string) {
 	for _, o := range f.Owners {
 		owners = append(owners, o.Kind+" "+o.Namespace+"/"+o.Name)
 	}
-	sum := &longhorn.Action{Title: "Unfreeze " + f.Name, Verb: longhorn.VerbDelete, Header: "remove the policy, nudge the owners",
+	header := "remove the policy, nudge the owners"
+	if f.Request != "" {
+		header = "delete Freeze " + f.Request + " – the lhtx agent ends it (lhtx itself if no agent runs)"
+	}
+	sum := &longhorn.Action{Title: "Unfreeze " + f.Name, Verb: longhorn.VerbDelete, Header: header,
 		Lines: []string{
 			fmt.Sprintf("PVCs:   %d – %s", len(f.PVCs), strings.Join(firstNS(f.PVCs, 4), ", ")),
 			fmt.Sprintf("owners: %d nudged so they start their pods now: %s", len(f.Owners), strings.Join(firstNS(owners, 3), ", ")),
@@ -215,9 +256,13 @@ func (m *model) confirmUnfreeze(name string) {
 		}}
 	c, fr := m.client, *f
 	m.modal = &modal{kind: modalConfirm, action: sum, onConfirm: func() tea.Cmd {
-		return m.startRun("Unfreezing "+fr.Name, fr.Name+" ended", "x stop waiting (already unfrozen)",
+		stop := "x stop waiting (already unfrozen)"
+		if fr.Request != "" {
+			stop = "x stop following (the agent goes on)"
+		}
+		return m.startRun("Unfreezing "+fr.Name, fr.Name+" ended", stop,
 			func(ctx context.Context, log func(string, ...any)) error {
-				return switchover.Unfreeze(ctx, c, fr, switchover.FreezeOptions{Log: log})
+				return agent.Unfreeze(ctx, c, fr, 0, log, log)
 			})
 	}}
 }

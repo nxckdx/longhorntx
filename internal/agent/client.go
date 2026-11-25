@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 
 	"github.com/nxckdx/longhorntx/internal/longhorn"
+	"github.com/nxckdx/longhorntx/internal/switchover"
 )
 
 // Info describes a running agent.
@@ -189,4 +190,27 @@ func Follow(ctx context.Context, c *longhorn.Client, name string, history bool, 
 // Settled reports whether a freeze request has finished freezing.
 func Settled(f *Freeze) bool {
 	return f.Status.Phase == PhaseFrozen || f.Status.Phase == PhaseFailed
+}
+
+// Unfreeze ends a freeze: one of the agent's by deleting its Freeze (the
+// agent does the work, lhtx follows with agentLog); without a live agent –
+// or for a local freeze – lhtx unfreezes itself (and removes the Freeze).
+func Unfreeze(ctx context.Context, c *longhorn.Client, fr switchover.Freeze, wait time.Duration, log, agentLog func(string, ...any)) error {
+	if fr.Request == "" {
+		return switchover.Unfreeze(ctx, c, fr, switchover.FreezeOptions{Wait: wait, Log: log})
+	}
+	ag := Detect(ctx, c)
+	if ag == nil {
+		log("no lhtx agent running – unfreezing here")
+		if err := switchover.Unfreeze(ctx, c, fr, switchover.FreezeOptions{Wait: wait, Log: log}); err != nil {
+			return err
+		}
+		return Forget(ctx, c, fr.Request)
+	}
+	if err := End(ctx, c, fr.Request); err != nil {
+		return err
+	}
+	log("asked the agent %s to end Freeze %s", ag.Holder, fr.Request)
+	_, _, err := Follow(ctx, c, fr.Request, false, agentLog, func(*Freeze) bool { return false })
+	return err
 }

@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"sort"
@@ -233,12 +232,13 @@ right to create Freeze resources then. --local skips the agent.`,
 			}
 			start := time.Now()
 			var errs []string
-			var ag *agent.Info
 			for _, fr := range sel {
-				if fr.Request != "" && ag == nil {
-					ag = agent.Detect(ctx, c)
+				err := agent.Unfreeze(ctx, c, fr, uwait, logger(start), plainLog)
+				if ctx.Err() != nil {
+					fmt.Println("\nstopped following – the agent goes on (lhtx agent status)")
+					return nil
 				}
-				if err := unfreezeOne(ctx, c, fr, ag, uwait, logger(start)); err != nil {
+				if err != nil {
 					errs = append(errs, err.Error())
 				}
 			}
@@ -251,32 +251,6 @@ right to create Freeze resources then. --local skips the agent.`,
 	unfreeze.Flags().BoolVar(&uall, "all", false, "end all freezes")
 	unfreeze.Flags().DurationVar(&uwait, "wait", 10*time.Minute, "how long to wait for the volumes to be attached again")
 	return []*cobra.Command{freeze, unfreeze}
-}
-
-// unfreezeOne ends a freeze: an agent's freeze by deleting its Freeze (the
-// agent does the work, lhtx follows); without a live agent lhtx unfreezes
-// itself and then removes the Freeze.
-func unfreezeOne(ctx context.Context, c *longhorn.Client, fr switchover.Freeze, ag *agent.Info, wait time.Duration, log func(string, ...any)) error {
-	if fr.Request == "" {
-		return switchover.Unfreeze(ctx, c, fr, switchover.FreezeOptions{Wait: wait, Log: log})
-	}
-	if ag == nil {
-		log("no lhtx agent running – unfreezing here")
-		if err := switchover.Unfreeze(ctx, c, fr, switchover.FreezeOptions{Wait: wait, Log: log}); err != nil {
-			return err
-		}
-		return agent.Forget(ctx, c, fr.Request)
-	}
-	if err := agent.End(ctx, c, fr.Request); err != nil {
-		return err
-	}
-	log("asked the agent %s to end Freeze %s", ag.Holder, fr.Request)
-	_, _, err := agent.Follow(ctx, c, fr.Request, false, plainLog, func(*agent.Freeze) bool { return false })
-	if ctx.Err() != nil {
-		fmt.Println("\nstopped following – the agent goes on")
-		return nil
-	}
-	return err
 }
 
 // plainLog prints the agent's lines: they carry their own time (UTC).

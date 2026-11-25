@@ -95,6 +95,12 @@ func DigestObject(v *Volume) (*unstructured.Unstructured, error) {
 // ConvertVolume converts a Volume object into the slim struct.
 func ConvertVolume(u *unstructured.Unstructured) (*Volume, error) { return convert[Volume](u) }
 
+// ConvertReplica converts a Replica object.
+func ConvertReplica(u *unstructured.Unstructured) (*Replica, error) { return convert[Replica](u) }
+
+// ConvertBackup converts a Backup object.
+func ConvertBackup(u *unstructured.Unstructured) (*Backup, error) { return convert[Backup](u) }
+
 // VolumeFromDigest reads the volume out of a VolumeDigest.
 func VolumeFromDigest(u *unstructured.Unstructured) (*Volume, error) {
 	data, _, _ := unstructured.NestedString(u.Object, "data")

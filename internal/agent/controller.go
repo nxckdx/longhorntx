@@ -38,6 +38,10 @@ type Agent struct {
 	DigestQPS float64
 	// NoDigests: do not keep VolumeDigests.
 	NoDigests bool
+	// NoHistory: do not record VolumeHistories.
+	NoHistory bool
+	// HistoryFlush: how often recorded events are written (default 5 s).
+	HistoryFlush time.Duration
 
 	digestWrites atomic.Int64
 	metrics      metrics
@@ -109,6 +113,13 @@ func (a *Agent) Run(ctx context.Context) error {
 		go func() {
 			if err := a.runDigests(ctx); err != nil && ctx.Err() == nil {
 				a.Logf("digests: %v", err)
+			}
+		}()
+	}
+	if !a.NoHistory {
+		go func() {
+			if err := a.runHistory(ctx); err != nil && ctx.Err() == nil {
+				a.Logf("history: %v", err)
 			}
 		}()
 	}

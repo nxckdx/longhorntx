@@ -69,6 +69,7 @@ func startAgent(ctx context.Context, c *longhorn.Client) {
 	a := agent.New(c, "lhtx-agent-7c9f6d5b8-x2k4q")
 	a.Logf = func(string, ...any) {}
 	a.Poll = time.Second
+	a.HistoryFlush = time.Second
 	renew := func(create bool) {
 		l := u(map[string]any{"apiVersion": "coordination.k8s.io/v1", "kind": "Lease",
 			"metadata": map[string]any{"name": agent.LeaseName, "namespace": ns},

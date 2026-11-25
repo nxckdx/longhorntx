@@ -342,3 +342,42 @@ func TestAgentDigestRecreated(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	wait(len(vols))
 }
+
+// A backup run in the cluster shows up in the volume's history.
+func TestAgentHistoryBackup(t *testing.T) {
+	t.Setenv("LHTX_DEMO_AGENT", "1")
+	ctx := t.Context()
+	c := demo.NewClient(ctx)
+	var vol *longhorn.Volume
+	for _, v := range mustVolumes(t, ctx, c) {
+		if v.Status.State == "attached" {
+			vol = v
+			break
+		}
+	}
+	// the recorder starts after its watches synced
+	time.Sleep(1500 * time.Millisecond)
+	snaps, _ := c.Snapshots(ctx, vol.Name)
+	if len(snaps) == 0 {
+		t.Skip("demo volume without snapshots")
+	}
+	a, err := longhorn.CreateBackup(vol, snaps[0].Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Apply(ctx, a, longhorn.DryRunNone); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		ev, err := c.History(ctx, vol.Name)
+		if err == nil && len(ev) > 0 && ev[0].Kind == longhorn.HistBackup {
+			t.Logf("%+v", ev[0])
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no backup in the history: %+v %v", ev, err)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}

@@ -123,7 +123,7 @@ func (g *globals) runSwitch(ctx context.Context, c *longhorn.Client, p *switchov
 		}
 		return fmt.Errorf("--dry-run=server is not possible for the switch (its steps depend on each other): use --dry-run")
 	}
-	fmt.Println("\nThe workload is down from step \"scale … to 0\" until the PVC is bound again.")
+	fmt.Println("\nThe apps using the PVC are down from the freeze until the unfreeze at the end.")
 	if err := g.confirm(true, p.PVCRef()); err != nil {
 		return err
 	}

@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -33,6 +34,12 @@ type Agent struct {
 	Poll   time.Duration
 	Resync time.Duration
 	Logf   func(format string, a ...any)
+	// DigestQPS limits the VolumeDigest writes per second (default 10).
+	DigestQPS float64
+	// NoDigests: do not keep VolumeDigests.
+	NoDigests bool
+
+	digestWrites atomic.Int64
 
 	mu    sync.Mutex
 	tasks map[string]*task // Freeze name → running work
@@ -97,6 +104,13 @@ func (a *Agent) Run(ctx context.Context) error {
 	a.health.leading.Store(true)
 	defer a.health.leading.Store(false)
 	a.health.beat()
+	if !a.NoDigests {
+		go func() {
+			if err := a.runDigests(ctx); err != nil && ctx.Err() == nil {
+				a.Logf("digests: %v", err)
+			}
+		}()
+	}
 	f := dynamicinformer.NewDynamicSharedInformerFactory(a.c.Dynamic(), 0)
 	inf := f.ForResource(GVRFreeze).Informer()
 	push := func(obj any) {

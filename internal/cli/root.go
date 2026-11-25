@@ -180,7 +180,7 @@ Without a subcommand it starts the interactive TUI.`,
 	_ = root.RegisterFlagCompletionFunc("theme", func(*cobra.Command, []string, string) ([]string, cobra.ShellCompDirective) {
 		return tui.ThemeNames(), cobra.ShellCompDirectiveNoFileComp
 	})
-	f.StringVar(&g.refresh, "refresh", defRefresh, "volume updates: auto, watch (live) or a poll interval like 30s (env LHTX_REFRESH)")
+	f.StringVar(&g.refresh, "refresh", defRefresh, "volume updates: auto, watch (live), agent (digests from the lhtx agent) or a poll interval like 30s (env LHTX_REFRESH)")
 
 	root.AddCommand(
 		volumesCmd(g), replicasCmd(g), nodesCmd(g), diskCmd(g), rebuildsCmd(g),

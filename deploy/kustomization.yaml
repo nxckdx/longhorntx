@@ -4,5 +4,6 @@ kind: Kustomization
 resources:
   - crd.yaml
   - switch.yaml
+  - digest.yaml
   - rbac.yaml
   - agent.yaml

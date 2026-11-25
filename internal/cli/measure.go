@@ -50,6 +50,12 @@ backups are always included in the watch phase.`,
 			}
 			ctx := cmd.Context()
 			res := []string{"volumes", "replicas", "nodes", "engines", "settings", "snapshots", "backups"}
+			// the lhtx agent's digests, if it keeps them (what --refresh agent watches)
+			if c, err := g.client(); err == nil {
+				if n, _, err := c.ListCount(ctx, "volumedigests"); err == nil && n > 0 {
+					res = append(res, "volumedigests")
+				}
+			}
 			ms := make([]*measurement, len(res))
 			stats := make([]*longhorn.FieldStats, len(res))
 			rvs := make([]string, len(res))

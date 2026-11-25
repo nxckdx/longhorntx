@@ -223,7 +223,7 @@ func registerCompletions(root *cobra.Command, g *globals) {
 		return names, cobra.ShellCompDirectiveNoFileComp
 	})
 	_ = root.RegisterFlagCompletionFunc("output", cobra.FixedCompletions([]string{"table", "wide", "json"}, cobra.ShellCompDirectiveNoFileComp))
-	_ = root.RegisterFlagCompletionFunc("refresh", cobra.FixedCompletions([]string{"auto", "watch", "30s", "1m", "2m"}, cobra.ShellCompDirectiveNoFileComp))
+	_ = root.RegisterFlagCompletionFunc("refresh", cobra.FixedCompletions([]string{"auto", "watch", "agent", "30s", "1m", "2m"}, cobra.ShellCompDirectiveNoFileComp))
 	_ = root.RegisterFlagCompletionFunc("dry-run", cobra.FixedCompletions([]string{"client", "server"}, cobra.ShellCompDirectiveNoFileComp))
 
 	for _, c := range root.Commands() {

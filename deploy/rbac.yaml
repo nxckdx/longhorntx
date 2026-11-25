@@ -20,6 +20,9 @@ rules:
   - apiGroups: [lhtx.io]
     resources: [freezes/status, freezes/finalizers, switches/status]
     verbs: [get, patch, update]
+  - apiGroups: [lhtx.io]
+    resources: [volumedigests]
+    verbs: [get, list, watch, create, update, delete]
   - apiGroups: [authorization.k8s.io]
     resources: [subjectaccessreviews]
     verbs: [create] # what may the person who asked for a Switch do?
@@ -46,7 +49,7 @@ rules:
     verbs: [get, list, create] # switches of encrypted volumes: guard the key, keep a copy if it is replaced
   - apiGroups: [longhorn.io]
     resources: [volumes]
-    verbs: [get, list, create] # create: restore for a Switch
+    verbs: [get, list, watch, create] # watch: VolumeDigests; create: restore for a Switch # create: restore for a Switch
   - apiGroups: [longhorn.io]
     resources: [settings, backups, backupvolumes, engines]
     verbs: [get, list]

@@ -12,6 +12,8 @@ var (
 	crd string
 	//go:embed switch.yaml
 	switchRes string
+	//go:embed digest.yaml
+	digestRes string
 	//go:embed rbac.yaml
 	rbac string
 	//go:embed agent.yaml
@@ -21,7 +23,7 @@ var (
 // Manifests returns all objects as one YAML stream, with the image tag and
 // the namespace (where the agent runs: the Longhorn namespace) filled in.
 func Manifests(tag, namespace string) string {
-	out := strings.Join([]string{crd, switchRes, rbac, agent}, "---\n")
+	out := strings.Join([]string{crd, switchRes, digestRes, rbac, agent}, "---\n")
 	if tag != "" {
 		out = strings.ReplaceAll(out, "ghcr.io/nxckdx/lhtx:latest", "ghcr.io/nxckdx/lhtx:"+tag)
 	}

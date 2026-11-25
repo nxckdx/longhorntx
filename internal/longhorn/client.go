@@ -34,6 +34,9 @@ var (
 )
 
 func gvr(r string) schema.GroupVersionResource {
+	if r == GVRVolumeDigest.Resource {
+		return GVRVolumeDigest // the agent's, not Longhorn's
+	}
 	return schema.GroupVersionResource{Group: Group, Version: Version, Resource: r}
 }
 

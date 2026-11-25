@@ -66,6 +66,16 @@ it. Restores go into a new volume the agent marks as its own; a volume of the
 same name from before is never taken (it may hold changes) – the name gets
 `-2`, `-3`, ….
 
+## Less traffic: volume digests
+
+The agent keeps a small `VolumeDigest` per volume – the fields lhtx shows,
+rewritten only on notable changes – and lhtx watches those instead of the
+volumes (`--refresh agent`; `auto` picks it when an agent keeps them, the
+header then says `live via agent`). In the lab that was about 24× less
+traffic under write load; details in [traffic.md](traffic.md#volume-digests-with-the-agent).
+`lhtx measure` shows the digests next to the volumes. Turn them off with
+`lhtx agent --no-digests` (chart: `extraArgs`).
+
 ## Health and replicas
 
 The agent answers the kubelet's probes on a read-only port (`:8081`, no

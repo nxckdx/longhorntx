@@ -471,6 +471,9 @@ func (m *model) refreshHint() string {
 		return ""
 	}
 	s := "live"
+	if m.store.RefreshInterval() == longhorn.RefreshAgent {
+		s = "live via agent"
+	}
 	if iv := m.store.RefreshInterval(); iv > 0 {
 		s = fmt.Sprintf("⟳ %s · %s ago", iv, time.Since(m.store.LastRefresh()).Round(time.Second))
 		if r := m.store.AutoSwitched(); r > 0 {

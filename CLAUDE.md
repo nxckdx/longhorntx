@@ -45,6 +45,16 @@ internal/switchover freeze (ValidatingAdmissionPolicy denies pods mounting the P
                     owners) and switch (restore → freeze → swap PV/PVC → unfreeze;
                     rollback until the old PVC is deleted; journal). No per-operator
                     or per-GitOps logic – the desired state is never changed.
+internal/agent      optional in-cluster agent (`lhtx agent`, image ghcr.io/nxckdx/lhtx):
+                    Freeze CRD lhtx.io/v1alpha1 (cluster-scoped), controller reusing
+                    switchover (named, resumable freezes; status log; finalizer =
+                    unfreeze; autoUnfreezeAfter; leader election lease lhtx-agent in
+                    the Longhorn namespace = heartbeat). Client: Detect (one GET of the
+                    lease), Request, Follow (watch of one object), Unfreeze. lhtx must
+                    keep working without it. No HTTP endpoint – requests only via CRs.
+deploy/             agent manifests, embedded (lhtx agent manifests); charts/lhtx-agent
+                    is the Helm chart – its templates/crd.yaml must equal deploy/crd.yaml
+                    (test). Demo: LHTX_DEMO_AGENT=1 runs the agent in-process.
 internal/overview   doctor summary per context (lhtx overview, TUI context picker o)
 internal/update     release check (daily, cached) and self-update from GitHub releases
 internal/cli        cobra commands (read: volumes.go, nodes.go, data.go, activity.go,

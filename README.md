@@ -201,6 +201,7 @@ lhtx restore VOLUME --switch               # restore, then switch the PVC to it 
 lhtx switch NS/PVC --to-volume VOLUME      # point a PVC to another Longhorn volume (and back)
 lhtx freeze --all|--node N|NS/PVC…         # stop all pods using the volumes, detach (maintenance)
 lhtx unfreeze [NAME|--all]                 # end it, pods start again
+lhtx agent status|manifests                # optional in-cluster agent that carries freezes out
 lhtx attach VOLUME NODE [--maintenance]    # like Attach in the web UI (ticket "longhorn-ui")
 lhtx detach VOLUME                         # removes only that ticket, never the CSI one
 lhtx jobs add|remove VOLUME JOB|group:NAME...   # recurring job labels on the volume
@@ -312,6 +313,47 @@ attached again. The freeze lives in the cluster: `lhtx freeze --status`,
 Needs cluster-admin rights. Longhorn itself can still attach frozen volumes
 (recurring jobs on detached volumes, manual attach).
 
+**lhtx agent (optional)**: a freeze run from a laptop stops when the laptop
+sleeps or the LTE link drops – possibly halfway through. The agent is a small
+operator in the cluster (same binary, `lhtx agent`, image
+`ghcr.io/nxckdx/lhtx`) that carries freezes out instead. When lhtx finds it
+alive (its lease in the Longhorn namespace, renewed within a minute), `lhtx
+freeze` and `Z` create a `Freeze` resource (`lhtx.io/v1alpha1`) with your own
+rights and only follow the agent's progress from its status; Ctrl+C or `x`
+stops following, not the freeze. Without an agent everything runs locally as
+before (`--local` forces it).
+
+```
+lhtx --rw freeze --all --reason "longhorn upgrade" --auto-unfreeze 4h
+lhtx agent status                  # is an agent alive, which Freezes exist
+lhtx --rw unfreeze --all           # deletes the Freeze; the agent brings the apps back
+kubectl get freezes                # the same with kubectl (delete = unfreeze)
+```
+
+- it resumes a freeze after its own restart, ends forgotten freezes after
+  `--auto-unfreeze` (`spec.autoUnfreezeAfter`), keeps the `Freeze` (finalizer)
+  until the apps are back after an unfreeze
+- requests go only through the Kubernetes API – the agent has no HTTP
+  endpoint. Who may create `Freeze` resources may freeze: bind the ClusterRole
+  `lhtx-freeze` (chart: `<release>-freeze`) – no cluster-admin needed then.
+  The agent itself needs rights like cluster-admin (delete pods anywhere,
+  exec for hooks, admission policies, patch owners)
+- one active agent (leader election); a restart while unfreezing goes on
+  where it stopped
+
+Install with Helm (Flux/Argo CD: an OCI `HelmRepository` / chart source):
+
+```
+helm install lhtx-agent oci://ghcr.io/nxckdx/charts/lhtx-agent -n lhtx-system --create-namespace \
+  --set longhornNamespace=longhorn-system
+```
+
+or plain manifests (CRD, RBAC, Deployment in the Longhorn namespace):
+`lhtx agent manifests | kubectl apply -f -` or `kubectl apply -k deploy/`.
+The agent may run in any namespace; its lease and the `lhtx-hooks` ConfigMap
+stay in the Longhorn namespace. Try it without a cluster:
+`LHTX_DEMO_AGENT=1 lhtx --demo`.
+
 **Restore and switch** (`lhtx restore VOLUME --switch`, `lhtx switch`): the
 web UI makes you restore under another name, detach, delete the PVC and
 create PV/PVC by hand. lhtx does it in one confirmed run:
@@ -407,8 +449,11 @@ never check and are updated through Nix.
 Commits on `main` follow [Conventional Commits](https://www.conventionalcommits.org/)
 (`feat:`, `fix:`, `docs:`, …). release-please keeps a release PR open with the
 changelog and the `VERSION` bump; merging it creates the tag `vX.Y.Z` and the
-GitHub release, and goreleaser attaches the binaries and `checksums.txt`. CI
-runs gofmt, vet, tests and the Nix build on every push and pull request.
+GitHub release, and goreleaser attaches the binaries and `checksums.txt`,
+pushes the agent image `ghcr.io/nxckdx/lhtx:<version>` (linux/amd64, arm64)
+and the workflow pushes the Helm chart `oci://ghcr.io/nxckdx/charts/lhtx-agent`.
+CI runs gofmt, vet, tests, `helm lint` and the Nix build on every push and pull
+request.
 
 ## Install / develop (Nix)
 
@@ -470,6 +515,10 @@ internal/longhorn   slim CRD structs, one-shot client, informer store, joins
 internal/cli        cobra commands
 internal/tui        Bubble Tea UI
 internal/demo       simulated cluster for --demo (fake dynamic client)
+internal/switchover freeze (admission policy) and restore + switch
+internal/agent      optional in-cluster agent: Freeze resources, controller, client
+deploy/             agent manifests (embedded: lhtx agent manifests)
+charts/lhtx-agent   Helm chart of the agent
 docs/*.gif          README GIFs, recorded from --demo (docs/tapes/record.sh)
 ```
 
@@ -637,13 +686,17 @@ engines     24      22ms        20.8 KiB     5              34.8 KiB      69.6 K
    (create/edit/delete), restore into a new volume with PV/PVC, clone of a
    volume or snapshot – with preview,
    confirmation, client and server dry run, restore + switch of the PVC, freeze
-   for maintenance (admission policy, works with any operator/GitOps) · open:
+   for maintenance (admission policy, works with any operator/GitOps) · ✔
+   optional in-cluster agent that carries freezes out (Helm chart) · open:
    CloudNativePG-aware restore
 4. **Health** ✔ `lhtx doctor` / Health tab, diagnostics bundle, backup age,
    drain check · open: rebuild/snapshot deadlock workaround as a guided action
    (after collecting evidence with `lhtx diag`)
 5. ✔ Multi-cluster overview (`lhtx overview`, `c` → `o` in the TUI) · open:
    more traffic statistics
+6. **Agent** ✔ freezes in the cluster · next: compact read-only change stream
+   for the TUI from the agent (less traffic on large clusters), history of
+   rebuilds and backups
 
 ## License
 

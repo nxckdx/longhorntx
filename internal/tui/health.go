@@ -50,6 +50,7 @@ func (m *model) loadHealth() tea.Cmd {
 		}
 		x.orphans, _, _ = c.ListCount(ctx, "orphans")
 		x.extra = append(switchover.Checks(ctx, c, switchover.JournalDir()), c.EncryptionChecks(ctx, vols)...)
+		x.extra = append(x.extra, c.HistoryChecks(ctx)...)
 		for _, v := range rebuilding {
 			if s, err := c.Snapshots(ctx, v); err == nil {
 				x.snapshots = append(x.snapshots, s...)

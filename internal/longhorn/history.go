@@ -160,3 +160,40 @@ func (c *Client) History(ctx context.Context, name string) ([]HistoryEvent, erro
 	sort.SliceStable(ev, func(i, j int) bool { return ev[i].At.After(ev[j].At) })
 	return ev, nil
 }
+
+// HistoryChecks reads the cluster history (one GET; nothing without the
+// agent) and reports repeated trouble of the last 7 days: backups of a
+// volume failing again and again, replicas of a volume failing again and
+// again.
+func (c *Client) HistoryChecks(ctx context.Context) []Finding {
+	ev, err := c.History(ctx, ClusterHistory)
+	if err != nil {
+		return nil
+	}
+	type key struct{ vol, kind string }
+	n := map[key]int{}
+	label := map[string]string{}
+	for _, e := range ev {
+		if time.Since(e.At) > 7*24*time.Hour {
+			continue
+		}
+		n[key{e.Volume, e.Kind}]++
+		label[e.Volume] = e.PVC
+	}
+	var out []Finding
+	for k, cnt := range n {
+		obj := label[k.vol]
+		if obj == "" {
+			obj = k.vol
+		}
+		switch {
+		case k.kind == HistBackupFailed && cnt >= 2:
+			out = append(out, Finding{Severity: SevWarning, Check: "history", Object: obj,
+				Message: fmt.Sprintf("backups failed %d times in the last 7 days", cnt), Hint: "lhtx history " + k.vol})
+		case k.kind == HistReplicaFailed && cnt >= 3:
+			out = append(out, Finding{Severity: SevWarning, Check: "history", Object: obj,
+				Message: fmt.Sprintf("replicas failed %d times in the last 7 days", cnt), Hint: "lhtx history " + k.vol + " – a bad disk or node?"})
+		}
+	}
+	return out
+}

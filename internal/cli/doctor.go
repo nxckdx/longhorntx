@@ -70,6 +70,7 @@ func runDoctor(cmd *cobra.Command, g *globals, backupMaxAge time.Duration, minSe
 	}
 	in.BackupMaxAge = backupMaxAge
 	in.Extra = append(switchover.Checks(cmd.Context(), c, switchover.JournalDir()), c.EncryptionChecks(cmd.Context(), in.Volumes)...)
+	in.Extra = append(in.Extra, c.HistoryChecks(cmd.Context())...)
 	all := longhorn.Diagnose(in)
 	var fs []longhorn.Finding
 	for _, f := range all {

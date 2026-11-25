@@ -171,12 +171,12 @@ func (r *recorder) flush(ctx context.Context) {
 	}
 	sort.Strings(names)
 	for _, n := range names {
-		if err := r.write(ctx, n, vols[n], pending[n], longhorn.MaxVolumeHistory); err != nil {
+		if err := r.write(ctx, n, vols[n], pending[n], r.a.historyVolumeMax()); err != nil {
 			r.a.Logf("history %s: %v", n, err)
 		}
 	}
 	if len(cluster) > 0 {
-		if err := r.write(ctx, longhorn.ClusterHistory, nil, cluster, longhorn.MaxClusterHistory); err != nil {
+		if err := r.write(ctx, longhorn.ClusterHistory, nil, cluster, r.a.historyClusterMax()); err != nil {
 			r.a.Logf("cluster history: %v", err)
 		}
 	}
@@ -187,10 +187,7 @@ func (r *recorder) write(ctx context.Context, name string, owner *longhorn.Volum
 	r.mu.Lock()
 	cur, had := r.known[name]
 	r.mu.Unlock()
-	events := append(append([]longhorn.HistoryEvent{}, cur.events...), add...)
-	if len(events) > max {
-		events = events[len(events)-max:]
-	}
+	events := r.a.trimHistory(append(append([]longhorn.HistoryEvent{}, cur.events...), add...), max)
 	obj, err := longhorn.HistoryObject(name, r.a.c.Namespace, owner, events, max)
 	if err != nil {
 		return err
@@ -208,7 +205,7 @@ func (r *recorder) write(ctx context.Context, name string, owner *longhorn.Volum
 		// someone else wrote it: start from what is there
 		if u, gerr := res.Get(ctx, name, metav1.GetOptions{}); gerr == nil {
 			old, _ := longhorn.DecodeHistory(u)
-			events = append(old, add...)
+			events = r.a.trimHistory(append(old, add...), max)
 			if obj, err = longhorn.HistoryObject(name, r.a.c.Namespace, owner, events, max); err == nil {
 				obj.SetResourceVersion(u.GetResourceVersion())
 				out, err = res.Update(ctx, obj, metav1.UpdateOptions{FieldManager: "lhtx-agent"})
@@ -217,9 +214,6 @@ func (r *recorder) write(ctx context.Context, name string, owner *longhorn.Volum
 	}
 	if err != nil {
 		return err
-	}
-	if len(events) > max {
-		events = events[len(events)-max:]
 	}
 	r.mu.Lock()
 	r.known[name] = histEntry{events: events, rv: out.GetResourceVersion()}
@@ -328,4 +322,48 @@ func (a *Agent) historyFlush() time.Duration {
 		return a.HistoryFlush
 	}
 	return 5 * time.Second
+}
+
+// Upper bounds for the configurable history sizes: a VolumeHistory must stay
+// a small object (etcd limit ~1.5 MB; an event is ~40 bytes gzipped).
+const (
+	maxHistoryVolumeLimit  = 1000
+	maxHistoryClusterLimit = 5000
+)
+
+func clampHistory(n, def, limit int) int {
+	switch {
+	case n <= 0:
+		return def
+	case n > limit:
+		return limit
+	}
+	return n
+}
+
+func (a *Agent) historyVolumeMax() int {
+	return clampHistory(a.HistoryVolumeMax, longhorn.MaxVolumeHistory, maxHistoryVolumeLimit)
+}
+
+func (a *Agent) historyClusterMax() int {
+	return clampHistory(a.HistoryClusterMax, longhorn.MaxClusterHistory, maxHistoryClusterLimit)
+}
+
+// trimHistory keeps the newest max events (events are oldest first) and,
+// with HistoryMaxAge, none older than that.
+func (a *Agent) trimHistory(events []longhorn.HistoryEvent, max int) []longhorn.HistoryEvent {
+	if a.HistoryMaxAge > 0 {
+		cut := time.Now().Add(-a.HistoryMaxAge)
+		kept := events[:0:0]
+		for _, e := range events {
+			if !e.At.Before(cut) {
+				kept = append(kept, e)
+			}
+		}
+		events = kept
+	}
+	if len(events) > max {
+		events = events[len(events)-max:]
+	}
+	return events
 }

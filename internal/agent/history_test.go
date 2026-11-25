@@ -83,3 +83,19 @@ func TestHistoryEncoding(t *testing.T) {
 		t.Fatalf("trim to the newest %d: %d, %v", longhorn.MaxVolumeHistory, len(back), err)
 	}
 }
+
+func TestTrimHistory(t *testing.T) {
+	now := time.Now()
+	ev := []longhorn.HistoryEvent{{At: now.Add(-100 * 24 * time.Hour), Kind: "a"}, {At: now.Add(-10 * 24 * time.Hour), Kind: "b"}, {At: now, Kind: "c"}}
+	a := &Agent{}
+	if got := a.trimHistory(ev, 2); len(got) != 2 || got[0].Kind != "b" {
+		t.Errorf("count: %v", got)
+	}
+	a.HistoryMaxAge = 30 * 24 * time.Hour
+	if got := a.trimHistory(ev, 50); len(got) != 2 || got[0].Kind != "b" {
+		t.Errorf("age: %v", got)
+	}
+	if a.historyVolumeMax() != 50 || (&Agent{HistoryVolumeMax: 99999}).historyVolumeMax() != 1000 || (&Agent{HistoryClusterMax: 20}).historyClusterMax() != 20 {
+		t.Error("clamp")
+	}
+}

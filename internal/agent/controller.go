@@ -40,6 +40,12 @@ type Agent struct {
 	NoDigests bool
 	// NoHistory: do not record VolumeHistories.
 	NoHistory bool
+	// HistoryVolumeMax / HistoryClusterMax: events kept per volume and in the
+	// cluster history (0 = 50 / 300; at most 1000 / 5000).
+	HistoryVolumeMax, HistoryClusterMax int
+	// HistoryMaxAge: drop older events when a history is written (0 = keep
+	// them until the count limit pushes them out).
+	HistoryMaxAge time.Duration
 	// HistoryFlush: how often recorded events are written (default 5 s).
 	HistoryFlush time.Duration
 

@@ -18,6 +18,8 @@ func agentCmd(g *globals) *cobra.Command {
 	var noLeader bool
 	var leaseNS, healthAddr string
 	var noDigests, noHistory bool
+	var histVol, histCluster int
+	var histAge time.Duration
 	cmd := &cobra.Command{
 		Use:   "agent",
 		Short: "Optional in-cluster agent: carries out freezes so they do not depend on your laptop",
@@ -58,6 +60,7 @@ lhtx-freeze to them. The agent itself needs rights like cluster-admin
 			}
 			a := agent.New(c, os.Getenv("POD_NAME"))
 			a.NoDigests, a.NoHistory = noDigests, noHistory
+			a.HistoryVolumeMax, a.HistoryClusterMax, a.HistoryMaxAge = histVol, histCluster, histAge
 			a.SetVersion(Version)
 			if healthAddr != "" {
 				go func() {
@@ -79,6 +82,9 @@ lhtx-freeze to them. The agent itself needs rights like cluster-admin
 		},
 	}
 	cmd.Flags().BoolVar(&noHistory, "no-history", false, "do not record VolumeHistories (lhtx history)")
+	cmd.Flags().IntVar(&histVol, "history-per-volume", longhorn.MaxVolumeHistory, "events kept per volume (at most 1000)")
+	cmd.Flags().IntVar(&histCluster, "history-cluster", longhorn.MaxClusterHistory, "notable events kept in the cluster-wide history (at most 5000)")
+	cmd.Flags().DurationVar(&histAge, "history-max-age", 0, "drop events older than this when a history is written, e.g. 2160h (0 = only the count limits)")
 	cmd.Flags().BoolVar(&noDigests, "no-digests", false, "do not keep VolumeDigests (lhtx --refresh agent then has nothing to watch)")
 	cmd.Flags().StringVar(&healthAddr, "health-addr", ":8081", "address for the probes /healthz, /readyz and the Prometheus /metrics (read-only; empty = off)")
 	cmd.Flags().StringVar(&leaseNS, "lease-namespace", "", "namespace of the lease (default: the Longhorn namespace, where lhtx looks first; elsewhere lhtx finds it by label if users may list leases)")

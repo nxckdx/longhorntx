@@ -89,6 +89,33 @@ freezes and switches are cluster-wide and all data comes from the API server.
 
 `lhtx overview` shows in column AGENT whether an agent runs in each cluster.
 
+## Metrics and dashboard
+
+The health port also serves Prometheus metrics (`/metrics`, counts only – no
+names of volumes, PVCs or people):
+
+| metric | |
+|---|---|
+| `lhtx_agent_leader` | 1 on the active agent, 0 on a standby |
+| `lhtx_agent_freezes{phase}`, `lhtx_agent_frozen_pvcs` | Freeze resources, PVCs frozen by the agent |
+| `lhtx_agent_switches{phase}` | Switch resources |
+| `lhtx_agent_operations_total{kind,result}` | finished freezes, unfreezes, switches … |
+| `lhtx_agent_volume_events_total`, `lhtx_agent_digest_writes_total` | volume updates the agent saw vs digests written – the traffic lhtx saves |
+| `lhtx_agent_digest_volumes` | volumes with a digest |
+| `lhtx_agent_build_info{version}` | |
+
+Chart values: `metrics.service` (on; a Service with `prometheus.io/scrape`
+annotations, also in the plain manifests), `metrics.serviceMonitor.enabled`
+(Prometheus operator), `metrics.dashboard.enabled` (a ConfigMap with a
+Grafana dashboard for the sidecar, label `grafana_dashboard: "1"`).
+
+How many lhtx TUIs use the agent cannot be seen by the agent – lhtx only
+talks to the API server. The dashboard takes it from the API server's own
+metrics instead: every lhtx TUI in agent mode holds one namespaced watch on
+`volumedigests` (`apiserver_longrunning_requests{resource="volumedigests",
+verb="WATCH",scope="namespace"}`, minus the agent's own watch). That needs
+the API server's metrics in Prometheus (kube-prometheus-stack scrapes them).
+
 Install with Helm (Flux/Argo CD: an OCI `HelmRepository` / chart source):
 
 ```

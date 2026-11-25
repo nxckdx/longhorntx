@@ -10,6 +10,14 @@ longhornNamespace: longhorn-system
 # namespaces (rbac.leaseListForAllUsers).
 leaseNamespace: ""
 
+# Read-write: the agent carries out Freezes and Switches (lhtx agent --rw)
+# and gets the rights for it – deleting pods anywhere, exec into them,
+# admission policies, swapping PVCs, encryption key Secrets (treat it like
+# cluster-admin). false: it only reads Longhorn, pods and their logs and
+# writes its own resources – digests, history, metrics, diag logs – and
+# refuses Freezes and Switches; lhtx then does them itself with your rights.
+rw: false
+
 # Name of all objects (default: <release>-lhtx-agent, or the release name
 # if it contains "lhtx-agent").
 fullnameOverride: ""

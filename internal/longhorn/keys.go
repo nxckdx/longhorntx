@@ -25,6 +25,10 @@ import (
 // keyFields make up a Longhorn key (CRYPTO_KEY_PROVIDER is always "secret").
 var keyFields = []string{"CRYPTO_KEY_VALUE", "CRYPTO_KEY_CIPHER", "CRYPTO_KEY_HASH", "CRYPTO_KEY_SIZE", "CRYPTO_PBKDF"}
 
+// LabelKeyBackup marks copies of keys lhtx kept because a switch saw the
+// key Secret replaced (lhtx doctor reports them).
+const LabelKeyBackup = "lhtx.io/key-backup"
+
 // ErrNoSecret: the Secret does not exist.
 var ErrNoSecret = errors.New("secret not found")
 
@@ -38,10 +42,11 @@ func (c *Client) KeyFingerprint(ctx context.Context, r SecretRef) (string, error
 	if err != nil {
 		return "", err
 	}
-	return fingerprint(u)
+	return Fingerprint(u)
 }
 
-func fingerprint(u *unstructured.Unstructured) (string, error) {
+// Fingerprint hashes the key and its parameters of a key Secret object.
+func Fingerprint(u *unstructured.Unstructured) (string, error) {
 	data, _, _ := unstructured.NestedStringMap(u.Object, "data")
 	if data["CRYPTO_KEY_VALUE"] == "" {
 		return "", fmt.Errorf("Secret %s/%s has no CRYPTO_KEY_VALUE – not a Longhorn key", u.GetNamespace(), u.GetName())

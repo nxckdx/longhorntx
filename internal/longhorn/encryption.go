@@ -165,6 +165,11 @@ func (c *Client) EncryptionChecks(ctx context.Context, vols []*Volume) []Finding
 		}
 		r := SecretRef{Namespace: m["namespace"], Name: m["name"]}
 		need[r] = append(need[r], v)
+		if ns := v.Status.KubernetesStatus.Namespace; ns != "" && ns != r.Namespace {
+			out = append(out, Finding{Severity: SevInfo, Check: "encryption", Object: volLabel(v),
+				Message: "uses the key Secret " + r.String() + " from another namespace",
+				Hint:    "deleting that namespace or Secret makes the volume unusable; copy the key next to the PVC (lhtx restore/clone --copy-secret)"})
+		}
 	}
 	have := map[SecretRef]bool{}
 	listed := map[string]bool{}
@@ -189,6 +194,7 @@ func (c *Client) EncryptionChecks(ctx context.Context, vols []*Volume) []Finding
 			have[SecretRef{Namespace: r.Namespace, Name: it.Name}] = true
 		}
 	}
+	out = append(out, c.keyBackupChecks(ctx)...)
 	for r, vs := range need {
 		if have[r] {
 			continue
@@ -198,6 +204,27 @@ func (c *Client) EncryptionChecks(ctx context.Context, vols []*Volume) []Finding
 				Message: "its key Secret " + r.String() + " is missing – the volume cannot be attached",
 				Hint:    "restore the Secret from your secret backup; without the key the data (and its backups) cannot be read"})
 		}
+	}
+	return out
+}
+
+// keyBackupChecks reports copies of keys a switch kept (label
+// lhtx.io/key-backup): key material that should go back to its source and
+// then be removed. Metadata only; nothing if listing is not allowed.
+func (c *Client) keyBackupChecks(ctx context.Context) []Finding {
+	m, err := c.metaClient()
+	if err != nil {
+		return nil
+	}
+	l, err := m.Resource(gvrSecret).List(ctx, metav1.ListOptions{LabelSelector: LabelKeyBackup + "=true"})
+	if err != nil {
+		return nil
+	}
+	var out []Finding
+	for _, it := range l.Items {
+		out = append(out, Finding{Severity: SevWarning, Check: "encryption", Object: it.Namespace + "/" + it.Name,
+			Message: "copy of the key of " + it.Annotations["lhtx.io/key-of"] + " kept by lhtx switch – the key Secret had been replaced",
+			Hint:    "make sure the key Secret holds this key again (put it back into its source), then delete this Secret"})
 	}
 	return out
 }

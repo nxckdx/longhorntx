@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -177,6 +178,29 @@ func (c *Client) Apply(ctx context.Context, a *Action, mode DryRun) error {
 			return err
 		}
 		_, err = res.Patch(ctx, a.Name, k8stypes.MergePatchType, data, metav1.PatchOptions{DryRun: dry, FieldManager: "lhtx"})
+		if apierrors.IsConflict(err) {
+			// The resourceVersion is stale – on busy clusters volumes change
+			// all the time (status.actualSize), and in poll mode the cached
+			// object is older anyway. Retry once with the current version
+			// if the fields this change is about still hold what the
+			// decision was based on.
+			cur, gerr := res.Get(ctx, a.Name, metav1.GetOptions{})
+			if gerr != nil {
+				return err
+			}
+			if why := changedSince(cur, a.Changes); why != "" {
+				return fmt.Errorf("%s changed meanwhile (%s) – look again and retry", a.Name, why)
+			}
+			var p map[string]any
+			_ = json.Unmarshal(data, &p) // a copy with JSON types
+			if md, ok := p["metadata"].(map[string]any); ok {
+				md["resourceVersion"] = cur.GetResourceVersion()
+			}
+			if data, err = json.Marshal(p); err != nil {
+				return err
+			}
+			_, err = res.Patch(ctx, a.Name, k8stypes.MergePatchType, data, metav1.PatchOptions{DryRun: dry, FieldManager: "lhtx"})
+		}
 		return err
 	case VerbDelete:
 		opts := metav1.DeleteOptions{DryRun: dry}
@@ -187,6 +211,39 @@ func (c *Client) Apply(ctx context.Context, a *Action, mode DryRun) error {
 		return res.Delete(ctx, a.Name, opts)
 	}
 	return fmt.Errorf("unknown verb %q", a.Verb)
+}
+
+// changedSince compares the fields of a change with their current values;
+// "" if all still hold the From value. A field it cannot compare counts as
+// changed (no blind retry).
+func changedSince(cur *unstructured.Unstructured, changes []Change) string {
+	if len(changes) == 0 {
+		return "no fields to compare"
+	}
+	for _, c := range changes {
+		path := strings.Split(c.Field, ".")
+		v, found, err := unstructured.NestedFieldNoCopy(cur.Object, path...)
+		if err != nil {
+			return c.Field + " cannot be compared"
+		}
+		now := ""
+		switch x := v.(type) {
+		case nil:
+		case string:
+			now = x
+		case bool, int64, float64, int:
+			now = fmt.Sprint(x)
+		default:
+			return c.Field + " cannot be compared"
+		}
+		if !found {
+			now = ""
+		}
+		if now != c.From {
+			return fmt.Sprintf("%s is %q now, was %q", c.Field, now, c.From)
+		}
+	}
+	return ""
 }
 
 // copySecret creates a.Namespace/a.Name with the type and data of

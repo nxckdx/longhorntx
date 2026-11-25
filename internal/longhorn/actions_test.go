@@ -1,12 +1,23 @@
 package longhorn
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	k8stypes "k8s.io/apimachinery/pkg/types"
+	dynfake "k8s.io/client-go/dynamic/fake"
+	"k8s.io/client-go/rest"
+	k8stesting "k8s.io/client-go/testing"
+
+	"github.com/nxckdx/longhorntx/internal/kube"
 )
 
 func testNode() *Node {
@@ -159,5 +170,44 @@ func TestReplicaCountActionsSurplus(t *testing.T) {
 	acts, _ = ReplicaCountActions(v, 2, reps)
 	if len(acts) != 2 || acts[1].Name != "d" {
 		t.Errorf("kept healthy: %+v", acts)
+	}
+}
+
+// A stale resourceVersion (status changed meanwhile) is retried when the
+// changed field still holds the old value; a real change is refused.
+func TestApplyConflictRetry(t *testing.T) {
+	ctx := context.Background()
+	vol := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "longhorn.io/v1beta2", "kind": "Volume",
+		"metadata": map[string]any{"name": "vol", "namespace": DefaultNamespace, "resourceVersion": "5"},
+		"spec":     map[string]any{"numberOfReplicas": int64(2)}}}
+	dyn := dynfake.NewSimpleDynamicClient(runtime.NewScheme(), vol)
+	conflicts := 0
+	dyn.PrependReactor("patch", "volumes", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		var p struct {
+			Metadata struct{ ResourceVersion string } `json:"metadata"`
+		}
+		_ = json.Unmarshal(a.(k8stesting.PatchActionImpl).GetPatch(), &p)
+		if p.Metadata.ResourceVersion == "1" { // the stale one
+			conflicts++
+			return true, nil, apierrors.NewConflict(GVRVolume.GroupResource(), "vol", fmt.Errorf("stale"))
+		}
+		return false, nil, nil
+	})
+	c := NewClientFrom(&kube.Cluster{Config: &rest.Config{}, Traffic: &kube.Counter{}}, DefaultNamespace, dyn, nil)
+	v := &Volume{}
+	v.Name, v.ResourceVersion, v.Spec.NumberOfReplicas, v.Status.State = "vol", "1", 2, "attached"
+	a, err := SetReplicaCount(v, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Apply(ctx, a, DryRunNone); err != nil || conflicts != 1 {
+		t.Fatalf("retry: %v (%d conflicts)", err, conflicts)
+	}
+	// someone set 4 meanwhile: no retry
+	cur, _ := dyn.Resource(GVRVolume).Namespace(DefaultNamespace).Get(ctx, "vol", metav1.GetOptions{})
+	_ = unstructured.SetNestedField(cur.Object, int64(4), "spec", "numberOfReplicas")
+	_, _ = dyn.Resource(GVRVolume).Namespace(DefaultNamespace).Update(ctx, cur, metav1.UpdateOptions{})
+	if err := c.Apply(ctx, a, DryRunNone); err == nil || !strings.Contains(err.Error(), "changed meanwhile") {
+		t.Errorf("real change not refused: %v", err)
 	}
 }

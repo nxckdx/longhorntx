@@ -2,7 +2,7 @@
 
 lhtx: low-traffic TUI (k9s style) and CLI for Longhorn, replacing the Longhorn
 web UI on slow/metered links. Repo `github.com/nxckdx/longhorntx`, binary `lhtx`,
-also usable as kubectl plugin (`kubectl-lhtx`). See README.md for user docs.
+also usable as kubectl plugin (`kubectl-lhtx`). User docs: README.md (short) and docs/*.md.
 
 ## Principles (do not break)
 
@@ -35,7 +35,7 @@ internal/longhorn   slim CRD structs (no longhorn-manager import), Client (one-s
                     metadata API only (secrets.go)
 internal/fuzzy      fzf-style matching (TUI filter, CLI volume fallback)
 internal/demo       --demo: fake dynamic client with made-up data and a
-                    simulated rebuild loop (README GIFs: docs/*.tape + docs/tapes/,
+                    simulated rebuild loop (doc GIFs: docs/*.tape + docs/tapes/,
                     nix shell nixpkgs#vhs -c docs/tapes/record.sh)
 internal/config     ~/.config/lhtx/config.yaml: defaults + per-context overrides
                     (exact name or glob); flags/env beat it (cli/root.go loadConfig,
@@ -134,4 +134,8 @@ internal/tui        Bubble Tea v2 (charm.land/*): tui.go model/update/keys,
   `lhtx-bin` flake package. `nix/release.json` (version + SHA256 per system)
   is committed by the release workflow after goreleaser
   (`nix/update-release.sh`); do not edit by hand.
-- Keep README.md in sync with features (usage, keys, data model, traffic notes).
+- Keep the docs in sync with features: README.md stays short (pitch, install,
+  feature list with links); details go into the matching docs/*.md (usage.md:
+  commands + TUI keys, write-actions.md, freeze.md, restore-switch.md,
+  encryption.md, agent.md, configuration.md, traffic.md, development.md:
+  lab, releases, layout, data model, roadmap).

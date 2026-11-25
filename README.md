@@ -27,454 +27,44 @@ Requires Longhorn ≥ 1.6 (`longhorn.io/v1beta2`). Tested with v1.12.1.
 engine (SPDK, block disks) may be shown, but nothing is verified for them, and
 write actions are not tested.
 
-## Usage
+## Features
+
+- **Views**: volumes (problems first), volume details with replicas per disk
+  and live rebuild progress, nodes → disks → replicas with SMART, snapshot
+  tree, backups and backup volumes (also of deleted volumes), recurring jobs,
+  backup targets, settings, orphans, replica matrix, events –
+  [usage](docs/usage.md)
+- **Health**: `lhtx doctor` / Health tab, `lhtx overview` across all
+  clusters, drain check before node work, diagnostics bundle –
+  [usage](docs/usage.md#health-check)
+- **Changes** with preview, confirmation and server dry run: snapshots,
+  backups, replicas, expansion, attach/detach, scheduling and eviction,
+  engine upgrade, settings, recurring jobs, backup targets, restore and clone
+  into new volumes – [write actions](docs/write-actions.md)
+- **Freeze** for Longhorn upgrades and maintenance: stop everything that uses
+  the volumes through an admission policy – no scaling, works with any
+  operator and GitOps, ordered shutdown, hooks, CloudNativePG hibernation –
+  [freeze](docs/freeze.md)
+- **Restore and switch**: put a backup under a running app's PVC in one
+  confirmed run, with rollback and the way back – [restore and switch](docs/restore-switch.md)
+- **Encrypted volumes**: the key goes along with restores, clones, switches
+  and migrations, whatever manages the Secret – [encryption](docs/encryption.md)
+- **Optional in-cluster agent** (Helm chart) that carries freezes out, so
+  they do not depend on your laptop – [agent](docs/agent.md)
+- **Low traffic** by design: watches where they are cheap, polling where
+  they are not, a traffic budget per context – [traffic](docs/traffic.md)
+- Settings per kubeconfig context, themes – [configuration](docs/configuration.md)
+
+## Quick start
 
 ```
-lhtx                                 # interactive TUI
-lhtx --demo                          # TUI/CLI on a simulated cluster (no kubeconfig needed)
-
-lhtx volumes [-o table|wide|json]    # volumes (table reads only volumes)
-lhtx replicas [VOLUME]               # replicas with node + disk path, mode, rebuild %
-lhtx nodes [-o wide]                 # nodes → disks: usage, scheduled, replicas, SMART
-lhtx disk NODE[:PATH]                # all replicas on a disk (reverse view)
-lhtx rebuilds [-w]                   # rebuilds/purges/restores (+ backups with -w), speed + ETA
-lhtx snapshots VOLUME                # snapshot chain of a volume (newest first, revert branches indented)
-lhtx backups [VOLUME] [--max-age 36h] # backup age per volume, or the backups of one volume (also deleted ones)
-lhtx backupvolumes                   # volumes with backups in the backup store, deleted ones first
-lhtx events VOLUME                   # events of volume, engine, replicas and PVC
-lhtx jobs [VOLUME]                   # recurring jobs (that apply to the volume)
-lhtx settings [FILTER]               # Longhorn settings
-lhtx orphans                         # orphaned replica data / instances
-lhtx engineimages                    # engine images, state, how many volumes use them
-lhtx targets                         # backup targets
-lhtx contexts                        # kubeconfig contexts
-lhtx doctor [--backup-max-age 36h]   # health check, exit code 0/1/2/3 (ok/warn/crit/error)
-lhtx overview [--contexts a,b]       # doctor summary for all kubeconfig contexts, one line each
-lhtx drain-check NODE                # what happens if NODE goes away (reboot/drain)
-lhtx matrix [--problems]             # replica distribution volumes × nodes, shared node/disk first
-lhtx diag VOLUME                     # diagnostics bundle (tar.gz) for a bug report
-lhtx measure [-d 60s] [--backups]    # measure startup + watch traffic per resource
-lhtx config [init|path]              # effective settings of the context, example config file
-
-VOLUME = Longhorn volume / PV name, namespace/pvc, a bare PVC name if unique,
-         or a fuzzy query if it matches exactly one volume ("imm valk")
---context NAME  --kubeconfig PATH  -n longhorn-system  -v (print wire bytes)
---refresh auto|watch|30s (volume updates, env LHTX_REFRESH)
+lhtx                                 # TUI for the current kubeconfig context
+lhtx volumes                         # CLI, e.g. -o wide / -o json
+lhtx doctor                          # what is wrong right now (exit code like Nagios)
+lhtx --rw …  /  W in the TUI         # allow changes (always with a preview)
 ```
 
-### Configuration (per context)
-
-`~/.config/lhtx/config.yaml` (`$XDG_CONFIG_HOME`, or the path in
-`LHTX_CONFIG`) holds defaults and overrides per kubeconfig context, so for
-example a small homelab runs live in write mode and a large customer cluster
-polls, has a red badge and a traffic budget. `lhtx config init` writes a
-commented example; `lhtx config [--context NAME]` shows the effective values
-and where each one comes from; in the TUI `,` shows the same and can change
-values (the file keeps your comments; a file managed by Home Manager is
-read-only and says so).
-
-```yaml
-defaults:
-  refresh: auto          # auto | watch | 30s
-  readOnly: true
-contexts:
-  homelab:
-    readOnly: false      # TUI starts in write mode, CLI writes without --rw
-  "customer-*":          # glob; the more specific pattern wins, exact names last
-    color: red           # context badge (name or 0-255)
-    refresh: 30s
-    trafficBudget: 200MiB
-  kind-*:
-    overview: false      # skipped by lhtx overview
-```
-
-Precedence: flag/env > context > defaults > built-in. Settings: `refresh`,
-`autoPollRate`, `readOnly`, `color`, `theme`, `trafficBudget`, `overview`, `namespace`. Unknown keys
-and bad values are errors, so typos do not go unnoticed. `readOnly: false`
-only skips `--rw`/`W`: previews and confirmations stay. Switching the context
-in the TUI applies that context's settings (write mode turns off unless the
-new context allows it or `--rw` was given).
-
-**Themes**: `default`, `catppuccin`, `dracula`, `nord`, `gruvbox`, `light`
-(for light terminals) – `theme:` in the config (globally or per context),
-`--theme`, or `T` in the TUI (a picker with live preview). `lhtx config themes`
-shows them with colour swatches. Own themes or tweaks of the built-in ones
-start from a base and override single colours:
-
-```yaml
-defaults:
-  theme: mine
-themes:
-  mine:
-    base: nord
-    accent: "#ff79c6"    # #rrggbb, #rgb or 0-255
-    warn: 214
-  default:               # tweak a built-in: same name, no base needed
-    ok: "#00ff87"
-```
-
-Colours: `dim faint ok warn error info accent headerBg selectedBg barFg tabBg
-tabFg badgeFg prodBg border`, `palette` (context badge colours).
-
-**Traffic budget** (TUI): at 80 % of the budget the header shows the usage,
-at 100 % all watches stop (`⏸ paused`); on-demand loads still work and
-`ctrl+r` resumes with a fresh budget. It counts both directions of the
-current connection.
-
-### Health check
-
-![CLI: lhtx doctor with exit code, lhtx matrix --problems, lhtx backupvolumes](docs/cli.gif)
-
-`lhtx doctor` (and tab `5` in the TUI) reports what is wrong right now:
-
-- faulted/degraded volumes, volumes with only one healthy replica left
-- replicas of one volume on the same disk (or node)
-- nodes/disks not ready, disks ≥ 80 % / 90 % full, disks Longhorn no longer
-  schedules on (with Longhorn's reason)
-- SMART: status not PASSED, SSD life below 20 % / 10 %, reallocated/pending sectors
-- unavailable backup targets
-- backup age: last backup older than twice the interval of the backup recurring
-  job that applies to the volume (`--backup-max-age` also covers volumes
-  backed up by other means)
-- rebuilds running for hours, and a suspected deadlock: a replica rebuilds for
-  more than 30 minutes while a snapshot of the same volume waits for removal or
-  a purge runs (hint: the known workaround is lowering the replica count until
-  the snapshot is purged)
-- orphans
-
-Engines and snapshots are only read for volumes that are rebuilding. Exit codes
-follow Nagios (0 ok, 1 warning, 2 critical, 3 error), so `lhtx doctor --min warning`
-fits cron or a monitoring check. `-o wide` shows hints, `-o json` is for scripts.
-
-`lhtx overview` runs the same checks against all kubeconfig contexts (or
-`--contexts a,b`), 4 at a time, and prints one line per cluster: Longhorn
-version, volumes, attached, degraded, faulted, rebuilding, nodes ready and the
-worst finding (`-o wide` adds traffic and duration). Clusters without
-Longhorn show `no Longhorn` and do not affect the exit code
-(`--ignore-not-installed` hides them). Unreachable clusters show the error.
-Exit code: worst of all clusters, 3 if one could not be checked.
-
-### Node maintenance
-
-`lhtx drain-check NODE` (or `i` on a node in the TUI) shows, before a reboot,
-drain or replacement, what happens if the node goes away: volumes whose only
-healthy replica is there (critical, they become unavailable), volumes with ≥ 3
-replicas left with a single healthy one or with a rebuild running elsewhere
-(warning), degraded 2-replica volumes and volumes attached on the node (info),
-plus Longhorn's `node-drain-policy`. Same exit codes as `doctor`.
-
-### Diagnostics bundle
-
-`lhtx diag VOLUME` writes `lhtx-diag-<pvc>-<time>.tar.gz` with a summary
-(replicas, engine rebuild/purge status, replica mode change times, snapshots
-incl. pending removals, findings), the YAML of volume, engines, replicas,
-snapshots and the nodes involved (without managedFields), events, and
-instance-manager/longhorn-manager logs from those nodes, filtered to lines that
-mention the volume. Logs are limited (`--since 6h`, `--log-limit 5MiB` per
-container, `--no-logs`, `--full-logs`). Use it to capture a stuck rebuild or
-snapshot removal before trying to fix it.
-
-### Changes (write mode)
-
-![Write mode: replica count, expansion and a restore into a new volume, each shows the exact request before anything is sent](docs/write.gif)
-
-Nothing is changed without `--rw`. Every command first prints the exact request
-(verb, object, changed fields, JSON body). `--dry-run` stops there.
-`--dry-run=server` sends the request with `dryRun=All`: the apiserver and
-Longhorn's admission webhooks validate it, but nothing is persisted. Both work
-without `--rw`. Destructive actions ask you to type the object name, `--yes`
-skips the prompt (needed without a terminal).
-
-```
-lhtx create snapshot VOLUME [--name N]
-lhtx create backup VOLUME [--snapshot S]   # without --snapshot: snapshot, wait, back up
-lhtx delete snapshot NAME
-lhtx delete replica NAME                   # refused for the only healthy replica
-lhtx delete orphan NAME|--all-cleanable    # Longhorn deletes the data dir if cleanable (bulk skips risky ones)
-lhtx set replicas VOLUME COUNT             # volume must be attached
-lhtx set setting NAME VALUE
-lhtx upgrade-engine VOLUME... --image v1.12.1   # like "Upgrade Engine" in the web UI
-lhtx expand VOLUME 20Gi|+5Gi               # through the PVC if bound (StorageClass must allow it)
-lhtx restore BACKUP|VOLUME [--name N] [--pvc NS/NAME|auto]   # backup → NEW volume (+ PV/PVC)
-lhtx clone VOLUME [--snapshot S] [--pvc NS/NAME|auto]       # volume/snapshot → NEW volume (safe "revert")
-lhtx restore VOLUME --switch               # restore, then switch the PVC to it (pods stopped by a freeze)
-lhtx switch NS/PVC --to-volume VOLUME      # point a PVC to another Longhorn volume (and back)
-lhtx freeze --all|--node N|NS/PVC…         # stop all pods using the volumes, detach (maintenance)
-lhtx unfreeze [NAME|--all]                 # end it, pods start again
-lhtx agent status|manifests                # optional in-cluster agent that carries freezes out
-lhtx attach VOLUME NODE [--maintenance]    # like Attach in the web UI (ticket "longhorn-ui")
-lhtx detach VOLUME                         # removes only that ticket, never the CSI one
-lhtx jobs add|remove VOLUME JOB|group:NAME...   # recurring job labels on the volume
-lhtx jobs create NAME --task backup --cron "0 2 * * *" --retain 14 --groups default
-lhtx jobs edit NAME [--cron …] [--retain …] [--groups …]   # only the given flags change
-lhtx jobs delete NAME                      # preview lists the volumes that lose the job
-lhtx jobs next "0 2 * * 1-5"               # when a cron runs (UTC like Longhorn) in your time zone
-lhtx targets create NAME --url s3://bucket@region/ --secret S [--poll 5m]
-lhtx targets edit|delete|sync NAME         # sync = re-read the store now
-lhtx cordon|uncordon NODE[:DISK]           # replica scheduling off/on
-lhtx evict NODE[:DISK] [--cancel]          # also disables scheduling (Longhorn requires it)
-
-# examples
-lhtx evict node-3:/var/lib/longhorn --dry-run=server
-lhtx --rw set replicas gitea/gitea-data 3
-```
-
-All changes go through Longhorn CRs, the same objects longhorn-manager's own
-API creates (verified against v1.12.1): Snapshot CR (`spec.volume`,
-`spec.createSnapshot`), Backup CR (`spec.snapshotName`, labels `backup-volume`
-and `backup-target`), deleting Snapshot/Replica CRs, merge patches on
-Volume/Node/Setting. Volumes bound to a PVC are expanded by patching the PVC,
-like longhorn-manager does (the CSI resizer then grows volume and
-filesystem). Attach/detach add or remove the attachment ticket `longhorn-ui`
-in the VolumeAttachment CR, exactly like the web UI, so both can undo each
-other's attach. Patches carry the `resourceVersion` the decision was
-based on, so they fail instead of overwriting a newer state. Deletes use a
-UID precondition. A restore creates a Longhorn Volume with `spec.fromBackup`
-(the backup's URL, size from the backup), then – if asked – a PV
-(`driver.longhorn.io`, `volumeHandle` = volume, reclaim `Retain`, Longhorn's
-static StorageClass) and a PVC bound to it by `volumeName`, like the web UI's
-"Restore" + "Create PV/PVC"; existing volumes/PVs/PVCs of those names are
-refused up front. A clone works the same with `spec.dataSource`
-(`vol://VOLUME` or `snap://VOLUME/SNAPSHOT`) instead of `fromBackup`.
-Changes to objects owned by Flux, Argo CD or Helm (labels
-and annotations of those tools) carry a warning: the next reconcile reverts
-them, change them in Git instead. The credential secret picker for backup
-targets reads secret **names** through the metadata API – secret data never
-travels.
-
-**Freeze for maintenance** (`lhtx freeze`, `lhtx unfreeze`): stop everything
-that uses Longhorn volumes – for a Longhorn upgrade, node work or a volume
-swap – without touching a single Deployment, StatefulSet or operator:
-
-![Freeze all volumes for a Longhorn upgrade, then unfreeze: pods stopped by an admission policy, volumes detach and attach again](docs/freeze.gif)
-
-```
-lhtx --rw freeze --all --reason "longhorn upgrade"   # every PVC with a Longhorn volume
-lhtx --rw freeze --node worker-3                     # volumes attached on a node
-lhtx --rw freeze shop/db-data shop/uploads           # some PVCs
-lhtx freeze --status                                 # what is frozen
-lhtx --rw unfreeze --all                             # pods start again
-```
-
-lhtx creates a ValidatingAdmissionPolicy (Kubernetes ≥ 1.30; checked by the
-API server itself, no webhook server): no new pod may mount the PVCs, and
-nobody but lhtx's user may create or delete them. A server dry run with a
-test pod proves the policy is enforced before anything is deleted. Then the
-pods are deleted and lhtx waits until the volumes are detached.
-
-Clustered apps shut down cleanly: each app's pods stop one after the other,
-highest ordinal first (like a StatefulSet scales down), each with its normal
-grace period; apps run in parallel. CloudNativePG clusters are hibernated
-(`cnpg.io/hibernation: on`), so the operator stops them itself and keeps the
-PVCs. App knowledge comes from **hooks** – a command run with `sh -c` via
-`pods/exec` in a ready pod of the app; a failing pre-freeze hook stops the
-freeze before anything is stopped. Keep hooks idempotent: the agent runs the
-pre-freeze hooks again if it restarts in the middle of a freeze:
-
-```yaml
-metadata:
-  annotations:   # on the pod, or its Deployment/StatefulSet/operator resource
-    lhtx.io/pre-freeze: >-
-      opensearch: curl -s -XPUT localhost:9200/_cluster/settings -H 'Content-Type: application/json'
-      -d '{"persistent":{"cluster.routing.allocation.enable":"primaries"}}' && curl -s -XPOST localhost:9200/_flush
-    lhtx.io/post-unfreeze: >-
-      opensearch: curl -s -XPUT localhost:9200/_cluster/settings -H 'Content-Type: application/json'
-      -d '{"persistent":{"cluster.routing.allocation.enable":null}}'
-    lhtx.io/hook-timeout: 2m
-```
-
-lhtx looks on the pod first (`podAnnotations` in most charts), then up its
-owners (ReplicaSet → Deployment, StatefulSet, the operator's resource), then
-in the ConfigMap `lhtx-hooks` in the Longhorn namespace – for charts that
-cannot annotate anything (with Flux, a HelmRelease `postRenderers` patch can
-add the annotations, too):
-
-```yaml
-# ConfigMap lhtx-hooks, key hooks.yaml
-- namespace: cloud
-  selector: {app: nextcloud}        # pod labels
-  container: nextcloud
-  preFreeze: php occ maintenance:mode --on
-  postUnfreeze: php occ maintenance:mode --off
-  timeout: 1m
-```
-
-The plan lists every app, how it is stopped and which hooks run (and where
-they come from). Post-unfreeze hooks run once a pod of the app is ready again.
-
-Because the desired state does not change, it works the same for any
-operator and any GitOps setup: no operator "repairs" a scale-down by
-deleting its cluster and PVCs (as some do with `replicas: 0`), no Flux or
-Argo CD sync reverts anything – they simply cannot start pods. `unfreeze`
-removes the policy and nudges the owners of the deleted pods (annotation
-`lhtx.io/unfrozen-at`, metadata only) so their controllers start pods at
-once instead of after their back-off, then waits until the volumes are
-attached again. The freeze lives in the cluster: `lhtx freeze --status`,
-`lhtx doctor` and the Health tab show it, `unfreeze` works from any machine.
-Needs cluster-admin rights. Longhorn itself can still attach frozen volumes
-(recurring jobs on detached volumes, manual attach).
-
-**lhtx agent (optional)**: a freeze run from a laptop stops when the laptop
-sleeps or the LTE link drops – possibly halfway through. The agent is a small
-operator in the cluster (same binary, `lhtx agent`, image
-`ghcr.io/nxckdx/lhtx`) that carries freezes out instead. When lhtx finds it
-alive (its lease, renewed within a minute), `lhtx
-freeze` and `Z` create a `Freeze` resource (`lhtx.io/v1alpha1`) with your own
-rights and only follow the agent's progress from its status; Ctrl+C or `x`
-stops following, not the freeze. Without an agent everything runs locally as
-before (`--local` forces it).
-
-```
-lhtx --rw freeze --all --reason "longhorn upgrade" --auto-unfreeze 4h
-lhtx agent status                  # is an agent alive, which Freezes exist
-lhtx --rw unfreeze --all           # deletes the Freeze; the agent brings the apps back
-kubectl get freezes                # the same with kubectl (delete = unfreeze)
-```
-
-- it resumes a freeze after its own restart, ends forgotten freezes after
-  `--auto-unfreeze` (`spec.autoUnfreezeAfter`), keeps the `Freeze` (finalizer)
-  until the apps are back after an unfreeze
-- requests go only through the Kubernetes API – the agent has no HTTP
-  endpoint. Who may create `Freeze` resources may freeze: bind the ClusterRole
-  `lhtx-freeze` (chart: `<release>-freeze`) – no cluster-admin needed then.
-  The agent itself needs rights like cluster-admin (delete pods anywhere,
-  exec for hooks, admission policies, patch owners)
-- one active agent (leader election); a restart while unfreezing goes on
-  where it stopped
-
-Install with Helm (Flux/Argo CD: an OCI `HelmRepository` / chart source):
-
-```
-helm install lhtx-agent oci://ghcr.io/nxckdx/charts/lhtx-agent -n lhtx-system --create-namespace \
-  --set longhornNamespace=longhorn-system
-```
-
-or plain manifests (CRD, RBAC, Deployment in the Longhorn namespace):
-`lhtx agent manifests | kubectl apply -f -` or `kubectl apply -k deploy/`.
-The agent may run in any namespace. lhtx looks for its lease first in the
-Longhorn namespace (one GET; everyone may read just that lease), then by the
-label `app.kubernetes.io/name=lhtx-agent` in all namespaces (one LIST, if you
-may list leases). So the lease can live elsewhere too: chart value
-`leaseNamespace` (+ `rbac.leaseListForAllUsers=true`), or
-`lhtx agent --lease-namespace`. The chart has no Helm hooks – it works the same
-with Argo CD and Flux; the CRD is a normal template (updated on upgrade, kept
-on uninstall). Try it without a cluster:
-`LHTX_DEMO_AGENT=1 lhtx --demo`.
-
-**Encrypted volumes** (Longhorn's dm-crypt, the key in a Kubernetes Secret –
-one for all volumes or one per PVC via `${pvc.name}` in the StorageClass):
-Longhorn records only *that* a volume or backup is encrypted; which Secret
-holds the key is on the PV. lhtx handles the key the same way whatever
-manages the Secret – by hand, External Secrets, Sealed Secrets, a policy
-engine – and never needs to know: it compares a fingerprint of the key and
-its cipher parameters (kept in memory, never shown or stored).
-
-Restore and clone create encrypted volumes for encrypted sources. Where the
-key for the new PV comes from:
-
-| case | how | what lhtx checks |
-|---|---|---|
-| same namespace | the new PV refers to the source's Secret (default) | – nothing is copied, nothing for a manager to fight over |
-| another namespace or cluster, key already there (e.g. an ExternalSecret reading the same source) | `--secret NS/NAME` | the Secret holds the source's key, else it refuses before creating anything |
-| another namespace or cluster, take the key along | `--copy-secret` | copies type + data (read only when applied); warns if the source Secret is managed – the copy is not |
-| migration to another cluster | `--key-from-context CTX` plus `--secret` or `--copy-secret` | reads the source key in the other cluster to compare or copy |
-| source PV gone (disaster recovery) | `--secret NS/NAME` with the key from your secret backup | cannot compare – a wrong key does not harm the data, the volume just does not open |
-
-```
-lhtx --context new --rw restore backup-… --pvc shop/db --key-from-context old --copy-secret
-```
-
-In the TUI the restore and clone forms have a *key* choice.
-
-**Switch** keeps the PV's key refs (same PVC name, same Secret) and refuses
-to mix encrypted and plain volumes. Re-creating the PVC is the moment a
-manager may react – clean up, generate a new key for the "new" PVC. lhtx
-reads the key before, and after the new PVC is bound and *before any pod
-starts* it watches the Secret for 20 s: gone → it waits for its manager to
-bring it back; another key → it keeps the old key in a Secret of its own
-(label `lhtx.io/key-backup`, no owner), stops with the PVC frozen and says
-how to put the key back (into the manager's source; for a manager that
-generates keys itself, detach the Secret from it). `lhtx unfreeze` refuses
-while the key Secret differs from that copy (`--ignore-key`).
-
-`lhtx doctor` / Health tab: encrypted volumes whose key Secret is missing,
-kept key copies, a per-PVC key used from another namespace (names via the
-metadata API only). `lhtx volumes -o wide` and the volume details show
-🔒 encrypted.
-
-Do not rotate a key Secret that volumes use (Longhorn cannot re-key a
-volume), and back the key Secrets up: a backup of an encrypted volume is
-useless without its key. Consider encrypting Secrets in etcd as well.
-
-**Restore and switch** (`lhtx restore VOLUME --switch`, `lhtx switch`): the
-web UI makes you restore under another name, detach, delete the PVC and
-create PV/PVC by hand. lhtx does it in one confirmed run:
-
-![Restore a backup and switch the PVC to it: step preview, PVC frozen, pods stopped, PVC re-created, pods back](docs/switch.gif)
-
-1. restore into a new volume, wait until it is restored and detached
-2. freeze the PVC (see above): its pods stop, nothing can start on it or
-   re-create it meanwhile; wait until the old volume is detached
-3. set the old PV to `Retain`, delete the old PVC
-4. create a PV for the restored volume and the PVC again with the same name,
-   labels and annotations (Flux and Helm keep owning it), wait until Bound
-5. unfreeze: the owners start their pods again on the restored data
-
-The old volume is kept: `lhtx switch NS/PVC --to-volume OLD` switches back
-(the old, released PV is rebound). Until the old PVC is deleted every failure
-– and Ctrl+C – is rolled back; after that the PVC stays frozen until it is
-fixed, so nothing re-creates it with an empty volume. Every step goes to a
-journal in `$XDG_STATE_HOME/lhtx/switch/` (`lhtx switch --status`; `doctor`
-warns about unfinished ones). A CloudNativePG instance can be switched, but
-lhtx warns: restoring one instance's PVC does not restore the database
-consistently – prefer CNPG's own recovery. `--dry-run` shows the plan.
-
-Orphans: `DataCleanable` only says Longhorn *can* delete the data, not that
-it is safe. Replica data of a volume that is deleted, faulted, degraded or
-has no healthy replica is marked **RISKY** – it may be the last usable copy.
-Bulk delete (`--all-cleanable`, `ctrl+x`) skips those; deleting one by name
-shows a clear warning.
-
-TUI:
-
-![TUI views: snapshot tree with a revert branch, replica matrix, health, backup volumes, recurring jobs, backup targets](docs/views.gif)
-
-| Key | |
-|---|---|
-| `1` … `7` | Volumes · Nodes → disks → replicas · Activity · Settings · Health · Backups (backup volumes → backups, `J` recurring jobs, `t` backup targets) · Orphans (only if there are any) |
-| `C` | snapshots panel (write mode): clone the snapshot into a new volume (+ PV/PVC) – look at old data without reverting |
-| `B` | health tab (write mode): back up all attached volumes whose backup is late or missing (one confirmation) |
-| `Z` | volume list / details (write mode): freeze the selected volumes, this one, all on its node or ALL (Longhorn upgrade) – plan, `Y`, live log; `Z` again lists active freezes to unfreeze; the header shows `❄ N frozen` |
-| `w` | volume details (write mode): switch a PVC to this volume – back to the old one after a restore, or to a clone |
-| `r` … then `switch` | in the restore form choose "switch NS/PVC to it": restore + switch with a step preview, live log, `x` cancels (rolls back until the old PVC is deleted); lhtx does not quit while it runs |
-| `r` | backups tab (write mode): restore the newest backup of the backup volume, or the selected backup in a backup list, into a new volume (+ PV/PVC) |
-| `n`, `enter`, `X` | recurring jobs / backup targets pages (write mode): new, edit, delete – forms with live checks (cron: next runs; targets: secret picker); `s` syncs a target now |
-| `↑↓`/`jk`, `g`/`G` | move |
-| `enter` | open (volume detail, disk, …) |
-| `esc` / `q` | back (quit on the top level) |
-| `/` | fuzzy filter like fzf: `valk data` finds `valkey-data`; space = and, `'exact`, `!not`, `^start`, `end$` |
-| `p` | volume list: problems and activity first (toggle) |
-| `i` | nodes view: drain check for the node |
-| `m` | nodes view: replica matrix (volumes × nodes; replicas sharing a node or disk first) |
-| `s` `b` `e` `J`, `tab` | detail panels: snapshots, backups, events, recurring jobs |
-| `ctrl+r` | reload panel (details) or reload volumes (poll mode); resume after the traffic budget paused updates |
-| `c` | switch kubeconfig context; `o` there checks Longhorn health in all clusters (like `lhtx overview`) |
-| `W` | write mode on/off (red **RW** badge; or start with `lhtx --rw`) |
-| `S` `B` `R` `U` `E` | snapshot · backup · replica count · engine image · expand (volume list / details) |
-| `A` | attach to a node (normal or maintenance) / detach a manually attached volume |
-| `space` (jobs panel `J`) | assign / unassign the recurring job or group; the panel lists all of them with how they apply (direct / via group) |
-| `space`, `ctrl+a` | volume list: select volumes / all filtered ones (`esc` clears); `S` `B` `R` `U` `E` then act on all selected |
-| `X`, `[` `]` | delete replica (selected with `[` `]` in details, or in the disk view) |
-| `D` | delete snapshot (snapshots panel); `B` there backs up the selected snapshot |
-| `C` `E` | replica scheduling / eviction on/off (nodes view, node or disk row) |
-| `X`, `ctrl+x` | orphans tab: delete one / all cleanable orphans that are not RISKY |
-| `enter` (Settings) | change value |
-
-Every action opens a dialog with the request: `y` applies (`Y` for
-destructive ones), `d` runs a server-side dry run, `esc` cancels.
-| `,` | lhtx settings of the connected context: value and where it comes from; `enter` changes it for this context or all (writes `config.yaml`, comments stay, applied at once) |
-| `T` | choose a theme (live preview while moving, `enter` keeps, `esc` back; keep it for good with `theme:` in the config) |
-| `?` | help |
+All commands and TUI keys: [docs/usage.md](docs/usage.md).
 
 ## Install
 
@@ -496,24 +86,11 @@ never check and are updated through Nix.
 
 **Go:** `go install github.com/nxckdx/longhorntx/cmd/lhtx@latest`
 
-## Releases
-
-Commits on `main` follow [Conventional Commits](https://www.conventionalcommits.org/)
-(`feat:`, `fix:`, `docs:`, …). release-please keeps a release PR open with the
-changelog and the `VERSION` bump; merging it creates the tag `vX.Y.Z` and the
-GitHub release, and goreleaser attaches the binaries and `checksums.txt`,
-pushes the agent image `ghcr.io/nxckdx/lhtx:<version>` (linux/amd64, arm64)
-and the workflow pushes the Helm chart `oci://ghcr.io/nxckdx/charts/lhtx-agent`.
-CI runs gofmt, vet, tests, `helm lint` and the Nix build on every push and pull
-request.
-
-## Install / develop (Nix)
+**Nix:**
 
 ```
 nix run github:nxckdx/longhorntx           # or: nix build → result/bin/{lhtx,kubectl-lhtx}
 nix run github:nxckdx/longhorntx -- --context prod volumes   # flags after --
-nix develop                                # go, gopls, kubectl, pv
-go build -o lhtx ./cmd/lhtx && go test ./...
 ```
 
 Two flake packages:
@@ -535,24 +112,6 @@ Two flake packages:
   `programs.lhtx = { enable = true; settings = { … }; }`, same keys as
   `config.yaml`). Without it lhtx uses its built-in defaults.
 
-### Local test cluster (lhtx-lab)
-
-Write actions, freezes and the agent can be tried on a throwaway cluster:
-three NixOS VMs (qemu/KVM, 4 GiB each) with k3s, Longhorn v1.12.1, an NFS
-backup target, test apps with hooks, encrypted StorageClasses, External
-Secrets and CloudNativePG – plus an optional second one-node cluster for
-migrations (`lhtx-lab start2`), all defined in `nix/lab/`.
-
-```
-nix run .#lab -- start      # or `lhtx-lab start` in `nix develop`; first start pulls images
-lhtx-lab lhtx               # this checkout's lhtx against the lab (never your real kubeconfig)
-lhtx-lab agent              # install the agent with the image built from this checkout
-lhtx-lab status | ssh 1 | log 1 | stop | destroy
-```
-
-State (disks, kubeconfig, ssh key) lives in `~/.local/state/lhtx-lab`
-(`LHTX_LAB_DIR` to move it); `destroy` deletes the disks.
-
 ### Shell completion
 
 Completes commands, flags, contexts, volume/PVC, node:disk, replica, snapshot
@@ -573,200 +132,19 @@ context, so pressing TAB does not list all volumes every time.
 With `nix run`, arguments for lhtx must come after `--`; otherwise nix itself
 parses flags like `--context`.
 
-After changing `go.mod`, update `vendorHash` in `flake.nix` (set it to
-`pkgs.lib.fakeHash`, run `nix build`, copy the `got:` hash).
+## Documentation
 
-## Layout
-
-```
-cmd/lhtx            entry point (also used as kubectl-lhtx)
-internal/kube       kubeconfig/contexts, TCP-level traffic counter
-internal/longhorn   slim CRD structs, one-shot client, informer store, joins
-internal/cli        cobra commands
-internal/tui        Bubble Tea UI
-internal/demo       simulated cluster for --demo (fake dynamic client)
-internal/switchover freeze (admission policy) and restore + switch
-internal/agent      optional in-cluster agent: Freeze resources, controller, client
-deploy/             agent manifests (embedded: lhtx agent manifests)
-charts/lhtx-agent   Helm chart of the agent
-docs/*.gif          README GIFs, recorded from --demo (docs/tapes/record.sh)
-```
-
-`internal/longhorn` does **not** import `longhorn-manager`: that module pulls
-in a huge dependency tree and pins one Longhorn version. Instead, lhtx has its
-own small structs with only the fields it needs. Unknown fields are ignored, so
-the structs tolerate differences between Longhorn versions. Objects are read
-through the dynamic client and converted right away (informer transform), so
-the caches hold only those structs.
-
-## Data model (verified against Longhorn v1.12.1)
-
-| What | Where |
+| | |
 |---|---|
-| replica → node / disk | `replica.spec.nodeID`, `spec.diskID` (= disk UUID), `spec.diskPath`, `spec.dataDirectoryName`; also labels `longhornnode`, `longhorndiskuuid` |
-| disk name | key of `node.status.diskStatus`, matched via `diskStatus[*].diskUUID == replica.spec.diskID` |
-| volume ↔ replicas/engines | label `longhornvolume=<volume>` (also `spec.volumeName`) |
-| PVC | `volume.status.kubernetesStatus.{namespace,pvcName}` |
-| rebuild | `engine.status.rebuildStatus` |
-| snapshot purge | `engine.status.purgeStatus` |
-| restore | `engine.status.restoreStatus` |
-| clone | `engine.status.cloneStatus` |
-| replica mode (RW/WO/ERR) | `engine.status.replicaModeMap[<replica name>]` |
-| backup | `backup.status.{state,progress}`, label `backup-volume` |
-| snapshot | `snapshots.longhorn.io`, label `longhornvolume`; `status.labels.type` = `bak` (for a backup) / `snap` |
-| recurring jobs of a volume | volume labels `recurring-job.longhorn.io/<job>` and `recurring-job-group.longhorn.io/<group>` = `enabled` |
-| SMART | `node.status.diskStatus[*].healthData` (Longhorn ≥ 1.10); for wear, the *normalized* value is the remaining life (Crucial reports % used as raw value) |
-| Longhorn version | setting `current-longhorn-version` |
-
-Gotcha: `rebuildStatus`, `purgeStatus`, `restoreStatus` and `cloneStatus` are
-keyed by **replica address** (`tcp://ip:port`), not by replica name.
-`engine.status.currentReplicaAddressMap` (name → `ip:port`) is used to look
-them up, with `replica.status.storageIP:port` as fallback.
-
-v2 data engine (not supported, see above): disks would have `diskType: block`
-with the block device as `diskPath`; lhtx shows that as is.
-
-## Traffic
-
-Measured with `lhtx measure` (1 minute watch, wire bytes incl. TLS, gzip and
-managedFields):
-
-| Resource | Small cluster: objects | per minute | Large cluster: objects | List (gzip) | Watch per minute |
-|---|---|---|---|---|---|
-| volumes | 24 | ~55 KiB | 878 | 433 KiB | **10.3 MiB** (1859 events) |
-| engines | 24 | ~70 KiB | 878 | 744 KiB | **11.7 MiB** (1736 events) |
-| nodes | 2 | ~0 | 39 | 82 KiB | 124 KiB |
-| replicas | 42 | 0 | 1754 | 678 KiB | ~0 |
-| snapshots | 48 | 0 | 881 | 169 KiB | ~0 |
-| settings | 116 | 0 | 116 | 103 KiB | ~0 |
-
-(small cluster: 2 nodes; large cluster: 39 nodes)
-
-Findings:
-
-- **Volumes and engines change on every write.** Volumes update only
-  `status.actualSize` (plus the managedFields timestamp), engines only the size
-  of the `volume-head` snapshot (`lhtx measure --diff` shows this per field).
-  Each event carries the whole object (~6 KiB, uncompressed), so the traffic
-  grows with the write load. On the large cluster the volume watch alone costs
-  ~10 MiB/min, ~620 MiB/hour. That is why lhtx polls volumes on large clusters
-  (see below).
-- **Replicas, snapshots, settings and backups are practically silent**; their
-  watches cost almost nothing.
-- **Startup is cheap**: ~1.2 MiB and ~1 s on the large cluster.
-- **`kubectl` hides `managedFields`, but they do go over the wire:** +63 % for
-  volumes and +80 % for engines.
-- **LISTs are gzip-compressed, watch streams are not.** `lhtx volumes`
-  (one LIST, ~130 KB of JSON) costs ~15 KB on the wire on the small cluster.
-- **client-go ≥ 1.35 sends the initial sync over the watch stream by default**
-  (WatchListClient), and that stream is uncompressed. lhtx turns this off per
-  informer. The TUI's startup traffic dropped from 309 KiB to 59 KiB.
-
-Strategy:
-
-- **Volumes: `--refresh` (env `LHTX_REFRESH`)**
-  - `auto` (default): live watch below 150 volumes, otherwise poll every 30 s.
-    The count comes from one `LIST limit=1` (`remainingItemCount`). The live
-    watch is measured: if volumes change more than 120 times a minute (the
-    traffic follows the write load, not the volume count – each change is a
-    new `actualSize`), lhtx switches to polling for the rest of the session
-    and says so in the header (`autoPollRate` in the config file, 0 = never).
-  - `watch`: always live. `30s`, `2m`, …: always poll with that interval.
-  - Poll mode re-lists with gzip (large cluster: ~0.85 MiB/min instead of
-    10.3 MiB/min) but still reacts immediately to what matters: replicas stay
-    watched, and a replica change triggers a GET of just that volume. The volume
-    open in the detail view gets its own watch (name field selector).
-  - The header shows `live` or `⟳ 30s · 12s ago`; `ctrl+r` reloads at once.
-- Watched all the time: replicas, nodes.
-- Engines are only watched per volume (label selector), and only while the
-  detail view of that volume is open or while one of its replicas looks like
-  it is rebuilding (`running` without `healthyAt`; the replica watch is free).
-  At most 10 engines are watched automatically. If more volumes rebuild at
-  once (e.g. after a node failure), the header says how many rebuilds show no
-  progress.
-- Backups (one CR per backup over the whole retention: 696 backups = 2.4 MB here)
-  are watched **from now on**: a LIST with `limit=1` yields the resourceVersion,
-  and the watch starting there sends only changes, without an initial list.
-  Running backups update their progress constantly, so they show up within
-  seconds, even if they started before lhtx.
-- Snapshots, backups, events and recurring jobs are loaded on demand when you
-  open a panel (label or field selector), not watched. Events go through
-  core/v1 using protobuf.
-- Redraws happen at most ~5 times per second, however busy the cluster is.
-- Result: small cluster, startup ~50–60 KiB, then ~60 KiB/min idle (live).
-  Large cluster, startup ~1.2 MiB, then roughly 1 MiB/min idle (poll mode,
-  estimated from the measurement). For comparison, the web UI uses up to ~8 MB/s.
-- The header shows the bytes lhtx has received on the wire (measured at the
-  TCP level, after TLS) and the current rate.
-
-### Startup
-
-The TUI does not wait for the data. It is usable right away, and every
-resource appears as soon as its initial list has arrived:
-
-- **volumes** and **nodes** (small) are loaded first, **replicas** (the
-  largest list) only once the volumes are in, and the **backup watch** last.
-  On a slow link they would otherwise share the bandwidth, and the volume
-  list would show up later.
-- Each page only waits for what it needs (the volume list: volumes; nodes:
-  nodes). Columns that depend on missing data show `…`. Meanwhile the header
-  shows `◐ loading replicas`.
-- The initial lists use `resourceVersion=0` (served from the apiserver's
-  watch cache) and are gzip-compressed. The apiserver compresses responses
-  only above 128 KB, so small lists (nodes, settings) go over the wire
-  uncompressed.
-
-To simulate a slow link: `LHTX_THROTTLE_KBPS=50 lhtx` (limits the download).
-
-### Measuring a cluster
-
-```
-lhtx measure            # 60 s; lhtx measure -d 5m --context prod
-lhtx measure --diff     # also show which fields change per update
-```
-
-Lists every resource once (like the TUI at startup: time and bytes on the
-wire, TLS/gzip/managedFields included) and then watches all of them for the
-duration without an initial list. Each resource uses its own connection, so
-the bytes can be attributed exactly. At the end it prints an estimate of
-TUI startup and idle traffic. Example (small cluster, 24 volumes):
-
-```
-RESOURCE    ITEMS   LIST TIME   LIST BYTES   WATCH EVENTS   WATCH BYTES   PER MINUTE
-volumes     24      17ms        12.2 KiB     5              27.4 KiB      54.7 KiB
-replicas    42      19ms        14 KiB       0              66 B          131 B
-nodes       2       4ms         18.1 KiB     0              67 B          133 B
-engines     24      22ms        20.8 KiB     5              34.8 KiB      69.6 KiB
-```
-
-## Roadmap
-
-1. **MVP (read-only)** ✔ volume list, volume detail with replicas (node + disk),
-   rebuild progress with speed/ETA, nodes/disks (node → disk → replicas, SMART),
-   events, `lhtx rebuilds -w`, context switching
-2. **Read more data** ✔ snapshots, backups, settings, recurring jobs, backup targets
-   · ✔ snapshot tree, backup volumes (tab 6, `lhtx backupvolumes`) incl.
-   volumes that were deleted
-   · ✔ config file with settings per context, traffic budget · open: editing
-   ✔ settings page in the TUI (`,`) · ✔ themes (built-in + own) · ✔ auto switches to poll by measured
-   update rate
-3. **Actions** ✔ snapshot/backup create, snapshot/replica delete, replica count,
-   scheduling/eviction for nodes and disks, settings, engine upgrade, expansion,
-   attach/detach, recurring job assignment, recurring jobs and backup targets
-   (create/edit/delete), restore into a new volume with PV/PVC, clone of a
-   volume or snapshot – with preview,
-   confirmation, client and server dry run, restore + switch of the PVC, freeze
-   for maintenance (admission policy, works with any operator/GitOps) · ✔
-   optional in-cluster agent that carries freezes out (Helm chart) · open:
-   CloudNativePG-aware restore
-4. **Health** ✔ `lhtx doctor` / Health tab, diagnostics bundle, backup age,
-   drain check · open: rebuild/snapshot deadlock workaround as a guided action
-   (after collecting evidence with `lhtx diag`)
-5. ✔ Multi-cluster overview (`lhtx overview`, `c` → `o` in the TUI) · open:
-   more traffic statistics
-6. **Agent** ✔ freezes in the cluster · next: compact read-only change stream
-   for the TUI from the agent (less traffic on large clusters), history of
-   rebuilds and backups
+| [usage](docs/usage.md) | commands, TUI keys, health check, drain check, diagnostics |
+| [configuration](docs/configuration.md) | config file per context, themes, traffic budget |
+| [write actions](docs/write-actions.md) | write mode, dry runs, every change and how it is made |
+| [freeze](docs/freeze.md) | freeze for maintenance, hooks, CloudNativePG |
+| [restore and switch](docs/restore-switch.md) | a backup under a running app's PVC, and back |
+| [encrypted volumes](docs/encryption.md) | keys with restore, clone, switch and migration |
+| [agent](docs/agent.md) | the optional in-cluster agent, Helm chart, RBAC |
+| [traffic](docs/traffic.md) | measurements and how lhtx keeps the traffic low |
+| [development](docs/development.md) | build, test lab, releases, layout, data model, roadmap |
 
 ## License
 

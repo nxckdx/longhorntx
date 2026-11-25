@@ -1,4 +1,4 @@
-# Shared settings for the README GIFs (all use the built-in --demo cluster,
+# Shared settings for the doc GIFs (all use the built-in --demo cluster,
 # no real cluster involved). Record all: docs/tapes/record.sh
 Set Shell "bash"
 Set FontFamily "FiraCode Nerd Font Mono"

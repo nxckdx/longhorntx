@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Re-records all README GIFs from the repo root (needs vhs; on Nix:
+# Re-records all doc GIFs from the repo root (needs vhs; on Nix:
 # nix shell nixpkgs#vhs -c docs/tapes/record.sh).
 set -euo pipefail
 cd "$(dirname "$0")/../.."

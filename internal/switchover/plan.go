@@ -15,9 +15,10 @@ import (
 )
 
 var (
-	gvrPod = schema.GroupVersionResource{Version: "v1", Resource: "pods"}
-	gvrPVC = schema.GroupVersionResource{Version: "v1", Resource: "persistentvolumeclaims"}
-	gvrPV  = schema.GroupVersionResource{Version: "v1", Resource: "persistentvolumes"}
+	gvrPod    = schema.GroupVersionResource{Version: "v1", Resource: "pods"}
+	gvrPVC    = schema.GroupVersionResource{Version: "v1", Resource: "persistentvolumeclaims"}
+	gvrPV     = schema.GroupVersionResource{Version: "v1", Resource: "persistentvolumes"}
+	gvrSecret = schema.GroupVersionResource{Version: "v1", Resource: "secrets"}
 )
 
 const longhornDriver = "driver.longhorn.io"
@@ -48,6 +49,9 @@ type Plan struct {
 	// SecretRefs: the key Secret refs of an encrypted volume's PV, copied
 	// to the new PV (same PVC name, so the same Secret)
 	SecretRefs map[string]any `json:"secretRefs,omitempty"`
+	// KeySecret: the key of an encrypted volume; the switch guards it (a
+	// manager reacting to the PVC being re-created must not replace it)
+	KeySecret *longhorn.SecretRef `json:"keySecret,omitempty"`
 
 	// Freeze: the pods that mount the PVC and their owners; they are
 	// stopped by freezing the PVC (no scaling, no GitOps changes)
@@ -168,7 +172,12 @@ func build(ctx context.Context, c *longhorn.Client, namespace, pvc, newVolume st
 	}
 	if oldEnc && p.SecretRefs != nil {
 		if r, ok := p.SecretRefs["nodeStageSecretRef"].(map[string]any); ok {
-			p.warn("encrypted: the new PV uses the same key Secret %v/%v – the target volume must have been encrypted with that key (a restore of this PVC's backup was)", r["namespace"], r["name"])
+			ref := longhorn.SecretRef{Namespace: fmt.Sprint(r["namespace"]), Name: fmt.Sprint(r["name"])}
+			p.KeySecret = &ref
+			p.warn("encrypted: the new PV uses the same key Secret %s – the target volume must have been encrypted with that key (a restore of this PVC's backup was)", ref)
+			if m := c.SecretManager(ctx, ref); m != "" {
+				p.warn("the key Secret is managed by %s: if it reacts to the PVC being re-created with a new key, lhtx notices it before any pod starts, keeps a copy of the old key and stops", m)
+			}
 		}
 	}
 	if pvName := nv.Status.KubernetesStatus.PVName; pvName != "" {
@@ -310,6 +319,9 @@ func (p *Plan) Steps() []string {
 		add("create PV %s (volume %s, %s, class %s)", p.NewVolume, p.NewVolume, human(p.NewSize), p.StorageClass)
 	}
 	add("create PVC %s (same labels/annotations, %s) bound to it, wait until Bound", p.PVCRef(), human(p.Request))
+	if p.KeySecret != nil {
+		add("check that the key Secret %s still holds the same key (its manager may react to the new PVC) – if not: keep the old key in a backup Secret, stay frozen", p.KeySecret)
+	}
 	owners := "their controllers"
 	if p.Freeze != nil && len(p.Freeze.Owners) > 0 {
 		var o []string

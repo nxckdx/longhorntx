@@ -2,6 +2,7 @@ package switchover
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -77,6 +78,7 @@ func world(extra ...runtime.Object) *cluster {
 		GVRPolicy: "ValidatingAdmissionPolicyList", GVRBinding: "ValidatingAdmissionPolicyBindingList",
 		longhorn.GVRVolume: "VolumeList", longhorn.GVREngine: "EngineList", gvrConfigMap: "ConfigMapList",
 		{Group: "postgresql.cnpg.io", Version: "v1", Resource: "clusters"}: "ClusterList",
+		gvrSecret: "SecretList",
 	}
 	objs := []runtime.Object{
 		obj("v1", "PersistentVolumeClaim", "app", "data", fluxLabels, map[string]any{
@@ -624,5 +626,77 @@ func TestPreHookSkippedWithoutReadyPod(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(logs, "\n"), "hook skipped") {
 		t.Errorf("no skip logged: %v", logs)
+	}
+}
+
+// encrypted: app/data's volumes are encrypted with the key in Secret app/data
+func encrypted(t *testing.T, k *cluster) {
+	ctx := context.Background()
+	pv := get(t, k.dyn, gvrPV, "", "pvc-old")
+	_ = unstructured.SetNestedField(pv.Object, "true", "spec", "csi", "volumeAttributes", "encrypted")
+	_ = unstructured.SetNestedMap(pv.Object, map[string]any{"name": "data", "namespace": "app"}, "spec", "csi", "nodeStageSecretRef")
+	_, _ = k.dyn.Resource(gvrPV).Update(ctx, pv, metav1.UpdateOptions{})
+	for _, v := range []string{"pvc-old", "pvc-new"} {
+		u := get(t, k.dyn, longhorn.GVRVolume, lhNS, v)
+		_ = unstructured.SetNestedField(u.Object, true, "spec", "encrypted")
+		_, _ = k.dyn.Resource(longhorn.GVRVolume).Namespace(lhNS).Update(ctx, u, metav1.UpdateOptions{})
+	}
+	_, _ = k.dyn.Resource(gvrSecret).Namespace("app").Create(ctx, keySecret("old-key"), metav1.CreateOptions{})
+}
+
+func keySecret(key string) *unstructured.Unstructured {
+	data := map[string]any{}
+	for f, v := range map[string]string{"CRYPTO_KEY_VALUE": key, "CRYPTO_KEY_CIPHER": "aes-xts-plain64", "CRYPTO_KEY_HASH": "sha256",
+		"CRYPTO_KEY_SIZE": "256", "CRYPTO_PBKDF": "argon2i"} {
+		data[f] = base64.StdEncoding.EncodeToString([]byte(v))
+	}
+	return obj("v1", "Secret", "app", "data", nil, map[string]any{"type": "Opaque", "data": data})
+}
+
+// The switch of an encrypted volume keeps the key refs; a manager that
+// replaces the key when the PVC is re-created is caught before any pod
+// starts, and the old key is kept.
+func TestSwitchKeyGuard(t *testing.T) {
+	ctx := context.Background()
+	o := Options{Poll: 10 * time.Millisecond, Wait: 3 * time.Second, KeySettle: 100 * time.Millisecond}
+
+	k := world()
+	encrypted(t, k)
+	p, err := Build(ctx, k.c, "app", "data", "pvc-new")
+	if err != nil || len(p.Blockers) > 0 || p.KeySecret == nil {
+		t.Fatalf("plan: %v %v %+v", err, p.Blockers, p.KeySecret)
+	}
+	if err := Run(ctx, k.c, p, o); err != nil {
+		t.Fatalf("unchanged key: %v", err)
+	}
+	if ref, _, _ := unstructured.NestedString(get(t, k.dyn, gvrPV, "", "pvc-new").Object, "spec", "csi", "nodeStageSecretRef", "name"); ref != "data" {
+		t.Errorf("new PV lost the key ref: %q", ref)
+	}
+
+	// a "manager" generates a new key when the PVC is created again
+	k = world()
+	encrypted(t, k)
+	k.dyn.PrependReactor("create", "persistentvolumeclaims", func(k8stesting.Action) (bool, runtime.Object, error) {
+		go func() {
+			time.Sleep(20 * time.Millisecond)
+			_, _ = k.dyn.Resource(gvrSecret).Namespace("app").Update(ctx, keySecret("NEW-random-key"), metav1.UpdateOptions{})
+		}()
+		return false, nil, nil
+	})
+	p, _ = Build(ctx, k.c, "app", "data", "pvc-new")
+	err = Run(ctx, k.c, p, o)
+	if err == nil || !strings.Contains(err.Error(), "ANOTHER key") {
+		t.Fatalf("replaced key not caught: %v", err)
+	}
+	if fs, _ := ActiveFreezes(ctx, k.dyn); len(fs) != 1 {
+		t.Error("the PVC must stay frozen")
+	}
+	l, _ := k.dyn.Resource(gvrSecret).Namespace("app").List(ctx, metav1.ListOptions{LabelSelector: longhorn.LabelKeyBackup + "=true"})
+	if len(l.Items) != 1 {
+		t.Fatalf("no key backup: %d", len(l.Items))
+	}
+	old, _ := longhorn.Fingerprint(keySecret("old-key"))
+	if fp, _ := longhorn.Fingerprint(&l.Items[0]); fp != old {
+		t.Error("the backup does not hold the old key")
 	}
 }

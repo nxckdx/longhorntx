@@ -45,6 +45,7 @@ func (a *Agent) runDigests(ctx context.Context) error {
 		}
 	}
 
+	a.metrics.digestVolumes.Store(int64(len(written)))
 	f := dynamicinformer.NewFilteredDynamicSharedInformerFactory(dyn, 0, a.c.Namespace, nil)
 	inf := f.ForResource(longhorn.GVRVolume).Informer()
 	q := workqueue.NewTypedRateLimitingQueue(workqueue.NewTypedMaxOfRateLimiter(
@@ -58,7 +59,7 @@ func (a *Agent) runDigests(ctx context.Context) error {
 		}
 	}
 	if _, err := inf.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc: push, UpdateFunc: func(_, n any) { push(n) },
+		AddFunc: push, UpdateFunc: func(_, n any) { a.metrics.volumeEvents.Add(1); push(n) },
 	}); err != nil {
 		return err
 	}
@@ -92,6 +93,7 @@ func (a *Agent) runDigests(ctx context.Context) error {
 		if err != nil || !ok {
 			mu.Lock()
 			delete(written, name) // the owner reference removes the digest
+			a.metrics.digestVolumes.Store(int64(len(written)))
 			mu.Unlock()
 			return err
 		}
@@ -135,6 +137,7 @@ func (a *Agent) runDigests(ctx context.Context) error {
 		}
 		mu.Lock()
 		written[name] = entry{v, out.GetResourceVersion()}
+		a.metrics.digestVolumes.Store(int64(len(written)))
 		mu.Unlock()
 		a.digestWrites.Add(1)
 		return nil

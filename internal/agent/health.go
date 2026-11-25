@@ -12,12 +12,13 @@ import (
 	"k8s.io/client-go/tools/leaderelection"
 )
 
-// Health for the kubelet's probes – read-only, no actions (requests to the
-// agent still go only through the Kubernetes API):
+// Health for the kubelet's probes and Prometheus – read-only, no actions
+// (requests to the agent still go only through the Kubernetes API):
 //
 //	/healthz  liveness: the leader's loop runs and its lease is renewed
 //	/readyz   readiness/startup: a standby is ready at once, the leader
 //	          once its watches are synced
+//	/metrics  Prometheus metrics (see metrics.go)
 type health struct {
 	leading  atomic.Bool
 	synced   atomic.Bool
@@ -64,6 +65,7 @@ func (a *Agent) ServeHealth(ctx context.Context, addr string) error {
 	}
 	mux.Handle("/healthz", probe(a.live))
 	mux.Handle("/readyz", probe(a.ready))
+	mux.Handle("/metrics", a.metricsHandler())
 	l, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err

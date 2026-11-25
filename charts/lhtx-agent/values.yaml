@@ -38,6 +38,23 @@ probes:
     periodSeconds: 20
     failureThreshold: 3
 
+# Prometheus metrics on the health port (/metrics): leader, freezes,
+# switches, operations, volume events vs digests written.
+metrics:
+  # a Service for the port, with prometheus.io/scrape annotations
+  service: true
+  serviceMonitor:
+    enabled: false # needs the Prometheus operator (monitoring.coreos.com)
+    interval: 60s
+    labels: {} # e.g. release: kube-prometheus-stack
+  dashboard:
+    enabled: false
+    # a ConfigMap the Grafana sidecar loads
+    labels:
+      grafana_dashboard: "1"
+    annotations: {} # e.g. grafana_folder: Storage
+    namespace: "" # default: the release namespace
+
 podDisruptionBudget:
   # created when replicaCount > 1
   minAvailable: 1

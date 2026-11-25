@@ -31,7 +31,7 @@ func TestManifests(t *testing.T) {
 		kinds[o.Kind]++
 	}
 	for k, n := range map[string]int{"CustomResourceDefinition": 3, "ServiceAccount": 1, "ClusterRole": 4, "ValidatingAdmissionPolicy": 1, "ValidatingAdmissionPolicyBinding": 1,
-		"ClusterRoleBinding": 1, "Role": 2, "RoleBinding": 2, "Deployment": 1} {
+		"ClusterRoleBinding": 1, "Role": 2, "RoleBinding": 2, "Deployment": 1, "Service": 1} {
 		if kinds[k] != n {
 			t.Errorf("%d %s, want %d", kinds[k], k, n)
 		}

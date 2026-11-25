@@ -219,6 +219,7 @@ func (l *switchLog) autoFlush(ctx context.Context) func() {
 func (a *Agent) runSwitch(ctx context.Context, s *Switch) {
 	lg := a.switchStatus(s)
 	fail := func(phase string, err error) {
+		a.op("switch", "failed")
 		lg.add("✘ %v", err)
 		lg.flush(ctx, map[string]any{"phase": phase, "message": err.Error()})
 	}
@@ -245,6 +246,7 @@ func (a *Agent) runSwitch(ctx context.Context, s *Switch) {
 		err := switchover.Continue(ctx, a.c, s.Status.Plan, o)
 		switch {
 		case err == nil:
+			a.op("switch", "done")
 			lg.flush(ctx, map[string]any{"phase": SwitchDone, "message": ""})
 			return
 		case errors.Is(err, switchover.ErrStartOver):
@@ -286,11 +288,15 @@ func (a *Agent) runSwitch(ctx context.Context, s *Switch) {
 // finishSwitch sets the final phase from the result and the cluster state.
 func (a *Agent) finishSwitch(ctx context.Context, lg *switchLog, s *Switch, err error) {
 	if err == nil {
+		a.op("switch", "done")
 		lg.flush(ctx, map[string]any{"phase": SwitchDone, "message": ""})
 		return
 	}
 	lg.add("✘ %v", err)
 	phase := SwitchStuck
+	defer func() {
+		a.op("switch", map[string]string{SwitchStuck: "stuck", SwitchKeyStop: "key-changed", SwitchFailed: "failed"}[phase])
+	}()
 	switch {
 	case strings.Contains(err.Error(), "ANOTHER key"):
 		phase = SwitchKeyStop

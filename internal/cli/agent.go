@@ -58,6 +58,7 @@ lhtx-freeze to them. The agent itself needs rights like cluster-admin
 			}
 			a := agent.New(c, os.Getenv("POD_NAME"))
 			a.NoDigests = noDigests
+			a.SetVersion(Version)
 			if healthAddr != "" {
 				go func() {
 					if err := a.ServeHealth(cmd.Context(), healthAddr); err != nil {
@@ -78,7 +79,7 @@ lhtx-freeze to them. The agent itself needs rights like cluster-admin
 		},
 	}
 	cmd.Flags().BoolVar(&noDigests, "no-digests", false, "do not keep VolumeDigests (lhtx --refresh agent then has nothing to watch)")
-	cmd.Flags().StringVar(&healthAddr, "health-addr", ":8081", "address for the probes /healthz and /readyz (read-only; empty = off)")
+	cmd.Flags().StringVar(&healthAddr, "health-addr", ":8081", "address for the probes /healthz, /readyz and the Prometheus /metrics (read-only; empty = off)")
 	cmd.Flags().StringVar(&leaseNS, "lease-namespace", "", "namespace of the lease (default: the Longhorn namespace, where lhtx looks first; elsewhere lhtx finds it by label if users may list leases)")
 	cmd.Flags().BoolVar(&noLeader, "no-leader-election", false, "run without the lease (only one agent may run; lhtx will not detect it)")
 

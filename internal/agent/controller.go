@@ -40,6 +40,7 @@ type Agent struct {
 	NoDigests bool
 
 	digestWrites atomic.Int64
+	metrics      metrics
 
 	mu    sync.Mutex
 	tasks map[string]*task // Freeze name → running work
@@ -113,6 +114,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 	f := dynamicinformer.NewDynamicSharedInformerFactory(a.c.Dynamic(), 0)
 	inf := f.ForResource(GVRFreeze).Informer()
+	a.metrics.freezes = inf.GetStore()
 	push := func(obj any) {
 		if u, ok := obj.(*unstructured.Unstructured); ok {
 			a.enqueue(u.GetName())
@@ -131,6 +133,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	var swInf cache.SharedIndexInformer
 	if _, err := a.c.Dynamic().Resource(GVRSwitch).List(ctx, metav1.ListOptions{Limit: 1}); err == nil {
 		swInf = f.ForResource(GVRSwitch).Informer()
+		a.metrics.switches = swInf.GetStore()
 		pushSw := func(obj any) {
 			if u, ok := obj.(*unstructured.Unstructured); ok {
 				a.enqueue("sw:" + u.GetNamespace() + "/" + u.GetName())
@@ -244,6 +247,7 @@ func (a *Agent) reconcile(ctx context.Context, name string) {
 		if d > 0 && time.Since(fr.Status.FrozenAt.Time) > d {
 			a.Logf("%s: frozen for %s – auto-unfreeze", name, d)
 			lg := a.statusLog(fr)
+			a.op("auto-unfreeze", "started")
 			lg.add("⏰ autoUnfreezeAfter %s reached – ending the freeze", d)
 			_ = lg.flush(ctx, nil)
 			if err := a.c.Dynamic().Resource(GVRFreeze).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
@@ -320,12 +324,14 @@ func (a *Agent) freeze(ctx context.Context, fr *Freeze) {
 		msg = err.Error()
 		lg.add("⚠ %s", err)
 	}
+	a.op("freeze", "done")
 	lg.add("❄ frozen – delete the Freeze %s to end it (lhtx unfreeze)", fr.Name)
 	now := metav1.Now()
 	_ = lg.flush(context.WithoutCancel(ctx), map[string]any{"phase": PhaseFrozen, "message": msg, "frozenAt": now, "freeze": f})
 }
 
 func (a *Agent) fail(ctx context.Context, lg *statusLog, err error) {
+	a.op("freeze", "failed")
 	lg.add("✘ %v", err)
 	_ = lg.flush(context.WithoutCancel(ctx), map[string]any{"phase": PhaseFailed, "message": err.Error()})
 }
@@ -361,6 +367,7 @@ func (a *Agent) unfreeze(ctx context.Context, fr *Freeze) {
 			lg.add("⚠ %v", err)
 		}
 	}
+	a.op("unfreeze", "done")
 	lg.add("✔ unfrozen")
 	_ = lg.flush(ctx, nil)
 	// the finalizer goes last: the Freeze disappears when everything is done

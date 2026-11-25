@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"sort"
@@ -9,14 +10,15 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/nxckdx/longhorntx/internal/agent"
 	"github.com/nxckdx/longhorntx/internal/longhorn"
 	"github.com/nxckdx/longhorntx/internal/switchover"
 )
 
 func freezeCmds(g *globals) []*cobra.Command {
-	var all, status bool
+	var all, status, local bool
 	var node, reason string
-	var wait time.Duration
+	var wait, autoUnfreeze time.Duration
 	freeze := &cobra.Command{
 		Use:   "freeze [NS/PVC…] [--node NODE | --all]",
 		Short: "Stop everything that uses Longhorn volumes, without scaling anything (needs --rw)",
@@ -63,7 +65,12 @@ unfreeze removes the policy and nudges the owners of the deleted pods
 (annotation lhtx.io/unfrozen-at) so they start their pods at once instead of
 after their back-off, then waits until the volumes are attached again.
 The freeze lives in the cluster (lhtx freeze --status, lhtx doctor) – it can
-be ended from any machine. Needs cluster-admin rights.`,
+be ended from any machine. Needs cluster-admin rights.
+
+With the lhtx agent in the cluster (lhtx agent --help) lhtx hands the freeze
+to it and only follows its progress – Ctrl+C or a lost connection does not
+stop it halfway – and --auto-unfreeze ends it on its own. Needs only the
+right to create Freeze resources then. --local skips the agent.`,
 		ValidArgsFunction: g.completeVolumes,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
@@ -95,11 +102,31 @@ be ended from any machine. Needs cluster-admin rights.`,
 				fmt.Printf("  %d of %d apps have no hooks – add lhtx.io/pre-freeze / lhtx.io/post-unfreeze if they need a clean shutdown (lhtx freeze --help)\n",
 					without, with+without)
 			}
-			fmt.Printf("  policy: deny pods mounting them, deny PVC create/delete except by %s\n\n", p.User)
+			ag := (*agent.Info)(nil)
+			if !local {
+				ag = agent.Detect(ctx, c)
+			}
+			if ag != nil {
+				fmt.Printf("  policy: deny pods mounting them, deny PVC create/delete except by the agent\n")
+				fmt.Printf("  carried out by the lhtx agent %s – lhtx only follows (Ctrl+C stops following, not the freeze)\n", ag.Holder)
+				if autoUnfreeze > 0 {
+					fmt.Printf("  the agent ends the freeze on its own %s after it is frozen\n", autoUnfreeze)
+				}
+				fmt.Println()
+			} else {
+				if autoUnfreeze > 0 {
+					return fmt.Errorf("--auto-unfreeze needs the lhtx agent in the cluster (lhtx agent --help)")
+				}
+				fmt.Printf("  policy: deny pods mounting them, deny PVC create/delete except by %s\n\n", p.User)
+			}
 			for _, w := range p.Warnings {
 				fmt.Println("⚠ " + w)
 			}
-			fmt.Println("⚠ until lhtx unfreeze, these workloads stay down – also if lhtx stops or this machine goes away")
+			if ag == nil {
+				fmt.Println("⚠ until lhtx unfreeze, these workloads stay down – also if lhtx stops or this machine goes away")
+			} else {
+				fmt.Println("⚠ until lhtx unfreeze, these workloads stay down")
+			}
 			mode, err := g.dryRun()
 			if err != nil {
 				return err
@@ -112,6 +139,34 @@ be ended from any machine. Needs cluster-admin rights.`,
 				return err
 			}
 			start := time.Now()
+			if ag != nil {
+				spec := agent.Spec{PVCs: p.PVCs, Reason: reason, Wait: wait.String()}
+				if autoUnfreeze > 0 {
+					spec.AutoUnfreezeAfter = strings.TrimSuffix(strings.TrimSuffix(autoUnfreeze.String(), "0s"), "0m")
+				}
+				name, err := agent.Request(ctx, c, spec, p.User)
+				if err != nil {
+					return err
+				}
+				fmt.Printf("requested Freeze %s from the agent\n", name)
+				fr, _, err := agent.Follow(ctx, c, name, true, plainLog, agent.Settled)
+				switch {
+				case ctx.Err() != nil:
+					fmt.Printf("\nstopped following – the agent goes on (lhtx agent status)\n")
+					return nil
+				case err != nil:
+					return err
+				case fr == nil || fr.Status.Phase == agent.PhaseFailed:
+					msg := "the Freeze was removed"
+					if fr != nil {
+						msg = fr.Status.Message
+						_ = agent.End(ctx, c, name) // nothing is frozen: clean up
+					}
+					return fmt.Errorf("the agent could not freeze: %s", msg)
+				}
+				fmt.Printf("\nfrozen: %s – end it with: lhtx --rw unfreeze %s\n", agent.PolicyName(name), agent.PolicyName(name))
+				return nil
+			}
 			f, err := switchover.ApplyFreeze(ctx, c, p, switchover.FreezeOptions{Wait: wait, Log: logger(start)})
 			if f != nil {
 				fmt.Printf("\nfrozen: %s – end it with: lhtx --rw unfreeze %s\n", f.Name, f.Name)
@@ -125,6 +180,8 @@ be ended from any machine. Needs cluster-admin rights.`,
 	f.StringVar(&reason, "reason", "", "note stored with the freeze (shown by --status and doctor)")
 	f.DurationVar(&wait, "wait", 10*time.Minute, "how long to wait for the volumes to detach")
 	f.BoolVar(&status, "status", false, "list the active freezes")
+	f.BoolVar(&local, "local", false, "do not hand the freeze to the lhtx agent, even if one runs")
+	f.DurationVar(&autoUnfreeze, "auto-unfreeze", 0, "with the agent: end the freeze on its own this long after it is frozen (e.g. 4h)")
 	_ = freeze.RegisterFlagCompletionFunc("node", func(c *cobra.Command, _ []string, s string) ([]string, cobra.ShellCompDirective) {
 		return g.completeNodeDisk(c, nil, s)
 	})
@@ -176,8 +233,12 @@ be ended from any machine. Needs cluster-admin rights.`,
 			}
 			start := time.Now()
 			var errs []string
+			var ag *agent.Info
 			for _, fr := range sel {
-				if err := switchover.Unfreeze(ctx, c, fr, switchover.FreezeOptions{Wait: uwait, Log: logger(start)}); err != nil {
+				if fr.Request != "" && ag == nil {
+					ag = agent.Detect(ctx, c)
+				}
+				if err := unfreezeOne(ctx, c, fr, ag, uwait, logger(start)); err != nil {
 					errs = append(errs, err.Error())
 				}
 			}
@@ -191,6 +252,35 @@ be ended from any machine. Needs cluster-admin rights.`,
 	unfreeze.Flags().DurationVar(&uwait, "wait", 10*time.Minute, "how long to wait for the volumes to be attached again")
 	return []*cobra.Command{freeze, unfreeze}
 }
+
+// unfreezeOne ends a freeze: an agent's freeze by deleting its Freeze (the
+// agent does the work, lhtx follows); without a live agent lhtx unfreezes
+// itself and then removes the Freeze.
+func unfreezeOne(ctx context.Context, c *longhorn.Client, fr switchover.Freeze, ag *agent.Info, wait time.Duration, log func(string, ...any)) error {
+	if fr.Request == "" {
+		return switchover.Unfreeze(ctx, c, fr, switchover.FreezeOptions{Wait: wait, Log: log})
+	}
+	if ag == nil {
+		log("no lhtx agent running – unfreezing here")
+		if err := switchover.Unfreeze(ctx, c, fr, switchover.FreezeOptions{Wait: wait, Log: log}); err != nil {
+			return err
+		}
+		return agent.Forget(ctx, c, fr.Request)
+	}
+	if err := agent.End(ctx, c, fr.Request); err != nil {
+		return err
+	}
+	log("asked the agent %s to end Freeze %s", ag.Holder, fr.Request)
+	_, _, err := agent.Follow(ctx, c, fr.Request, false, plainLog, func(*agent.Freeze) bool { return false })
+	if ctx.Err() != nil {
+		fmt.Println("\nstopped following – the agent goes on")
+		return nil
+	}
+	return err
+}
+
+// plainLog prints the agent's lines: they carry their own time (UTC).
+func plainLog(f string, a ...any) { fmt.Printf("  %s\n", fmt.Sprintf(f, a...)) }
 
 func logger(start time.Time) func(string, ...any) {
 	return func(f string, a ...any) {

@@ -89,6 +89,24 @@ freezes and switches are cluster-wide and all data comes from the API server.
 
 `lhtx overview` shows in column AGENT whether an agent runs in each cluster.
 
+## History
+
+Longhorn keeps no history – its events expire after an hour. The agent
+records, from the moment it runs: robustness changes involving degraded or
+faulted, rebuilds started and finished (with the duration), failed replicas,
+completed and failed backups, expansions and engine upgrades. The last 50
+events per volume and the last 300 notable ones cluster-wide (failures,
+degradations, finished rebuilds) are kept as `VolumeHistory` resources
+(gzipped, owned by the volume).
+
+```
+lhtx history                       # notable events in the cluster
+lhtx history --bad --since 168h    # what went wrong this week
+lhtx history shop/db-data          # everything about one volume
+```
+
+In the TUI: `H` in the volume details. `lhtx agent --no-history` turns it off.
+
 ## Metrics and dashboard
 
 The health port also serves Prometheus metrics (`/metrics`, counts only – no
@@ -102,6 +120,7 @@ names of volumes, PVCs or people):
 | `lhtx_agent_operations_total{kind,result}` | finished freezes, unfreezes, switches … |
 | `lhtx_agent_volume_events_total`, `lhtx_agent_digest_writes_total` | volume updates the agent saw vs digests written – the traffic lhtx saves |
 | `lhtx_agent_digest_volumes` | volumes with a digest |
+| `lhtx_agent_history_events_total` | history events recorded |
 | `lhtx_agent_build_info{version}` | |
 
 Chart values: `metrics.service` (on; a Service with `prometheus.io/scrape`

@@ -51,8 +51,10 @@ write actions are not tested.
   and migrations, whatever manages the Secret – [encryption](docs/encryption.md)
 - **Optional in-cluster agent** (Helm chart) that carries freezes and
   switches out, so they do not depend on your laptop, lets namespace users
-  switch their own PVCs safely, and cuts the volume traffic on busy
-  clusters about 24× with volume digests – [agent](docs/agent.md)
+  switch their own PVCs safely, cuts the volume traffic on busy clusters
+  about 24× with volume digests, keeps a history of rebuilds, failures and
+  backups, and has Prometheus metrics with a Grafana dashboard –
+  [agent](docs/agent.md)
 - **Low traffic** by design: watches where they are cheap, polling where
   they are not, a traffic budget per context – [traffic](docs/traffic.md)
 - Settings per kubeconfig context, themes – [configuration](docs/configuration.md)

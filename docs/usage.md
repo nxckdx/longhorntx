@@ -23,6 +23,7 @@ lhtx orphans                         # orphaned replica data / instances
 lhtx engineimages                    # engine images, state, how many volumes use them
 lhtx targets                         # backup targets
 lhtx contexts                        # kubeconfig contexts
+lhtx history [VOLUME] [--bad --since 168h]  # rebuilds, failures, backups – kept by the lhtx agent
 lhtx doctor [--backup-max-age 36h]   # health check, exit code 0/1/2/3 (ok/warn/crit/error)
 lhtx overview [--contexts a,b]       # doctor summary for all kubeconfig contexts, one line each (+ agent)
 lhtx drain-check NODE                # what happens if NODE goes away (reboot/drain)
@@ -60,7 +61,7 @@ Write commands: [write-actions.md](write-actions.md). Freeze: [freeze.md](freeze
 | `p` | volume list: problems and activity first (toggle) |
 | `i` | nodes view: drain check for the node |
 | `m` | nodes view: replica matrix (volumes × nodes; replicas sharing a node or disk first) |
-| `s` `b` `e` `J`, `tab` | detail panels: snapshots, backups, events, recurring jobs |
+| `s` `b` `e` `J` `H`, `tab` | detail panels: snapshots, backups, events, recurring jobs, history (needs the lhtx agent) |
 | `ctrl+r` | reload panel (details) or reload volumes (poll mode); resume after the traffic budget paused updates |
 | `c` | switch kubeconfig context; `o` there checks Longhorn health in all clusters (like `lhtx overview`) |
 | `W` | write mode on/off (red **RW** badge; or start with `lhtx --rw`) |

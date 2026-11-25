@@ -120,4 +120,5 @@ with the block device as `diskPath`; lhtx shows that as is.
 5. ✔ Multi-cluster overview (`lhtx overview`, `c` → `o` in the TUI) · open:
    more traffic statistics
 6. **Agent** ✔ freezes and switches in the cluster · ✔ volume digests (~24×
-   less volume traffic) · next: history of rebuilds and backups
+   less volume traffic) · ✔ history of rebuilds, failures and backups · ✔
+   metrics and Grafana dashboard

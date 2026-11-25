@@ -35,7 +35,7 @@ setting, PV/PVC with Longhorn's static StorageClass, ext4, reclaim Retain.
 --pvc auto creates a PVC with the volume's name in the original namespace.
 
 --switch restores and then points the original PVC to the restored volume
-(workload scaled down and up, Flux suspended and resumed) – see lhtx switch.
+(its pods frozen meanwhile, nothing scaled) – see lhtx switch.
 The old volume is kept for a rollback.
 
   lhtx --rw restore immich/library --switch`,
@@ -119,7 +119,7 @@ The old volume is kept for a rollback.
 	f.IntVar(&replicas, "replicas", 0, "number of replicas (default: the default-replica-count setting)")
 	f.StringVar(&sc, "storage-class", "", "StorageClass of PV/PVC (default: Longhorn's static class)")
 	f.StringVar(&fs, "fs", "", "filesystem of the PV (default ext4)")
-	f.BoolVar(&doSwitch, "switch", false, "then switch the original PVC to the restored volume (workload + Flux handled)")
+	f.BoolVar(&doSwitch, "switch", false, "then switch the original PVC to the restored volume (its pods are frozen meanwhile)")
 	f.DurationVar(&wait, "wait", 10*time.Minute, "with --switch: how long to wait for pods to stop / the PVC to bind")
 	return cmd
 }

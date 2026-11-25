@@ -78,7 +78,7 @@ func (m *model) restoreForm(msg restorePlanMsg) {
 	}
 	if srcPVC != "" {
 		fields = append(fields, formField{key: "then", label: "then", value: newOnly, options: []string{newOnly, switchTo},
-			hint: "←→: switch = workload down, PVC re-created on the restored data, Flux paused meanwhile"})
+			hint: "←→: switch = pods frozen, PVC re-created on the restored data, then unfrozen"})
 	}
 	f := &form{title: fmt.Sprintf("Restore %s (%s) into a new volume", b.Name, backupWhen(b)), fields: fields}
 	f.live = func(v map[string]string) []string {

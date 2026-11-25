@@ -19,23 +19,24 @@ func switchCmd(g *globals) *cobra.Command {
 	var status bool
 	cmd := &cobra.Command{
 		Use:   "switch NAMESPACE/PVC --to-volume VOLUME",
-		Short: "Point a PVC to another Longhorn volume (restored/cloned), workload and Flux included (needs --rw)",
+		Short: "Point a PVC to another Longhorn volume (restored/cloned) while its apps are frozen (needs --rw)",
 		Long: `Switches a PVC to another Longhorn volume – typically one restored from a
 backup (lhtx restore) – and takes care of everything around it:
 
   1. wait until the target volume is restored and detached
-  2. suspend the Flux Kustomizations/HelmReleases that manage the workload or
-     the PVC (spec.suspend, like flux suspend; already suspended ones stay)
-  3. scale the Deployments/StatefulSets that mount the PVC to 0, wait
-  4. set the old PV to Retain, delete the old PVC
-  5. create a PV for the target volume and the PVC again (same name, labels,
-     annotations – Flux and Helm keep owning it), wait until Bound
-  6. scale back up, resume Flux with a reconcile request
+  2. freeze the PVC (see lhtx freeze --help): an admission policy keeps pods
+     from mounting it, its pods are stopped in order with their hooks –
+     nothing is scaled, operators and GitOps keep their desired state
+  3. set the old PV to Retain, delete the old PVC
+  4. create a PV for the target volume and the PVC again (same name, labels,
+     annotations – Flux, Argo CD and Helm keep owning it), wait until Bound
+  5. unfreeze: the owners start their pods again on the new volume
 
 The old volume stays: switch back with the same command and --to-volume OLD.
 Until the old PVC is deleted, any failure (or Ctrl+C) is rolled back
-automatically. Refused: workloads of operators (CloudNativePG, Prometheus
-operator, …), HPAs, bare pods, Argo CD / Flux Operator ResourceSets.
+automatically; after that the PVC stays frozen until the switch is done.
+CloudNativePG instances are allowed with a warning (one instance from a
+backup is rarely consistent with the others).
 
 Every step is written to a journal in $XDG_STATE_HOME/lhtx/switch/.
 --dry-run shows the plan only.`,

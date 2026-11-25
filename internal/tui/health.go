@@ -21,7 +21,7 @@ type healthExtra struct {
 	jobs      []*longhorn.RecurringJob
 	orphans   int
 	snapshots []*longhorn.VolumeSnapshot
-	extra     []longhorn.Finding // Flux suspended, unfinished switches
+	extra     []longhorn.Finding // active freezes, unfinished switches
 	loadedAt  time.Time
 	err       error
 }

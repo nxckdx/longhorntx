@@ -49,8 +49,9 @@ write actions are not tested.
   confirmed run, with rollback and the way back – [restore and switch](docs/restore-switch.md)
 - **Encrypted volumes**: the key goes along with restores, clones, switches
   and migrations, whatever manages the Secret – [encryption](docs/encryption.md)
-- **Optional in-cluster agent** (Helm chart) that carries freezes out, so
-  they do not depend on your laptop – [agent](docs/agent.md)
+- **Optional in-cluster agent** (Helm chart) that carries freezes and
+  switches out, so they do not depend on your laptop – and lets namespace
+  users switch their own PVCs safely – [agent](docs/agent.md)
 - **Low traffic** by design: watches where they are cheap, polling where
   they are not, a traffic budget per context – [traffic](docs/traffic.md)
 - Settings per kubeconfig context, themes – [configuration](docs/configuration.md)

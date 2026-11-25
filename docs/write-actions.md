@@ -25,6 +25,7 @@ lhtx restore BACKUP|VOLUME [--name N] [--pvc NS/NAME|auto]   # backup → NEW vo
 lhtx clone VOLUME [--snapshot S] [--pvc NS/NAME|auto]       # volume/snapshot → NEW volume (safe "revert")
 lhtx restore VOLUME --switch               # restore, then switch the PVC to it (pods stopped by a freeze)
 lhtx switch NS/PVC --to-volume VOLUME      # point a PVC to another Longhorn volume (and back)
+lhtx switch NS/PVC --from-backup BACKUP    # restore, then switch (same as restore --switch)
 lhtx freeze --all|--node N|NS/PVC…         # stop all pods using the volumes, detach (maintenance)
 lhtx unfreeze [NAME|--all]                 # end it, pods start again
 lhtx agent status|manifests                # optional in-cluster agent that carries freezes out

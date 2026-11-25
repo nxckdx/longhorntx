@@ -51,7 +51,11 @@ internal/agent      optional in-cluster agent (`lhtx agent`, image ghcr.io/nxckd
                     unfreeze; autoUnfreezeAfter; leader election lease lhtx-agent, by
                     default in the Longhorn namespace, labelled = heartbeat). Client:
                     Detect (GET of the lease in the Longhorn ns, else LIST by label), Request, Follow (watch of one object), Unfreeze. lhtx must
-                    keep working without it. No HTTP endpoint – requests only via CRs.
+                    keep working without it. Requests only via CRs (the health port
+                    :8081 /healthz /readyz is read-only). switch.go: namespaced Switch
+                    CRs (restore + switch in the cluster; requester vouched for by the
+                    VAP lhtx-switch-requester, SubjectAccessReview, own-data rule;
+                    resumes via switchover.Continue).
 deploy/             agent manifests, embedded (lhtx agent manifests); charts/lhtx-agent
                     is the Helm chart – its templates/crd.yaml must equal deploy/crd.yaml
                     (test). Demo: LHTX_DEMO_AGENT=1 runs the agent in-process.

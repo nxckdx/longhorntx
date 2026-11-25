@@ -141,8 +141,9 @@ func (c *Client) ResolveKey(ctx context.Context, s RestoreSpec) (*KeyPlan, error
 		case same && src.Name != "" && src.Namespace == s.PVCNamespace:
 			mode = KeyReference
 		case src.Name == "":
-			return nil, fmt.Errorf("the source is encrypted and lhtx cannot tell which Secret holds its key (its PV is gone) – " +
-				"give the Secret with the key: --secret NAMESPACE/NAME")
+			return nil, fmt.Errorf("the source is encrypted and lhtx cannot tell which Secret holds its key – the source volume " +
+				"is in another cluster (--key-from-context CONTEXT, with --copy-secret or --secret) or its PV is gone " +
+				"(--secret NAMESPACE/NAME with the key from your secret backup)")
 		default:
 			where := "another namespace"
 			if !same {

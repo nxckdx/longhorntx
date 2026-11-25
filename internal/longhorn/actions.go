@@ -397,12 +397,91 @@ func SetReplicaCount(v *Volume, n int) (*Action, error) {
 		a.Warnings = append(a.Warnings, fmt.Sprintf("Longhorn will build %d new replica(s), each a full copy (%s)", n-v.Spec.NumberOfReplicas, humanBytes(int64(v.Spec.Size))))
 	} else {
 		a.Destructive = true
-		a.Warnings = append(a.Warnings, "Longhorn will remove surplus replicas")
 	}
 	if n == 1 {
 		a.Warnings = append(a.Warnings, "with 1 replica the volume has no redundancy")
 	}
 	return a, nil
+}
+
+// ReplicaCountActions sets the replica count; when it goes down it also
+// deletes the surplus replicas – Longhorn keeps them otherwise (verified on
+// v1.12: spec 2, still 3 running). Which ones go: failed or stopped first,
+// then ones not rebuilt yet, then ones on a node that holds more than one,
+// then the newest. At least n healthy replicas always stay.
+func ReplicaCountActions(v *Volume, n int, replicas []*Replica) ([]*Action, error) {
+	var live []*Replica
+	perNode := map[string]int{}
+	for _, r := range replicas {
+		if r.Spec.VolumeName == v.Name && r.DeletionTimestamp == nil {
+			live = append(live, r)
+			perNode[r.Spec.NodeID]++
+		}
+	}
+	surplus := len(live) - n
+	var acts []*Action
+	var a *Action
+	if n == v.Spec.NumberOfReplicas && surplus > 0 {
+		// the count was lowered before (e.g. in the web UI) and the
+		// surplus stayed: only clean it up
+		if err := checkVolumeWritable(v); err != nil {
+			return nil, err
+		}
+	} else {
+		var err error
+		if a, err = SetReplicaCount(v, n); err != nil {
+			return nil, err
+		}
+		acts = append(acts, a)
+		if n > v.Spec.NumberOfReplicas || surplus <= 0 {
+			return acts, nil
+		}
+	}
+	rank := func(r *Replica) int {
+		switch {
+		case r.Spec.FailedAt != "" || r.Status.CurrentState != "running":
+			return 0
+		case r.Spec.HealthyAt == "":
+			return 1
+		case perNode[r.Spec.NodeID] > 1:
+			return 2
+		}
+		return 3
+	}
+	sort.SliceStable(live, func(i, j int) bool {
+		if ri, rj := rank(live[i]), rank(live[j]); ri != rj {
+			return ri < rj
+		}
+		return live[i].CreationTimestamp.After(live[j].CreationTimestamp.Time)
+	})
+	healthy := 0
+	for _, r := range live {
+		if availableReplica(r) {
+			healthy++
+		}
+	}
+	for _, r := range live[:surplus] {
+		if availableReplica(r) {
+			if healthy <= n {
+				continue
+			}
+			healthy--
+		}
+		d, err := DeleteReplica(r, nil, live)
+		if err != nil {
+			continue
+		}
+		acts = append(acts, d)
+	}
+	switch {
+	case a != nil && len(acts) > 1:
+		a.Warnings = append(a.Warnings, fmt.Sprintf("Longhorn does not remove surplus replicas itself: %d deleted with this change", len(acts)-1))
+	case a == nil && len(acts) == 0:
+		return nil, fmt.Errorf("volume already has %d replicas", n)
+	case a == nil:
+		acts[0].Warnings = append(acts[0].Warnings, fmt.Sprintf("the volume should have %d replicas but has %d – Longhorn does not remove surplus replicas itself", n, len(live)))
+	}
+	return acts, nil
 }
 
 // ---------------------------------------------------------------- nodes / disks

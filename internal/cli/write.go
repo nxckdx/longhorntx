@@ -367,16 +367,23 @@ func setCmd(g *globals) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			a, err := longhorn.SetReplicaCount(v, n)
+			reps, err := c.Replicas(cmd.Context(), v.Name)
+			if err != nil {
+				return err
+			}
+			acts, err := longhorn.ReplicaCountActions(v, n, reps)
 			if err != nil {
 				return err
 			}
 			if nodes, err := c.Nodes(cmd.Context()); err == nil {
 				if w := longhorn.ReplicaCountWarning(n, nodes); w != "" {
-					a.Warnings = append(a.Warnings, w)
+					acts[0].Warnings = append(acts[0].Warnings, w)
 				}
 			}
-			return g.runAction(cmd.Context(), c, a)
+			if len(acts) == 1 {
+				return g.runAction(cmd.Context(), c, acts[0])
+			}
+			return g.runBatch(cmd.Context(), c, acts[0].Title, acts)
 		},
 	}
 	setting := &cobra.Command{

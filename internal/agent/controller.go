@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -106,11 +107,31 @@ func (a *Agent) Run(ctx context.Context) error {
 	}); err != nil {
 		return err
 	}
+	// Switches: only if their CRD is installed (older manifests have none)
+	var swInf cache.SharedIndexInformer
+	if _, err := a.c.Dynamic().Resource(GVRSwitch).List(ctx, metav1.ListOptions{Limit: 1}); err == nil {
+		swInf = f.ForResource(GVRSwitch).Informer()
+		pushSw := func(obj any) {
+			if u, ok := obj.(*unstructured.Unstructured); ok {
+				a.enqueue("sw:" + u.GetNamespace() + "/" + u.GetName())
+			}
+		}
+		if _, err := swInf.AddEventHandler(cache.ResourceEventHandlerFuncs{
+			AddFunc: pushSw, UpdateFunc: func(_, n any) { pushSw(n) },
+		}); err != nil {
+			return err
+		}
+	} else {
+		a.Logf("switches.lhtx.io not available (%v) – only freezes", err)
+	}
 	f.Start(ctx.Done())
 	if !cache.WaitForCacheSync(ctx.Done(), inf.HasSynced) {
 		return fmt.Errorf("Freeze resources did not sync (is the CRD installed?)")
 	}
-	a.Logf("watching freezes.lhtx.io")
+	if swInf != nil && !cache.WaitForCacheSync(ctx.Done(), swInf.HasSynced) {
+		return fmt.Errorf("Switch resources did not sync")
+	}
+	a.Logf("watching freezes.lhtx.io%s", map[bool]string{true: " and switches.lhtx.io", false: ""}[swInf != nil])
 	tick := time.NewTicker(a.Resync)
 	defer tick.Stop()
 	for {
@@ -119,11 +140,21 @@ func (a *Agent) Run(ctx context.Context) error {
 			a.stopAll()
 			return nil
 		case n := <-a.kick:
-			a.reconcile(ctx, n)
+			if key, ok := strings.CutPrefix(n, "sw:"); ok {
+				a.reconcileSwitch(ctx, key)
+			} else {
+				a.reconcile(ctx, n)
+			}
 		case <-tick.C:
 			// watchdog (autoUnfreezeAfter) and retries
 			for _, o := range inf.GetStore().List() {
 				a.reconcile(ctx, o.(*unstructured.Unstructured).GetName())
+			}
+			if swInf != nil {
+				for _, o := range swInf.GetStore().List() {
+					u := o.(*unstructured.Unstructured)
+					a.reconcileSwitch(ctx, u.GetNamespace()+"/"+u.GetName())
+				}
 			}
 		}
 	}

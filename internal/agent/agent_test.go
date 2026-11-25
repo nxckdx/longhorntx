@@ -2,6 +2,7 @@ package agent_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -162,3 +163,69 @@ func TestDetectByLabel(t *testing.T) {
 }
 
 var gvrLease = schema.GroupVersionResource{Group: "coordination.k8s.io", Version: "v1", Resource: "leases"}
+
+// A Switch restores a backup and points the PVC to it, in the agent.
+func TestAgentSwitchFromBackup(t *testing.T) {
+	ctx, c, _ := setup(t)
+	// the requester policy comes with the agent's manifests
+	vap := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "admissionregistration.k8s.io/v1",
+		"kind": "ValidatingAdmissionPolicy", "metadata": map[string]any{"name": agent.RequesterPolicy}}}
+	if _, err := c.Dynamic().Resource(gvrVAPt).Create(ctx, vap, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	// a PVC with a completed backup
+	vols, _ := c.Volumes(ctx)
+	var pvc, backup string
+	for _, v := range vols {
+		if v.BoundPVC() == "" {
+			continue
+		}
+		if b, _ := c.Backups(ctx, v.Name); longhorn.LatestBackup(b) != nil {
+			pvc, backup = v.BoundPVC(), longhorn.LatestBackup(b).Name
+			break
+		}
+	}
+	if pvc == "" {
+		t.Fatal("no demo PVC with a backup")
+	}
+	ns, name, _ := strings.Cut(pvc, "/")
+	sw, err := agent.RequestSwitch(ctx, c, ns, agent.SwitchSpec{PVC: name, FromBackup: backup, Wait: "30s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	s, err := agent.FollowSwitch(fctx, c, ns, sw, t.Logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Status.Phase != agent.SwitchDone {
+		t.Fatalf("phase %s: %s", s.Status.Phase, s.Status.Message)
+	}
+	for _, v := range mustVolumes(t, ctx, c) {
+		if v.BoundPVC() == pvc && v.Name != s.Status.TargetVolume {
+			t.Errorf("PVC still on %s, want %s", v.Name, s.Status.TargetVolume)
+		}
+	}
+}
+
+var gvrVAPt = schema.GroupVersionResource{Group: "admissionregistration.k8s.io", Version: "v1", Resource: "validatingadmissionpolicies"}
+
+// Without the requester policy requestedBy could be forged: refused.
+func TestAgentSwitchNeedsPolicy(t *testing.T) {
+	ctx, c, pvcs := setup(t)
+	ns, name, _ := strings.Cut(pvcs[0], "/")
+	sw, err := agent.RequestSwitch(ctx, c, ns, agent.SwitchSpec{PVC: name, ToVolume: "whatever"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	s, err := agent.FollowSwitch(fctx, c, ns, sw, t.Logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Status.Phase != agent.SwitchFailed || !strings.Contains(s.Status.Message, agent.RequesterPolicy) {
+		t.Fatalf("%s: %s", s.Status.Phase, s.Status.Message)
+	}
+}

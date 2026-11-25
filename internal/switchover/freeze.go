@@ -133,6 +133,28 @@ func Username(ctx context.Context, dyn dynamic.Interface) (string, error) {
 	return name, nil
 }
 
+// Who is the caller as the API server sees it.
+type Who struct {
+	Username string
+	Groups   []string
+}
+
+// WhoAmI asks the API server for the caller's name and groups.
+func WhoAmI(ctx context.Context, dyn dynamic.Interface) (*Who, error) {
+	u := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "authentication.k8s.io/v1", "kind": "SelfSubjectReview"}}
+	out, err := dyn.Resource(gvrSSR).Create(ctx, u, metav1.CreateOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("who am I (SelfSubjectReview): %w", err)
+	}
+	w := &Who{}
+	w.Username, _, _ = unstructured.NestedString(out.Object, "status", "userInfo", "username")
+	w.Groups, _, _ = unstructured.NestedStringSlice(out.Object, "status", "userInfo", "groups")
+	if w.Username == "" {
+		return nil, fmt.Errorf("the API server did not tell the user name")
+	}
+	return w, nil
+}
+
 // PlanFreeze looks up the pods that mount the PVCs and the volumes behind
 // them. One LIST of pods per namespace involved.
 func PlanFreeze(ctx context.Context, c *longhorn.Client, pvcs []string, reason string) (*FreezePlan, error) {

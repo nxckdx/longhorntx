@@ -92,6 +92,12 @@ func (s *sim) admissionReactors(ctx context.Context) {
 		return true, u(map[string]any{"apiVersion": "authentication.k8s.io/v1", "kind": "SelfSubjectReview",
 			"status": map[string]any{"userInfo": map[string]any{"username": "demo-admin"}}}), nil
 	})
+	// the demo user may do everything
+	s.dyn.PrependReactor("create", "subjectaccessreviews", func(act k8stesting.Action) (bool, runtime.Object, error) {
+		o := act.(k8stesting.CreateActionImpl).GetObject().(*unstructured.Unstructured).DeepCopy()
+		_ = unstructured.SetNestedField(o.Object, true, "status", "allowed")
+		return true, o, nil
+	})
 	s.dyn.PrependReactor("create", "validatingadmissionpolicies", func(act k8stesting.Action) (bool, runtime.Object, error) {
 		if isDryRun(act) {
 			return false, nil, nil

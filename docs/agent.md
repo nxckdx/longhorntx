@@ -2,6 +2,8 @@
 
 [← README](../README.md)
 
+![The lhtx agent: a freeze of all volumes carried out in the cluster with a 4h auto-unfreeze, then the history of a volume – a rebuild and how long it took](agent.gif)
+
 A freeze run from a laptop stops when the laptop
 sleeps or the LTE link drops – possibly halfway through. The agent is a small
 operator in the cluster (same binary, `lhtx agent`, image

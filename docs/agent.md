@@ -4,6 +4,26 @@
 
 ![The lhtx agent: a freeze of all volumes carried out in the cluster with a 4h auto-unfreeze, then the history of a volume – a rebuild and how long it took](agent.gif)
 
+## Read-only or read-write
+
+Like lhtx itself, the agent only reads unless told otherwise:
+
+| | read-only (default) | `--rw` (chart: `rw: true`) |
+|---|---|---|
+| volume digests, history, metrics, diag logs | ✔ | ✔ |
+| Freezes and Switches | refused with a reason in their status – lhtx does them itself with your rights | carried out |
+| rights | read Longhorn, pods, PVCs, PVs, pod logs; its own `lhtx.io` resources; its lease | also: delete pods anywhere, exec (hooks), admission policies, patch owners (`*`), create/delete PVCs, create PVs, encryption key Secrets, create Longhorn volumes – like cluster-admin |
+
+The write rights are a separate ClusterRole (`lhtx-agent-rw`, chart
+`<release>-rw`), only installed with `rw: true` (`lhtx agent manifests
+--rw`, kustomize: add `rbac-rw.yaml` and `--rw`). The lease carries the
+label `lhtx.io/rw`, so lhtx only hands freezes and switches to an agent that
+does them; `lhtx agent status` and `lhtx overview` show the mode. Starting
+read-only and switching to read-write later is a safe way to introduce the
+agent in a cluster.
+
+## Freezes through the agent
+
 A freeze run from a laptop stops when the laptop
 sleeps or the LTE link drops – possibly halfway through. The agent is a small
 operator in the cluster (same binary, `lhtx agent`, image
@@ -27,8 +47,8 @@ kubectl get freezes                # the same with kubectl (delete = unfreeze)
 - requests go only through the Kubernetes API – the agent has no HTTP
   endpoint. Who may create `Freeze` resources may freeze: bind the ClusterRole
   `lhtx-freeze` (chart: `<release>-freeze`) – no cluster-admin needed then.
-  The agent itself needs rights like cluster-admin (delete pods anywhere,
-  exec for hooks, admission policies, patch owners)
+  The agent itself needs `--rw` and rights like cluster-admin (delete pods
+  anywhere, exec for hooks, admission policies, patch owners)
 - one active agent (leader election); a restart while unfreezing goes on
   where it stopped
 

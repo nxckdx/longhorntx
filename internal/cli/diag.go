@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/nxckdx/longhorntx/internal/agent"
 	"github.com/nxckdx/longhorntx/internal/format"
 	"github.com/nxckdx/longhorntx/internal/longhorn"
 )
@@ -15,6 +16,7 @@ import (
 func diagCmd(g *globals) *cobra.Command {
 	var out string
 	opt := longhorn.DiagOptions{Since: 6 * time.Hour, LimitBytes: 5 << 20}
+	var localLogs bool
 	cmd := &cobra.Command{
 		Use:   "diag VOLUME",
 		Short: "Write a diagnostics bundle (tar.gz) for a volume",
@@ -54,6 +56,11 @@ Logs are limited by --since and --log-limit per container to keep traffic low.`,
 				return err
 			}
 			opt.Version = Version
+			// the lhtx agent filters the logs in the cluster: only the
+			// matching lines travel
+			if !opt.NoLogs && !opt.FullLogs && !localLogs && agent.Detect(ctx, c) != nil && agent.LogQueriesAvailable(ctx, c) {
+				opt.RemoteLogs = agent.RemoteLogs(c)
+			}
 			res, err := c.CollectDiag(ctx, v, opt, f)
 			if cerr := f.Close(); err == nil {
 				err = cerr
@@ -75,5 +82,6 @@ Logs are limited by --since and --log-limit per container to keep traffic low.`,
 	cmd.Flags().Int64Var(&opt.LimitBytes, "log-limit", opt.LimitBytes, "max log bytes per container")
 	cmd.Flags().BoolVar(&opt.NoLogs, "no-logs", false, "skip pod logs")
 	cmd.Flags().BoolVar(&opt.FullLogs, "full-logs", false, "keep all log lines, not only those mentioning the volume")
+	cmd.Flags().BoolVar(&localLogs, "local-logs", false, "read the logs here even if an lhtx agent could filter them in the cluster")
 	return cmd
 }

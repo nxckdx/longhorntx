@@ -1,7 +1,10 @@
 package cli
 
 import (
+	"context"
 	"fmt"
+
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"os"
 	"sort"
 	"strings"
@@ -85,6 +88,13 @@ right to create Freeze resources then. --local skips the agent.`,
 				return err
 			}
 			p, err := switchover.PlanFreeze(ctx, c, pvcs, reason)
+			if apierrors.IsForbidden(err) && !local {
+				// may create Freezes but not read pods/volumes: the agent
+				// plans it and logs every step
+				if ag := agent.Detect(ctx, c); ag != nil {
+					return requestBlind(cmd, g, c, ag, pvcs, reason, wait, autoUnfreeze, err)
+				}
+			}
 			if err != nil {
 				return err
 			}
@@ -143,28 +153,7 @@ right to create Freeze resources then. --local skips the agent.`,
 				if autoUnfreeze > 0 {
 					spec.AutoUnfreezeAfter = strings.TrimSuffix(strings.TrimSuffix(autoUnfreeze.String(), "0s"), "0m")
 				}
-				name, err := agent.Request(ctx, c, spec, p.User)
-				if err != nil {
-					return err
-				}
-				fmt.Printf("requested Freeze %s from the agent\n", name)
-				fr, _, err := agent.Follow(ctx, c, name, true, plainLog, agent.Settled)
-				switch {
-				case ctx.Err() != nil:
-					fmt.Printf("\nstopped following – the agent goes on (lhtx agent status)\n")
-					return nil
-				case err != nil:
-					return err
-				case fr == nil || fr.Status.Phase == agent.PhaseFailed:
-					msg := "the Freeze was removed"
-					if fr != nil {
-						msg = fr.Status.Message
-						_ = agent.End(ctx, c, name) // nothing is frozen: clean up
-					}
-					return fmt.Errorf("the agent could not freeze: %s", msg)
-				}
-				fmt.Printf("\nfrozen: %s – end it with: lhtx --rw unfreeze %s\n", agent.PolicyName(name), agent.PolicyName(name))
-				return nil
+				return requestFreeze(ctx, c, spec, p.User)
 			}
 			f, err := switchover.ApplyFreeze(ctx, c, p, switchover.FreezeOptions{Wait: wait, Log: logger(start)})
 			if f != nil {
@@ -197,7 +186,7 @@ right to create Freeze resources then. --local skips the agent.`,
 			if err != nil {
 				return err
 			}
-			fs, err := switchover.ActiveFreezes(ctx, c.Dynamic())
+			fs, err := activeFreezes(ctx, c)
 			if err != nil {
 				return err
 			}
@@ -253,6 +242,61 @@ right to create Freeze resources then. --local skips the agent.`,
 	return []*cobra.Command{freeze, unfreeze}
 }
 
+// requestBlind hands a freeze to the agent without a local plan: the user
+// may create Freezes but not read the pods and volumes behind them.
+func requestBlind(cmd *cobra.Command, g *globals, c *longhorn.Client, ag *agent.Info, pvcs []string, reason string,
+	wait, autoUnfreeze time.Duration, why error) error {
+	ctx := cmd.Context()
+	fmt.Printf("Freeze %d PVCs · %s\n\n", len(pvcs), c.Cluster.Context)
+	fmt.Printf("  PVCs:   %s\n", strings.Join(short(pvcs, 8), ", "))
+	fmt.Printf("  no preview: you may not read what uses them (%v)\n", why)
+	fmt.Printf("  the lhtx agent %s plans it, stops every pod that mounts them and logs each step\n", ag.Holder)
+	if autoUnfreeze > 0 {
+		fmt.Printf("  the agent ends the freeze on its own %s after it is frozen\n", autoUnfreeze)
+	}
+	fmt.Println("\n⚠ until lhtx unfreeze, these workloads stay down")
+	if mode, _ := g.dryRun(); mode != longhorn.DryRunNone {
+		fmt.Println("\n(dry run: nothing changed)")
+		return nil
+	}
+	if err := g.confirm(true, "freeze"); err != nil {
+		return err
+	}
+	user, _ := switchover.Username(ctx, c.Dynamic())
+	spec := agent.Spec{PVCs: pvcs, Reason: reason, Wait: wait.String()}
+	if autoUnfreeze > 0 {
+		spec.AutoUnfreezeAfter = strings.TrimSuffix(strings.TrimSuffix(autoUnfreeze.String(), "0s"), "0m")
+	}
+	return requestFreeze(ctx, c, spec, user)
+}
+
+// requestFreeze creates the Freeze and follows the agent until it is frozen
+// or failed (a failed Freeze is removed: nothing is frozen).
+func requestFreeze(ctx context.Context, c *longhorn.Client, spec agent.Spec, user string) error {
+	name, err := agent.Request(ctx, c, spec, user)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("requested Freeze %s from the agent\n", name)
+	fr, _, err := agent.Follow(ctx, c, name, true, plainLog, agent.Settled)
+	switch {
+	case ctx.Err() != nil:
+		fmt.Printf("\nstopped following – the agent goes on (lhtx agent status)\n")
+		return nil
+	case err != nil:
+		return err
+	case fr == nil || fr.Status.Phase == agent.PhaseFailed:
+		msg := "the Freeze was removed"
+		if fr != nil {
+			msg = fr.Status.Message
+			_ = agent.End(ctx, c, name)
+		}
+		return fmt.Errorf("the agent could not freeze: %s", msg)
+	}
+	fmt.Printf("\nfrozen: %s – end it with: lhtx --rw unfreeze %s\n", agent.PolicyName(name), agent.PolicyName(name))
+	return nil
+}
+
 // plainLog prints the agent's lines: they carry their own time (UTC).
 func plainLog(f string, a ...any) { fmt.Printf("  %s\n", fmt.Sprintf(f, a...)) }
 
@@ -296,8 +340,34 @@ func selectPVCs(cmd *cobra.Command, c *longhorn.Client, args []string, all bool,
 	return out, nil
 }
 
+// activeFreezes lists the freezes; who may not read admission policies
+// (only create Freezes for the agent) gets the agent's Freezes instead.
+func activeFreezes(ctx context.Context, c *longhorn.Client) ([]switchover.Freeze, error) {
+	fs, err := switchover.ActiveFreezes(ctx, c.Dynamic())
+	if !apierrors.IsForbidden(err) {
+		return fs, err
+	}
+	crs, lerr := agent.List(ctx, c)
+	if lerr != nil || crs == nil {
+		return nil, err
+	}
+	fs = nil
+	for _, cr := range crs {
+		if cr.Status.Phase != agent.PhaseFrozen && cr.Status.Phase != agent.PhaseFreezing {
+			continue
+		}
+		f := switchover.Freeze{Name: agent.PolicyName(cr.Name), Request: cr.Name, PVCs: cr.Spec.PVCs,
+			Reason: cr.Spec.Reason, User: cr.RequestedBy, Created: cr.Created}
+		if cr.Status.Freeze != nil {
+			f.Owners = cr.Status.Freeze.Owners
+		}
+		fs = append(fs, f)
+	}
+	return fs, nil
+}
+
 func printFreezes(cmd *cobra.Command, c *longhorn.Client) error {
-	fs, err := switchover.ActiveFreezes(cmd.Context(), c.Dynamic())
+	fs, err := activeFreezes(cmd.Context(), c)
 	if err != nil {
 		return err
 	}

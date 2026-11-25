@@ -21,25 +21,43 @@ import (
 
 // Info describes a running agent.
 type Info struct {
-	Holder  string    // pod name
-	Renewed time.Time // last heartbeat
+	Holder    string    // pod name
+	Namespace string    // where its lease is
+	Renewed   time.Time // last heartbeat
 }
 
-// Detect looks for a live agent: its lease in the Longhorn namespace,
-// renewed within the last minute. One small GET; no agent (or no right to
-// read the lease) = nil, and lhtx works on its own.
+// Detect looks for a live agent: its lease, renewed within the last
+// minute – first in the Longhorn namespace (one small GET), else by label
+// in all namespaces (one LIST, if allowed). No agent = nil, and lhtx works
+// on its own.
 func Detect(ctx context.Context, c *longhorn.Client) *Info {
-	u, err := c.Dynamic().Resource(gvrLease).Namespace(c.Namespace).Get(ctx, LeaseName, metav1.GetOptions{})
+	leases := c.Dynamic().Resource(gvrLease)
+	if u, err := leases.Namespace(c.Namespace).Get(ctx, LeaseName, metav1.GetOptions{}); err == nil {
+		if i := leaseInfo(u); i != nil {
+			return i
+		}
+	}
+	l, err := leases.List(ctx, metav1.ListOptions{LabelSelector: LeaseLabel})
 	if err != nil {
 		return nil
 	}
+	var best *Info
+	for i := range l.Items {
+		if in := leaseInfo(&l.Items[i]); in != nil && (best == nil || in.Renewed.After(best.Renewed)) {
+			best = in
+		}
+	}
+	return best
+}
+
+func leaseInfo(u *unstructured.Unstructured) *Info {
 	holder, _, _ := unstructured.NestedString(u.Object, "spec", "holderIdentity")
 	renew, _, _ := unstructured.NestedString(u.Object, "spec", "renewTime")
 	t, err := time.Parse(time.RFC3339Nano, renew)
 	if holder == "" || err != nil || time.Since(t) > time.Minute {
 		return nil
 	}
-	return &Info{Holder: holder, Renewed: t}
+	return &Info{Holder: holder, Namespace: u.GetNamespace(), Renewed: t}
 }
 
 // Request asks the agent to freeze PVCs: it creates a Freeze with the

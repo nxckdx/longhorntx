@@ -48,9 +48,9 @@ internal/switchover freeze (ValidatingAdmissionPolicy denies pods mounting the P
 internal/agent      optional in-cluster agent (`lhtx agent`, image ghcr.io/nxckdx/lhtx):
                     Freeze CRD lhtx.io/v1alpha1 (cluster-scoped), controller reusing
                     switchover (named, resumable freezes; status log; finalizer =
-                    unfreeze; autoUnfreezeAfter; leader election lease lhtx-agent in
-                    the Longhorn namespace = heartbeat). Client: Detect (one GET of the
-                    lease), Request, Follow (watch of one object), Unfreeze. lhtx must
+                    unfreeze; autoUnfreezeAfter; leader election lease lhtx-agent, by
+                    default in the Longhorn namespace, labelled = heartbeat). Client:
+                    Detect (GET of the lease in the Longhorn ns, else LIST by label), Request, Follow (watch of one object), Unfreeze. lhtx must
                     keep working without it. No HTTP endpoint – requests only via CRs.
 deploy/             agent manifests, embedded (lhtx agent manifests); charts/lhtx-agent
                     is the Helm chart – its templates/crd.yaml must equal deploy/crd.yaml

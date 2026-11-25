@@ -4,6 +4,12 @@
 # runs in the release namespace.
 longhornNamespace: longhorn-system
 
+# Where the agent keeps its lease (its heartbeat). Empty = longhornNamespace:
+# lhtx finds it there with one GET. Elsewhere (e.g. the release namespace)
+# lhtx finds it by its label – users then need to list leases in all
+# namespaces (rbac.leaseListForAllUsers).
+leaseNamespace: ""
+
 image:
   repository: ghcr.io/nxckdx/lhtx
   tag: "" # default: the chart's appVersion
@@ -29,6 +35,10 @@ rbac:
   # object), so lhtx finds the agent. Without it, users need their own get
   # on leases/lhtx-agent in the Longhorn namespace.
   leaseReaderForAllUsers: true
+  # Let every authenticated user list leases in all namespaces (only needed
+  # with a leaseNamespace other than longhornNamespace; leases hold node and
+  # controller heartbeats, nothing secret).
+  leaseListForAllUsers: false
   # ClusterRole "<fullname>-freeze" (create/delete Freeze resources) for you
   # to bind to the people who may freeze.
   freezeRole: true

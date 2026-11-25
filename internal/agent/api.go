@@ -29,7 +29,10 @@ const (
 	// LeaseName is the agent's leader election lease (in the Longhorn
 	// namespace); lhtx reads it to see whether an agent is alive.
 	LeaseName = "lhtx-agent"
-	Finalizer = "lhtx.io/unfreeze"
+	// LeaseLabel marks the lease, so lhtx also finds it outside the
+	// Longhorn namespace (a LIST over all namespaces, needs the right).
+	LeaseLabel = "app.kubernetes.io/name=lhtx-agent"
+	Finalizer  = "lhtx.io/unfreeze"
 	// AnnRequestedBy: the user who created the Freeze, as lhtx saw it
 	// (informational – set by the client).
 	AnnRequestedBy = "lhtx.io/requested-by"

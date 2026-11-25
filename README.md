@@ -317,7 +317,7 @@ Needs cluster-admin rights. Longhorn itself can still attach frozen volumes
 sleeps or the LTE link drops – possibly halfway through. The agent is a small
 operator in the cluster (same binary, `lhtx agent`, image
 `ghcr.io/nxckdx/lhtx`) that carries freezes out instead. When lhtx finds it
-alive (its lease in the Longhorn namespace, renewed within a minute), `lhtx
+alive (its lease, renewed within a minute), `lhtx
 freeze` and `Z` create a `Freeze` resource (`lhtx.io/v1alpha1`) with your own
 rights and only follow the agent's progress from its status; Ctrl+C or `x`
 stops following, not the freeze. Without an agent everything runs locally as
@@ -350,8 +350,14 @@ helm install lhtx-agent oci://ghcr.io/nxckdx/charts/lhtx-agent -n lhtx-system --
 
 or plain manifests (CRD, RBAC, Deployment in the Longhorn namespace):
 `lhtx agent manifests | kubectl apply -f -` or `kubectl apply -k deploy/`.
-The agent may run in any namespace; its lease and the `lhtx-hooks` ConfigMap
-stay in the Longhorn namespace. Try it without a cluster:
+The agent may run in any namespace. lhtx looks for its lease first in the
+Longhorn namespace (one GET; everyone may read just that lease), then by the
+label `app.kubernetes.io/name=lhtx-agent` in all namespaces (one LIST, if you
+may list leases). So the lease can live elsewhere too: chart value
+`leaseNamespace` (+ `rbac.leaseListForAllUsers=true`), or
+`lhtx agent --lease-namespace`. The chart has no Helm hooks – it works the same
+with Argo CD and Flux; the CRD is a normal template (updated on upgrade, kept
+on uninstall). Try it without a cluster:
 `LHTX_DEMO_AGENT=1 lhtx --demo`.
 
 **Restore and switch** (`lhtx restore VOLUME --switch`, `lhtx switch`): the

@@ -5,6 +5,10 @@ import (
 	"testing"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+
 	"github.com/nxckdx/longhorntx/internal/agent"
 	"github.com/nxckdx/longhorntx/internal/demo"
 	"github.com/nxckdx/longhorntx/internal/longhorn"
@@ -132,3 +136,29 @@ func mustVolumes(t *testing.T, ctx context.Context, c *longhorn.Client) []*longh
 	}
 	return vs
 }
+
+// An agent whose lease is outside the Longhorn namespace is found by label.
+func TestDetectByLabel(t *testing.T) {
+	ctx := t.Context()
+	c := demo.NewClient(ctx)
+	lease := func(ns, name string, labels map[string]any, renew time.Time) {
+		u := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "coordination.k8s.io/v1", "kind": "Lease",
+			"metadata": map[string]any{"name": name, "namespace": ns, "labels": labels},
+			"spec":     map[string]any{"holderIdentity": name + "-pod", "renewTime": renew.UTC().Format(time.RFC3339Nano)}}}
+		if _, err := c.Dynamic().Resource(gvrLease).Namespace(ns).Create(ctx, u, metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lbl := map[string]any{"app.kubernetes.io/name": "lhtx-agent"}
+	lease("kube-node-lease", "node-1", nil, time.Now())
+	lease("old", "lhtx-agent", lbl, time.Now().Add(-time.Hour))
+	if agent.Detect(ctx, c) != nil {
+		t.Error("stale or unlabelled lease taken for an agent")
+	}
+	lease("lhtx-system", "lhtx-agent", lbl, time.Now())
+	if i := agent.Detect(ctx, c); i == nil || i.Namespace != "lhtx-system" {
+		t.Errorf("agent in lhtx-system not found: %+v", i)
+	}
+}
+
+var gvrLease = schema.GroupVersionResource{Group: "coordination.k8s.io", Version: "v1", Resource: "leases"}

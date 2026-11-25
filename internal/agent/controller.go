@@ -53,8 +53,9 @@ func New(c *longhorn.Client, identity string) *Agent {
 		tasks: map[string]*task{}, kick: make(chan string, 64)}
 }
 
-// RunWithLeaderElection runs the agent while it holds the lease (one
-// active agent; the lease is also the heartbeat lhtx looks at).
+// RunWithLeaderElection runs the agent while it holds the lease in
+// namespace (one active agent; the lease is also the heartbeat lhtx looks
+// for: first in the Longhorn namespace, then by label everywhere).
 func (a *Agent) RunWithLeaderElection(ctx context.Context, namespace string) error {
 	cc, err := coordinationv1.NewForConfig(a.c.Cluster.Config)
 	if err != nil {
@@ -64,6 +65,7 @@ func (a *Agent) RunWithLeaderElection(ctx context.Context, namespace string) err
 		LeaseMeta:  metav1.ObjectMeta{Name: LeaseName, Namespace: namespace},
 		Client:     cc,
 		LockConfig: resourcelock.ResourceLockConfig{Identity: a.identity},
+		Labels:     map[string]string{"app.kubernetes.io/name": "lhtx-agent"},
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()

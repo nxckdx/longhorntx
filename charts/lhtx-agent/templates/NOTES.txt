@@ -1,4 +1,8 @@
-The lhtx agent runs in {{ .Release.Namespace }} and keeps its lease in {{ .Values.longhornNamespace }}.
+The lhtx agent runs in {{ .Release.Namespace }} and keeps its lease in {{ .Values.leaseNamespace | default .Values.longhornNamespace }}.
+{{- if and .Values.leaseNamespace (ne .Values.leaseNamespace .Values.longhornNamespace) (not .Values.rbac.leaseListForAllUsers) }}
+lhtx finds that lease by label only if users may list leases in all namespaces
+(rbac.leaseListForAllUsers=true, or grant it yourself).
+{{- end }}
 
 Check it with:  lhtx -n {{ .Values.longhornNamespace }} agent status
 

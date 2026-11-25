@@ -1,6 +1,7 @@
 {{- if .Values.rbac.create }}
 {{- $name := include "lhtx-agent.fullname" . }}
 {{- $sa := include "lhtx-agent.serviceAccountName" . }}
+{{- $leaseNS := .Values.leaseNamespace | default .Values.longhornNamespace }}
 # The agent stops and starts apps: it deletes pods anywhere, execs hook
 # commands in them, creates admission policies and patches the owners of the
 # pods it stopped (any kind, hence "*"). Treat it like cluster-admin.
@@ -54,7 +55,7 @@ subjects:
     name: {{ $sa }}
     namespace: {{ .Release.Namespace }}
 ---
-# lease + hooks ConfigMap in the Longhorn namespace
+# the hooks ConfigMap in the Longhorn namespace
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -63,9 +64,6 @@ metadata:
   labels:
     {{- include "lhtx-agent.labels" . | nindent 4 }}
 rules:
-  - apiGroups: [coordination.k8s.io]
-    resources: [leases]
-    verbs: [get, create, update]
   - apiGroups: [""]
     resources: [configmaps]
     resourceNames: [lhtx-hooks]
@@ -86,13 +84,42 @@ subjects:
   - kind: ServiceAccount
     name: {{ $sa }}
     namespace: {{ .Release.Namespace }}
+---
+# the leader election lease (the heartbeat lhtx looks for)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}-lease
+  namespace: {{ $leaseNS }}
+  labels:
+    {{- include "lhtx-agent.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, create, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}-lease
+  namespace: {{ $leaseNS }}
+  labels:
+    {{- include "lhtx-agent.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}-lease
+subjects:
+  - kind: ServiceAccount
+    name: {{ $sa }}
+    namespace: {{ .Release.Namespace }}
 {{- if .Values.rbac.leaseReaderForAllUsers }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: {{ $name }}-lease-reader
-  namespace: {{ .Values.longhornNamespace }}
+  namespace: {{ $leaseNS }}
   labels:
     {{- include "lhtx-agent.labels" . | nindent 4 }}
 rules:
@@ -105,13 +132,42 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: {{ $name }}-lease-reader
-  namespace: {{ .Values.longhornNamespace }}
+  namespace: {{ $leaseNS }}
   labels:
     {{- include "lhtx-agent.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: {{ $name }}-lease-reader
+subjects:
+  - kind: Group
+    name: system:authenticated
+    apiGroup: rbac.authorization.k8s.io
+{{- end }}
+{{- if .Values.rbac.leaseListForAllUsers }}
+---
+# lhtx finds a lease outside the Longhorn namespace by its label
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}-lease-list
+  labels:
+    {{- include "lhtx-agent.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $name }}-lease-list
+  labels:
+    {{- include "lhtx-agent.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $name }}-lease-list
 subjects:
   - kind: Group
     name: system:authenticated

@@ -16,6 +16,7 @@ import (
 
 func agentCmd(g *globals) *cobra.Command {
 	var noLeader bool
+	var leaseNS string
 	cmd := &cobra.Command{
 		Use:   "agent",
 		Short: "Optional in-cluster agent: carries out freezes so they do not depend on your laptop",
@@ -61,9 +62,13 @@ lhtx-freeze to them. The agent itself needs rights like cluster-admin
 			}
 			// the lease lives in the Longhorn namespace, where lhtx looks for it
 			// (the agent itself may run elsewhere)
-			return a.RunWithLeaderElection(cmd.Context(), g.namespace)
+			if leaseNS == "" {
+				leaseNS = g.namespace
+			}
+			return a.RunWithLeaderElection(cmd.Context(), leaseNS)
 		},
 	}
+	cmd.Flags().StringVar(&leaseNS, "lease-namespace", "", "namespace of the lease (default: the Longhorn namespace, where lhtx looks first; elsewhere lhtx finds it by label if users may list leases)")
 	cmd.Flags().BoolVar(&noLeader, "no-leader-election", false, "run without the lease (only one agent may run; lhtx will not detect it)")
 
 	var tag string
@@ -95,9 +100,9 @@ lhtx-freeze to them. The agent itself needs rights like cluster-admin
 			}
 			ctx := cmd.Context()
 			if info := agent.Detect(ctx, c); info != nil {
-				fmt.Printf("agent: %s (heartbeat %s ago)\n", info.Holder, time.Since(info.Renewed).Round(time.Second))
+				fmt.Printf("agent: %s (lease in %s, heartbeat %s ago)\n", info.Holder, info.Namespace, time.Since(info.Renewed).Round(time.Second))
 			} else {
-				fmt.Println("agent: none running (no fresh lease " + c.Namespace + "/" + agent.LeaseName + ") – lhtx freezes on its own")
+				fmt.Println("agent: none found (no fresh lease " + c.Namespace + "/" + agent.LeaseName + ", none labelled " + agent.LeaseLabel + " that you may list) – lhtx freezes on its own")
 			}
 			fs, err := agent.List(ctx, c)
 			if err != nil {

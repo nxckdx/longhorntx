@@ -41,6 +41,9 @@ spec:
           args:
             - agent
             - --namespace={{ .Values.longhornNamespace }}
+            {{- with .Values.leaseNamespace }}
+            - --lease-namespace={{ . }}
+            {{- end }}
             {{- with .Values.extraArgs }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

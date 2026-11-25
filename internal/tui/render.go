@@ -231,6 +231,9 @@ func (m *model) detailTop(p *page) string {
 	vol := v.Volume
 	info := fmt.Sprintf(" actual %s · %d/%d replicas healthy · data engine %s · %s",
 		format.Bytes(v.Actual), v.HealthyReplicas(), v.Desired, dash(v.Engine), strings.ToUpper(dash(vol.Spec.AccessMode)))
+	if vol.Spec.Encrypted {
+		info += " · 🔒 encrypted"
+	}
 	if vol.Status.LastBackupAt != "" {
 		info += " · last backup " + format.Age(vol.Status.LastBackupAt, time.Now()) + " ago"
 	}

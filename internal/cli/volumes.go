@@ -56,7 +56,7 @@ read replicas and nodes to show where the replicas live.`,
 			}
 			w := newTab(os.Stdout)
 			if withReplicas {
-				fmt.Fprintln(w, "PVC\tVOLUME\tSTATE\tROBUSTNESS\tSIZE\tACTUAL\tNODE\tREPLICAS\tLOCATIONS")
+				fmt.Fprintln(w, "PVC\tVOLUME\tSTATE\tROBUSTNESS\tSIZE\tACTUAL\tNODE\tREPLICAS\tENCRYPTED\tLOCATIONS")
 			} else {
 				fmt.Fprintln(w, "PVC\tVOLUME\tSTATE\tROBUSTNESS\tSIZE\tACTUAL\tNODE\tREPLICAS")
 			}
@@ -70,7 +70,11 @@ read replicas and nodes to show where the replicas live.`,
 					for _, r := range v.Replicas {
 						locs = append(locs, r.Node+":"+dash(r.Disk.Path))
 					}
-					row = append(row, fmt.Sprintf("%d/%d", v.HealthyReplicas(), v.Desired), strings.Join(locs, ","))
+					enc := "-"
+					if v.Volume.Spec.Encrypted {
+						enc = "yes"
+					}
+					row = append(row, fmt.Sprintf("%d/%d", v.HealthyReplicas(), v.Desired), enc, strings.Join(locs, ","))
 				} else {
 					row = append(row, fmt.Sprint(v.Desired))
 				}

@@ -36,7 +36,12 @@ func TestHistoryDetection(t *testing.T) {
 		t.Errorf("initial replica recorded as rebuild: %+v", ev)
 	}
 	r.CreationTimestamp = metav1.NewTime(now.Add(-10 * time.Minute))
-	if ev := replicaEvents(nil, r, v, now); len(ev) != 1 || ev[0].Kind != longhorn.HistRebuildStart {
+	unscheduled := *r
+	unscheduled.Spec.NodeID, unscheduled.Spec.DiskPath = "", ""
+	if ev := replicaEvents(nil, &unscheduled, v, now); len(ev) != 0 {
+		t.Errorf("rebuild start before scheduling: %+v", ev)
+	}
+	if ev := replicaEvents(&unscheduled, r, v, now); len(ev) != 1 || ev[0].Kind != longhorn.HistRebuildStart || !strings.Contains(ev[0].Text, "n1:") {
 		t.Errorf("rebuild start: %+v", ev)
 	}
 	done := *r

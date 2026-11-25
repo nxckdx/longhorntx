@@ -53,11 +53,15 @@ func replicaEvents(old, new *longhorn.Replica, vol *longhorn.Volume, now time.Ti
 	// replicas created with the volume are not rebuilds
 	rebuild := vol == nil || new.CreationTimestamp.Sub(vol.CreationTimestamp.Time) > 2*time.Minute
 	var out []longhorn.HistoryEvent
+	// the start: once the new replica is scheduled (it has no node when
+	// it is created)
+	scheduled := new.Spec.NodeID != "" && (old == nil || old.Spec.NodeID == "")
 	switch {
-	case old == nil:
+	case scheduled && new.Spec.HealthyAt == "":
 		if rebuild && vol != nil {
 			out = append(out, longhorn.HistoryEvent{At: now, Kind: longhorn.HistRebuildStart, Text: "rebuilding a replica on " + where})
 		}
+	case old == nil:
 	case old.Spec.HealthyAt == "" && new.Spec.HealthyAt != "" && rebuild:
 		e := longhorn.HistoryEvent{At: now, Kind: longhorn.HistRebuildDone, Text: "replica on " + where + " rebuilt"}
 		if t, err := time.Parse(time.RFC3339, new.Spec.HealthyAt); err == nil && !new.CreationTimestamp.IsZero() {

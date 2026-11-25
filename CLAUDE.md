@@ -117,6 +117,10 @@ internal/tui        Bubble Tea v2 (charm.land/*): tui.go model/update/keys,
 - TUI testing: run in tmux (`tmux new-session -d -x 160 -y 40 ./lhtx`,
   `send-keys`, `capture-pane -p`). Send `Escape` and the next key separately
   (otherwise read as Alt+key). Render tests in `internal/tui/render_test.go`.
+- **Local lab for real tests:** `nix run .#lab -- start` (nix/lab: 3 NixOS VMs, k3s,
+  Longhorn, NFS backup target, test apps with hooks). Write actions may be run
+  freely against the lab (`lhtx-lab lhtx …`, kubeconfig in ~/.local/state/lhtx-lab) –
+  it found bugs the demo could not (ReplicaSet back-off, Longhorn name limit).
 - **Clusters are read-only for Claude.** Only read via kubectl/lhtx. Never apply
   a write action, never `--rw` without `--dry-run`, and no `--dry-run=server`
   unless the user explicitly allows it.

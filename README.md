@@ -489,6 +489,22 @@ Two flake packages:
   `programs.lhtx = { enable = true; settings = { … }; }`, same keys as
   `config.yaml`). Without it lhtx uses its built-in defaults.
 
+### Local test cluster (lhtx-lab)
+
+Write actions, freezes and the agent can be tried on a throwaway cluster:
+three NixOS VMs (qemu/KVM, 4 GiB each) with k3s, Longhorn v1.12.1, an NFS
+backup target and test apps with hooks, all defined in `nix/lab/`.
+
+```
+nix run .#lab -- start      # or `lhtx-lab start` in `nix develop`; first start pulls images
+lhtx-lab lhtx               # this checkout's lhtx against the lab (never your real kubeconfig)
+lhtx-lab agent              # install the agent with the image built from this checkout
+lhtx-lab status | ssh 1 | log 1 | stop | destroy
+```
+
+State (disks, kubeconfig, ssh key) lives in `~/.local/state/lhtx-lab`
+(`LHTX_LAB_DIR` to move it); `destroy` deletes the disks.
+
 ### Shell completion
 
 Completes commands, flags, contexts, volume/PVC, node:disk, replica, snapshot

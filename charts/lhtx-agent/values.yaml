@@ -10,6 +10,10 @@ longhornNamespace: longhorn-system
 # namespaces (rbac.leaseListForAllUsers).
 leaseNamespace: ""
 
+# Name of all objects (default: <release>-lhtx-agent, or the release name
+# if it contains "lhtx-agent").
+fullnameOverride: ""
+
 image:
   repository: ghcr.io/nxckdx/lhtx
   tag: "" # default: the chart's appVersion

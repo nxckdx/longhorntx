@@ -25,6 +25,7 @@ func Manifests(tag, namespace string) string {
 	}
 	if namespace != "" && namespace != "longhorn-system" {
 		out = strings.ReplaceAll(out, "namespace: longhorn-system", "namespace: "+namespace)
+		out = strings.ReplaceAll(out, "--namespace=longhorn-system", "--namespace="+namespace)
 	}
 	return out
 }

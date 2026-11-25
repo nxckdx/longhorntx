@@ -27,7 +27,7 @@ spec:
       containers:
         - name: agent
           image: ghcr.io/nxckdx/lhtx:latest
-          args: [agent]
+          args: [agent, --namespace=longhorn-system]
           env:
             - name: POD_NAME
               valueFrom:

@@ -16,7 +16,7 @@ import (
 
 func agentCmd(g *globals) *cobra.Command {
 	var noLeader bool
-	var leaseNS string
+	var leaseNS, healthAddr string
 	cmd := &cobra.Command{
 		Use:   "agent",
 		Short: "Optional in-cluster agent: carries out freezes so they do not depend on your laptop",
@@ -56,6 +56,13 @@ lhtx-freeze to them. The agent itself needs rights like cluster-admin
 				return err
 			}
 			a := agent.New(c, os.Getenv("POD_NAME"))
+			if healthAddr != "" {
+				go func() {
+					if err := a.ServeHealth(cmd.Context(), healthAddr); err != nil {
+						fmt.Fprintf(os.Stderr, "health endpoint: %v\n", err)
+					}
+				}()
+			}
 			fmt.Fprintf(os.Stderr, "lhtx agent %s · %s · Longhorn namespace %s\n", Version, cl.Context, g.namespace)
 			if noLeader {
 				return a.Run(cmd.Context())
@@ -68,6 +75,7 @@ lhtx-freeze to them. The agent itself needs rights like cluster-admin
 			return a.RunWithLeaderElection(cmd.Context(), leaseNS)
 		},
 	}
+	cmd.Flags().StringVar(&healthAddr, "health-addr", ":8081", "address for the probes /healthz and /readyz (read-only; empty = off)")
 	cmd.Flags().StringVar(&leaseNS, "lease-namespace", "", "namespace of the lease (default: the Longhorn namespace, where lhtx looks first; elsewhere lhtx finds it by label if users may list leases)")
 	cmd.Flags().BoolVar(&noLeader, "no-leader-election", false, "run without the lease (only one agent may run; lhtx will not detect it)")
 

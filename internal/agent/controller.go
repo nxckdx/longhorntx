@@ -37,6 +37,8 @@ type Agent struct {
 	mu    sync.Mutex
 	tasks map[string]*task // Freeze name → running work
 	kick  chan string
+
+	health health
 }
 
 type task struct {
@@ -71,8 +73,9 @@ func (a *Agent) RunWithLeaderElection(ctx context.Context, namespace string) err
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var runErr error
+	a.health.watchdog = leaderelection.NewLeaderHealthzAdaptor(20 * time.Second)
 	leaderelection.RunOrDie(ctx, leaderelection.LeaderElectionConfig{
-		Lock: lock, ReleaseOnCancel: true,
+		Lock: lock, ReleaseOnCancel: true, WatchDog: a.health.watchdog,
 		LeaseDuration: 30 * time.Second, RenewDeadline: 20 * time.Second, RetryPeriod: 5 * time.Second,
 		Callbacks: leaderelection.LeaderCallbacks{
 			OnStartedLeading: func(ctx context.Context) {
@@ -91,6 +94,9 @@ func (a *Agent) RunWithLeaderElection(ctx context.Context, namespace string) err
 
 // Run watches Freeze resources until ctx ends.
 func (a *Agent) Run(ctx context.Context) error {
+	a.health.leading.Store(true)
+	defer a.health.leading.Store(false)
+	a.health.beat()
 	f := dynamicinformer.NewDynamicSharedInformerFactory(a.c.Dynamic(), 0)
 	inf := f.ForResource(GVRFreeze).Informer()
 	push := func(obj any) {
@@ -131,10 +137,12 @@ func (a *Agent) Run(ctx context.Context) error {
 	if swInf != nil && !cache.WaitForCacheSync(ctx.Done(), swInf.HasSynced) {
 		return fmt.Errorf("Switch resources did not sync")
 	}
+	a.health.synced.Store(true)
 	a.Logf("watching freezes.lhtx.io%s", map[bool]string{true: " and switches.lhtx.io", false: ""}[swInf != nil])
 	tick := time.NewTicker(a.Resync)
 	defer tick.Stop()
 	for {
+		a.health.beat()
 		select {
 		case <-ctx.Done():
 			a.stopAll()

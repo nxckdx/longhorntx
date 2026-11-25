@@ -16,8 +16,31 @@ image:
   pullPolicy: IfNotPresent
 imagePullSecrets: []
 
-# More than one replica: the others wait as standby (leader election).
+# More than one replica: one is active, the others wait as standby and take
+# over within ~30 s (leader election; the lease is also the heartbeat lhtx
+# looks for). With more than one, a PodDisruptionBudget keeps one running and
+# the pods are spread over nodes (unless affinity is set).
 replicaCount: 1
+
+# Probes on the read-only health port 8081 (no actions there): /readyz is
+# ready for a standby at once and for the leader once its watches synced;
+# /healthz fails if the leader's loop stalls or its lease is overdue.
+probes:
+  startup:
+    httpGet: {path: /readyz, port: health}
+    periodSeconds: 5
+    failureThreshold: 60
+  readiness:
+    httpGet: {path: /readyz, port: health}
+    periodSeconds: 10
+  liveness:
+    httpGet: {path: /healthz, port: health}
+    periodSeconds: 20
+    failureThreshold: 3
+
+podDisruptionBudget:
+  # created when replicaCount > 1
+  minAvailable: 1
 
 crds:
   # Install/upgrade the Freeze CRD with the chart. It is kept on uninstall
@@ -70,3 +93,4 @@ priorityClassName: ""
 nodeSelector: {}
 tolerations: []
 affinity: {}
+topologySpreadConstraints: []

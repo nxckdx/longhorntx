@@ -49,7 +49,7 @@ rules:
     verbs: [get, list, create] # switches of encrypted volumes: guard the key, keep a copy if it is replaced
   - apiGroups: [longhorn.io]
     resources: [volumes]
-    verbs: [get, list, create] # create: restore for a Switch
+    verbs: [get, list, watch, create] # watch: VolumeDigests; create: restore for a Switch # create: restore for a Switch
   - apiGroups: [longhorn.io]
     resources: [settings, backups, backupvolumes, engines]
     verbs: [get, list]

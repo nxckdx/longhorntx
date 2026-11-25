@@ -47,7 +47,7 @@ rules:
     verbs: [get, list, create]
   - apiGroups: [longhorn.io]
     resources: [volumes]
-    verbs: [get, list, create]
+    verbs: [get, list, watch, create] # watch: VolumeDigests; create: restore for a Switch
   - apiGroups: [longhorn.io]
     resources: [settings, backups, backupvolumes, engines]
     verbs: [get, list]

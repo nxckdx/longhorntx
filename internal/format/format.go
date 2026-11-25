@@ -70,3 +70,19 @@ func Short(s string, n int) string {
 	}
 	return string(r[:n-1]) + "…"
 }
+
+// Interval writes a Go duration string compactly ("5m0s" → "5m",
+// "1h30m0s" → "1h30m"); anything else is returned as it is.
+func Interval(s string) string {
+	d, err := time.ParseDuration(s)
+	if err != nil || d == 0 {
+		return s
+	}
+	out := d.String()
+	for _, suf := range []string{"m0s", "h0m"} {
+		if strings.HasSuffix(out, suf) {
+			out = strings.TrimSuffix(out, suf[1:])
+		}
+	}
+	return out
+}

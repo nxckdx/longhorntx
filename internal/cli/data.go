@@ -306,7 +306,7 @@ func targetsCmd(g *globals) *cobra.Command {
 					}
 				}
 				fmt.Fprintf(w, "%s\t%s\t%v\t%s\t%s\t%s\n", t.Name, dash(t.Spec.BackupTargetURL), t.Status.Available,
-					dash(format.Age(t.Status.LastSyncedAt, now)), dash(t.Spec.PollInterval), dash(msg))
+					dash(format.Age(t.Status.LastSyncedAt, now)), dash(format.Interval(t.Spec.PollInterval)), dash(msg))
 			}
 			return w.Flush()
 		},

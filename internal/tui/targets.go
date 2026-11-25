@@ -81,7 +81,7 @@ func (m *model) targetRows() []row {
 		}
 		t := t
 		rows = append(rows, row{
-			cells: []string{t.Name, dash(t.Spec.BackupTargetURL), avail, dash(t.Spec.CredentialSecret), dash(t.Spec.PollInterval),
+			cells: []string{t.Name, dash(t.Spec.BackupTargetURL), avail, dash(t.Spec.CredentialSecret), dash(format.Interval(t.Spec.PollInterval)),
 				dash(format.Age(t.Status.LastSyncedAt, now)), fmt.Sprint(users), dash(managed), fg(cWarn, targetMessage(t))},
 			ref: t,
 			open: func() tea.Cmd {

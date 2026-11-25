@@ -26,6 +26,7 @@ in
       targetNamespace = "longhorn-system";
       createNamespace = true;
       valuesContent = builtins.toJSON {
+        defaultBackupStore.backupTarget = "nfs://10.77.0.11:/export/backups";
         persistence.defaultClassReplicaCount = 2;
         defaultSettings.defaultReplicaCount = 2;
         preUpgradeChecker.jobEnabled = false;

@@ -74,6 +74,15 @@ let
           manifests = lib.mkIf (n == 1) (import ./manifests.nix);
         };
 
+        # backup target for Longhorn: nfs://10.77.0.11:/export/backups
+        services.nfs.server = lib.mkIf (n == 1) {
+          enable = true;
+          exports = "/export/backups 10.77.0.0/24(rw,sync,no_subtree_check,no_root_squash,fsid=1)";
+        };
+        systemd.tmpfiles.settings.lab-backups = lib.mkIf (n == 1) {
+          "/export/backups".d = { mode = "0777"; };
+        };
+
         # kubeconfig for the host: API forwarded to 127.0.0.1:16443
         systemd.services.lab-kubeconfig = lib.mkIf (n == 1) {
           wantedBy = [ "multi-user.target" ];

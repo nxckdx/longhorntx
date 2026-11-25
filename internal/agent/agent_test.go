@@ -2,6 +2,7 @@ package agent_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -162,3 +163,112 @@ func TestDetectByLabel(t *testing.T) {
 }
 
 var gvrLease = schema.GroupVersionResource{Group: "coordination.k8s.io", Version: "v1", Resource: "leases"}
+
+// A Switch restores a backup and points the PVC to it, in the agent.
+func TestAgentSwitchFromBackup(t *testing.T) {
+	ctx, c, _ := setup(t)
+	// the requester policy comes with the agent's manifests
+	vap := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "admissionregistration.k8s.io/v1",
+		"kind": "ValidatingAdmissionPolicy", "metadata": map[string]any{"name": agent.RequesterPolicy}}}
+	if _, err := c.Dynamic().Resource(gvrVAPt).Create(ctx, vap, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	// a PVC with a completed backup
+	vols, _ := c.Volumes(ctx)
+	var pvc, backup string
+	for _, v := range vols {
+		if v.BoundPVC() == "" {
+			continue
+		}
+		if b, _ := c.Backups(ctx, v.Name); longhorn.LatestBackup(b) != nil {
+			pvc, backup = v.BoundPVC(), longhorn.LatestBackup(b).Name
+			break
+		}
+	}
+	if pvc == "" {
+		t.Fatal("no demo PVC with a backup")
+	}
+	ns, name, _ := strings.Cut(pvc, "/")
+	sw, err := agent.RequestSwitch(ctx, c, ns, agent.SwitchSpec{PVC: name, FromBackup: backup, Wait: "30s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	s, err := agent.FollowSwitch(fctx, c, ns, sw, t.Logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Status.Phase != agent.SwitchDone {
+		t.Fatalf("phase %s: %s", s.Status.Phase, s.Status.Message)
+	}
+	for _, v := range mustVolumes(t, ctx, c) {
+		if v.BoundPVC() == pvc && v.Name != s.Status.TargetVolume {
+			t.Errorf("PVC still on %s, want %s", v.Name, s.Status.TargetVolume)
+		}
+	}
+	// the same backup again: the first restore holds changes now, so a new
+	// volume (…-2) is restored instead of taking it
+	sw2, err := agent.RequestSwitch(ctx, c, ns, agent.SwitchSpec{PVC: name, FromBackup: backup, Wait: "30s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(1100 * time.Millisecond) // distinct Switch names (seconds)
+	s2, err := agent.FollowSwitch(fctx, c, ns, sw2, t.Logf)
+	if err != nil || s2.Status.Phase != agent.SwitchDone || !strings.HasSuffix(s2.Status.TargetVolume, "-restore-"+time.Now().Format("0102")+"-2") {
+		t.Fatalf("second switch: %v %s %s → %s", err, s2.Status.Phase, s2.Status.Message, s2.Status.TargetVolume)
+	}
+}
+
+var gvrVAPt = schema.GroupVersionResource{Group: "admissionregistration.k8s.io", Version: "v1", Resource: "validatingadmissionpolicies"}
+
+// Without the requester policy requestedBy could be forged: refused.
+func TestAgentSwitchNeedsPolicy(t *testing.T) {
+	ctx, c, pvcs := setup(t)
+	ns, name, _ := strings.Cut(pvcs[0], "/")
+	sw, err := agent.RequestSwitch(ctx, c, ns, agent.SwitchSpec{PVC: name, ToVolume: "whatever"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	s, err := agent.FollowSwitch(fctx, c, ns, sw, t.Logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Status.Phase != agent.SwitchFailed || !strings.Contains(s.Status.Message, agent.RequesterPolicy) {
+		t.Fatalf("%s: %s", s.Status.Phase, s.Status.Message)
+	}
+}
+
+// A volume that happens to have the restore's name is not taken.
+func TestAgentSwitchNameTaken(t *testing.T) {
+	ctx, c, _ := setup(t)
+	vap := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "admissionregistration.k8s.io/v1",
+		"kind": "ValidatingAdmissionPolicy", "metadata": map[string]any{"name": agent.RequesterPolicy}}}
+	_, _ = c.Dynamic().Resource(gvrVAPt).Create(ctx, vap, metav1.CreateOptions{})
+	vols, _ := c.Volumes(ctx)
+	var pvc, backup, other string
+	for _, v := range vols {
+		if b, _ := c.Backups(ctx, v.Name); v.BoundPVC() != "" && longhorn.LatestBackup(b) != nil && pvc == "" {
+			pvc, backup = v.BoundPVC(), longhorn.LatestBackup(b).Name
+		} else if other == "" {
+			other = v.Name
+		}
+	}
+	ns, name, _ := strings.Cut(pvc, "/")
+	// spec.volumeName points at an unrelated, existing volume
+	sw, err := agent.RequestSwitch(ctx, c, ns, agent.SwitchSpec{PVC: name, FromBackup: backup, VolumeName: other})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	s, err := agent.FollowSwitch(fctx, c, ns, sw, t.Logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Status.Phase != agent.SwitchFailed || !strings.Contains(s.Status.Message, "give another spec.volumeName") {
+		t.Fatalf("%s: %s", s.Status.Phase, s.Status.Message)
+	}
+}

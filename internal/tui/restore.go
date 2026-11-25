@@ -309,6 +309,6 @@ func (m *model) planRestoreSwitch(c *longhorn.Client, p *longhorn.RestorePlan, s
 		return err
 	}
 	acts[0].Warnings = nil
-	m.confirmSwitch(sw, acts[0])
+	m.confirmSwitch(sw, acts[0], switchSrc{backup: p.Backup.Name, replicas: p.Spec.Replicas})
 	return errFormDone
 }

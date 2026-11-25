@@ -21,8 +21,10 @@ and the workflow pushes the Helm chart `oci://ghcr.io/nxckdx/charts/lhtx-agent`.
 CI runs gofmt, vet, tests, `helm lint` and the Nix build on every push and pull
 request.
 
-Merge feature branches with a merge commit or "rebase and merge", not
-squash: release-please builds the changelog from the individual commits.
+Pushing a new branch opens a pull request to `main` by itself (workflow
+`auto-pr`, which also runs the CI for it). Merge it with a merge commit or
+"rebase and merge", not squash: release-please builds the changelog from the
+individual commits.
 
 ## Local test cluster (lhtx-lab)
 

@@ -77,6 +77,10 @@ type VolumeSpec struct {
 	BackupTargetName string   `json:"backupTargetName"`
 	MigrationNodeID  string   `json:"migrationNodeID"`
 	Image            string   `json:"image"` // desired engine image
+	// FromBackup / DataSource: a restore (backup URL) or clone
+	// ("vol://X", "snap://X/S") the volume was created from
+	FromBackup string `json:"fromBackup"`
+	DataSource string `json:"dataSource"`
 }
 
 type VolumeStatus struct {

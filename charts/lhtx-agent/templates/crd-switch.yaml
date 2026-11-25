@@ -1,0 +1,89 @@
+{{- if .Values.crds.install }}
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    helm.sh/resource-policy: keep
+  name: switches.lhtx.io
+  labels:
+    app.kubernetes.io/name: lhtx-agent
+spec:
+  group: lhtx.io
+  scope: Namespaced
+  names:
+    kind: Switch
+    listKind: SwitchList
+    plural: switches
+    singular: switch
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: PVC
+          type: string
+          jsonPath: .spec.pvc
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Target
+          type: string
+          jsonPath: .status.targetVolume
+        - name: By
+          type: string
+          jsonPath: .spec.requestedBy
+          priority: 1
+        - name: Message
+          type: string
+          jsonPath: .status.message
+          priority: 1
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: [spec]
+          properties:
+            spec:
+              type: object
+              required: [pvc, requestedBy]
+              x-kubernetes-validations:
+                - rule: self == oldSelf
+                  message: a Switch cannot be changed – create a new one
+                - rule: has(self.toVolume) != has(self.fromBackup)
+                  message: give either toVolume or fromBackup
+              properties:
+                pvc:
+                  description: The PVC to switch, in this namespace.
+                  type: string
+                  maxLength: 253
+                toVolume:
+                  description: An existing Longhorn volume (restored, cloned, or the PVC's old one).
+                  type: string
+                  maxLength: 63
+                fromBackup:
+                  description: A Longhorn Backup to restore into a new volume first.
+                  type: string
+                  maxLength: 63
+                volumeName:
+                  description: Name of the restored volume (fromBackup).
+                  type: string
+                  maxLength: 40
+                replicas:
+                  type: integer
+                  minimum: 1
+                  maximum: 20
+                wait:
+                  type: string
+                  pattern: '^([0-9]+(\.[0-9]+)?(ms|s|m|h))+$'
+                requestedBy:
+                  description: Who asks – checked against the real user by the admission policy lhtx-switch-requester.
+                  type: string
+                requestedGroups:
+                  type: array
+                  items:
+                    type: string
+            status:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+{{- end }}

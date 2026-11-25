@@ -17,6 +17,7 @@ import (
 func restoreCmd(g *globals) *cobra.Command {
 	var name, pvc, sc, fs string
 	var keys keyFlags
+	var local bool
 	var replicas int
 	var doSwitch bool
 	var wait time.Duration
@@ -94,7 +95,7 @@ The old volume is kept for a rollback.
 				if pvc != "" {
 					return fmt.Errorf("--switch re-creates the original PVC: leave out --pvc")
 				}
-				return g.restoreAndSwitch(cmd, c, p, wait)
+				return g.restoreAndSwitch(cmd, c, p, wait, local)
 			}
 			switch {
 			case pvc == "auto":
@@ -126,6 +127,7 @@ The old volume is kept for a rollback.
 	f.StringVar(&sc, "storage-class", "", "StorageClass of PV/PVC (default: Longhorn's static class)")
 	f.StringVar(&fs, "fs", "", "filesystem of the PV (default ext4)")
 	keys.register(f)
+	f.BoolVar(&local, "local", false, "with --switch: run here even if an lhtx agent could do it")
 	f.BoolVar(&doSwitch, "switch", false, "then switch the original PVC to the restored volume (its pods are frozen meanwhile)")
 	f.DurationVar(&wait, "wait", 10*time.Minute, "with --switch: how long to wait for pods to stop / the PVC to bind")
 	return cmd
@@ -133,7 +135,7 @@ The old volume is kept for a rollback.
 
 // restoreAndSwitch plans the switch before anything is created, so blockers
 // show up first; then restore + switch run after one confirmation.
-func (g *globals) restoreAndSwitch(cmd *cobra.Command, c *longhorn.Client, p *longhorn.RestorePlan, wait time.Duration) error {
+func (g *globals) restoreAndSwitch(cmd *cobra.Command, c *longhorn.Client, p *longhorn.RestorePlan, wait time.Duration, local bool, target ...string) error {
 	ctx := cmd.Context()
 	src := ""
 	if v, err := c.Volume(ctx, p.Backup.Volume()); err == nil {
@@ -141,6 +143,9 @@ func (g *globals) restoreAndSwitch(cmd *cobra.Command, c *longhorn.Client, p *lo
 		if !cmd.Flags().Changed("replicas") {
 			p.Spec.Replicas = v.Spec.NumberOfReplicas // like the volume it replaces
 		}
+	}
+	if len(target) == 1 {
+		src = target[0] // lhtx switch NS/PVC --from-backup
 	}
 	if src == "" {
 		return fmt.Errorf("the volume of this backup has no PVC any more – nothing to switch; use --pvc to create a new one")
@@ -157,7 +162,7 @@ func (g *globals) restoreAndSwitch(cmd *cobra.Command, c *longhorn.Client, p *lo
 	// the restore-only hints (new PVC, original untouched) do not apply here
 	acts[0].Warnings = []string{fmt.Sprintf("restores %s of backup %s; the PVC then uses the restored data – changes since that backup are not in it",
 		humanSize(int64(p.Backup.Status.Size)), p.Backup.Name)}
-	return g.runSwitch(ctx, c, sw, acts[0], wait)
+	return g.runSwitch(ctx, c, sw, acts[0], wait, local, switchTarget{backup: p.Backup.Name, replicas: p.Spec.Replicas})
 }
 
 // keyFlags choose how an encrypted source's key gets to the new PV.

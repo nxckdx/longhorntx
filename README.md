@@ -49,8 +49,9 @@ write actions are not tested.
   confirmed run, with rollback and the way back – [restore and switch](docs/restore-switch.md)
 - **Encrypted volumes**: the key goes along with restores, clones, switches
   and migrations, whatever manages the Secret – [encryption](docs/encryption.md)
-- **Optional in-cluster agent** (Helm chart) that carries freezes out, so
-  they do not depend on your laptop – [agent](docs/agent.md)
+- **Optional in-cluster agent** (Helm chart) that carries freezes and
+  switches out, so they do not depend on your laptop – and lets namespace
+  users switch their own PVCs safely – [agent](docs/agent.md)
 - **Low traffic** by design: watches where they are cheap, polling where
   they are not, a traffic budget per context – [traffic](docs/traffic.md)
 - Settings per kubeconfig context, themes – [configuration](docs/configuration.md)
@@ -134,17 +135,15 @@ parses flags like `--context`.
 
 ## Documentation
 
-| | |
-|---|---|
-| [usage](docs/usage.md) | commands, TUI keys, health check, drain check, diagnostics |
-| [configuration](docs/configuration.md) | config file per context, themes, traffic budget |
-| [write actions](docs/write-actions.md) | write mode, dry runs, every change and how it is made |
-| [freeze](docs/freeze.md) | freeze for maintenance, hooks, CloudNativePG |
-| [restore and switch](docs/restore-switch.md) | a backup under a running app's PVC, and back |
-| [encrypted volumes](docs/encryption.md) | keys with restore, clone, switch and migration |
-| [agent](docs/agent.md) | the optional in-cluster agent, Helm chart, RBAC |
-| [traffic](docs/traffic.md) | measurements and how lhtx keeps the traffic low |
-| [development](docs/development.md) | build, test lab, releases, layout, data model, roadmap |
+- [Usage](docs/usage.md) – commands, TUI keys, health check, drain check, diagnostics
+- [Configuration](docs/configuration.md) – config file per context, themes, traffic budget
+- [Write actions](docs/write-actions.md) – write mode, dry runs, every change and how it is made
+- [Freeze](docs/freeze.md) – freeze for maintenance, hooks, CloudNativePG
+- [Restore and switch](docs/restore-switch.md) – a backup under a running app's PVC, and back
+- [Encrypted volumes](docs/encryption.md) – keys with restore, clone, switch and migration
+- [Agent](docs/agent.md) – the optional in-cluster agent, Helm chart, RBAC
+- [Traffic](docs/traffic.md) – measurements and how lhtx keeps the traffic low
+- [Development](docs/development.md) – build, test lab, releases, layout, data model, roadmap
 
 ## License
 

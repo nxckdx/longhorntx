@@ -106,6 +106,9 @@ func (m *model) overviewCell(name string) string {
 	if s.Rebuilding > 0 {
 		parts = append(parts, fg(cInfo, fmt.Sprintf("%d rebuilding", s.Rebuilding)))
 	}
+	if s.Agent != "" {
+		parts = append(parts, "agent")
+	}
 	out := st + " " + sDim.Render(s.Version) + "  " + strings.Join(parts, " · ")
 	if s.Top != "" {
 		out += "  " + sDim.Render(s.Top)

@@ -30,7 +30,7 @@ func TestManifests(t *testing.T) {
 		}
 		kinds[o.Kind]++
 	}
-	for k, n := range map[string]int{"CustomResourceDefinition": 1, "ServiceAccount": 1, "ClusterRole": 2,
+	for k, n := range map[string]int{"CustomResourceDefinition": 2, "ServiceAccount": 1, "ClusterRole": 3, "ValidatingAdmissionPolicy": 1, "ValidatingAdmissionPolicyBinding": 1,
 		"ClusterRoleBinding": 1, "Role": 2, "RoleBinding": 2, "Deployment": 1} {
 		if kinds[k] != n {
 			t.Errorf("%d %s, want %d", kinds[k], k, n)
@@ -54,5 +54,20 @@ func TestChartCRD(t *testing.T) {
 	want := crd[strings.Index(crd, "apiVersion:"):]
 	if chart != want {
 		t.Error("charts/lhtx-agent/templates/crd.yaml differs from deploy/crd.yaml – copy it over")
+	}
+}
+
+func TestChartSwitchCRD(t *testing.T) {
+	b, err := os.ReadFile("../charts/lhtx-agent/templates/crd-switch.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	chart := strings.Replace(string(b), "  annotations:\n    helm.sh/resource-policy: keep\n", "", 1)
+	chart = strings.TrimPrefix(chart, "{{- if .Values.crds.install }}\n")
+	chart = strings.TrimSuffix(chart, "{{- end }}\n")
+	crdDoc := strings.SplitN(switchRes, "\n---\n", 2)[0]
+	want := crdDoc[strings.Index(crdDoc, "apiVersion:"):] + "\n"
+	if chart != want {
+		t.Error("charts/lhtx-agent/templates/crd-switch.yaml differs from the CRD in deploy/switch.yaml")
 	}
 }

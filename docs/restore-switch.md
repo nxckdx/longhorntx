@@ -25,6 +25,10 @@ warns about unfinished ones). A CloudNativePG instance can be switched, but
 lhtx warns: restoring one instance's PVC does not restore the database
 consistently – prefer CNPG's own recovery. `--dry-run` shows the plan.
 
+`lhtx switch NS/PVC --from-backup BACKUP` is the same as `restore --switch`.
+With the [lhtx agent](agent.md) in the cluster the switch runs there – it
+continues after a restart, and namespace users may switch their own PVCs.
+
 A restore or clone into a **new** volume (+ PV/PVC) is described in
 [write-actions.md](write-actions.md); encrypted volumes in
 [encryption.md](encryption.md).

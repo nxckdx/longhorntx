@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/nxckdx/longhorntx/internal/agent"
 	"github.com/nxckdx/longhorntx/internal/longhorn"
 	"github.com/nxckdx/longhorntx/internal/switchover"
 )
@@ -44,7 +45,13 @@ type switchDoneMsg struct {
 }
 
 // confirmSwitch shows the plan as a confirm dialog; Y starts it.
-func (m *model) confirmSwitch(p *switchover.Plan, restore *longhorn.Action) {
+// switchSrc: what the agent needs for a restore + switch.
+type switchSrc struct {
+	backup   string
+	replicas int
+}
+
+func (m *model) confirmSwitch(p *switchover.Plan, restore *longhorn.Action, src switchSrc) {
 	var lines []string
 	n := 1
 	if restore != nil {
@@ -70,15 +77,37 @@ func (m *model) confirmSwitch(p *switchover.Plan, restore *longhorn.Action) {
 			m.setFlash("the switch is not possible: "+p.Blockers[0], true)
 			return nil
 		}
-		return m.startSwitch(p, restore)
+		return m.startSwitch(p, restore, src)
 	}}
 }
 
-func (m *model) startSwitch(p *switchover.Plan, restore *longhorn.Action) tea.Cmd {
+func (m *model) startSwitch(p *switchover.Plan, restore *longhorn.Action, src switchSrc) tea.Cmd {
 	c := m.client
 	return m.startRun(fmt.Sprintf("Switching %s → %s", p.PVCRef(), p.NewVolume), p.PVCRef()+" now uses "+p.NewVolume,
-		"x cancel (rolls back until the old PVC is deleted)",
+		"x cancel (rolls back until the old PVC is deleted; with the agent: stops following)",
 		func(ctx context.Context, log func(string, ...any)) error {
+			// an lhtx agent that can do switches carries it out
+			if ag := agent.Detect(ctx, c); ag != nil && agent.SwitchesAvailable(ctx, c, p.Namespace) {
+				spec := agent.SwitchSpec{PVC: p.PVC}
+				if restore != nil {
+					spec.FromBackup, spec.VolumeName, spec.Replicas = src.backup, p.NewVolume, src.replicas
+				} else {
+					spec.ToVolume = p.NewVolume
+				}
+				name, err := agent.RequestSwitch(ctx, c, p.Namespace, spec)
+				if err != nil {
+					return err
+				}
+				log("handed to the lhtx agent %s as Switch %s/%s", ag.Holder, p.Namespace, name)
+				sw, err := agent.FollowSwitch(ctx, c, p.Namespace, name, log)
+				if err != nil {
+					return err
+				}
+				if sw.Status.Phase != agent.SwitchDone {
+					return fmt.Errorf("switch %s: %s", sw.Status.Phase, sw.Status.Message)
+				}
+				return nil
+			}
 			if restore != nil {
 				if err := c.Apply(ctx, restore, longhorn.DryRunNone); err != nil {
 					return err
@@ -240,5 +269,5 @@ func (m *model) onSwitchPlan(msg switchPlanMsg) {
 		return
 	}
 	m.flash = ""
-	m.confirmSwitch(msg.plan, nil)
+	m.confirmSwitch(msg.plan, nil, switchSrc{})
 }

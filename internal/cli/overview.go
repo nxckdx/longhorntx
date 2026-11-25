@@ -130,7 +130,7 @@ func summarizeCluster(ctx context.Context, g *globals, name string) overview.Sum
 
 func printOverview(sums []overview.Summary, wide bool) {
 	w := newTab(os.Stdout)
-	hdr := "CONTEXT\tSTATUS\tLONGHORN\tVOLUMES\tATTACHED\tDEGRADED\tFAULTED\tREBUILDING\tNODES\tFINDINGS"
+	hdr := "CONTEXT\tSTATUS\tLONGHORN\tVOLUMES\tATTACHED\tDEGRADED\tFAULTED\tREBUILDING\tNODES\tAGENT\tFINDINGS"
 	if wide {
 		hdr += "\tTRAFFIC\tTOOK"
 	}
@@ -152,8 +152,15 @@ func printOverview(sums []overview.Summary, wide bool) {
 		if s.Critical+s.Warnings > 0 {
 			findings = fmt.Sprintf("%d crit, %d warn – %s", s.Critical, s.Warnings, s.Top)
 		}
-		line := fmt.Sprintf("%s\t%s\t%s\t%d\t%d\t%d\t%d\t%d\t%d/%d\t%s", s.Context, status, dash(s.Version),
-			s.Volumes, s.Attached, s.Degraded, s.Faulted, s.Rebuilding, s.NodesReady, s.Nodes, findings)
+		ag := "-"
+		if s.Agent != "" {
+			ag = "yes"
+			if wide {
+				ag = s.Agent
+			}
+		}
+		line := fmt.Sprintf("%s\t%s\t%s\t%d\t%d\t%d\t%d\t%d\t%d/%d\t%s\t%s", s.Context, status, dash(s.Version),
+			s.Volumes, s.Attached, s.Degraded, s.Faulted, s.Rebuilding, s.NodesReady, s.Nodes, ag, findings)
 		if wide {
 			line += fmt.Sprintf("\t%s\t%s", format.Bytes(s.Traffic), s.Took)
 		}

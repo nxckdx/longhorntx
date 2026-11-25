@@ -114,3 +114,74 @@ func secretRefsFor(r SecretRef) map[string]any {
 	}
 	return out
 }
+
+// EncryptionChecks finds encrypted volumes that could not be attached: their
+// PV names no key Secret, or the Secret is gone. Costs nothing without
+// encrypted volumes; else one LIST of PVs and one metadata LIST of Secrets
+// (names only) per namespace involved.
+func (c *Client) EncryptionChecks(ctx context.Context, vols []*Volume) []Finding {
+	byPV := map[string]*Volume{}
+	for _, v := range vols {
+		if v.Spec.Encrypted && v.Status.KubernetesStatus.PVName != "" {
+			byPV[v.Status.KubernetesStatus.PVName] = v
+		}
+	}
+	if len(byPV) == 0 {
+		return nil
+	}
+	pvs, err := c.dyn.Resource(GVRPV).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil
+	}
+	var out []Finding
+	need := map[SecretRef][]*Volume{}
+	for i := range pvs.Items {
+		v := byPV[pvs.Items[i].GetName()]
+		if v == nil {
+			continue
+		}
+		m, ok, _ := unstructured.NestedStringMap(pvs.Items[i].Object, "spec", "csi", "nodeStageSecretRef")
+		if !ok || m["name"] == "" {
+			out = append(out, Finding{Severity: SevWarning, Check: "encryption", Object: volLabel(v),
+				Message: "encrypted, but its PV " + pvs.Items[i].GetName() + " names no key Secret",
+				Hint:    "the volume cannot be attached; add nodeStageSecretRef/nodePublishSecretRef to the PV"})
+			continue
+		}
+		r := SecretRef{Namespace: m["namespace"], Name: m["name"]}
+		need[r] = append(need[r], v)
+	}
+	have := map[SecretRef]bool{}
+	listed := map[string]bool{}
+	for r := range need {
+		if listed[r.Namespace] {
+			continue
+		}
+		listed[r.Namespace] = true
+		if c.meta == nil {
+			if m, err := metadata.NewForConfig(c.Cluster.Config); err == nil {
+				c.meta = m
+			}
+		}
+		if c.meta == nil {
+			return out
+		}
+		l, err := c.meta.Resource(gvrSecret).Namespace(r.Namespace).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return out // not allowed to list: no finding rather than a wrong one
+		}
+		for _, it := range l.Items {
+			have[SecretRef{Namespace: r.Namespace, Name: it.Name}] = true
+		}
+	}
+	for r, vs := range need {
+		if have[r] {
+			continue
+		}
+		for _, v := range vs {
+			out = append(out, Finding{Severity: SevCritical, Check: "encryption", Object: volLabel(v),
+				Message: "its key Secret " + r.String() + " is missing – the volume cannot be attached",
+				Hint:    "restore the Secret from your secret backup; without the key the data (and its backups) cannot be read"})
+		}
+	}
+	return out
+}

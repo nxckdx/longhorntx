@@ -213,14 +213,15 @@ func Settled(f *Freeze) bool {
 // Unfreeze ends a freeze: one of the agent's by deleting its Freeze (the
 // agent does the work, lhtx follows with agentLog); without a live agent –
 // or for a local freeze – lhtx unfreezes itself (and removes the Freeze).
-func Unfreeze(ctx context.Context, c *longhorn.Client, fr switchover.Freeze, wait time.Duration, log, agentLog func(string, ...any)) error {
+func Unfreeze(ctx context.Context, c *longhorn.Client, fr switchover.Freeze, o switchover.FreezeOptions, log, agentLog func(string, ...any)) error {
+	o.Log = log
 	if fr.Request == "" {
-		return switchover.Unfreeze(ctx, c, fr, switchover.FreezeOptions{Wait: wait, Log: log})
+		return switchover.Unfreeze(ctx, c, fr, o)
 	}
 	ag := Detect(ctx, c)
 	if ag == nil {
 		log("no lhtx agent running – unfreezing here")
-		if err := switchover.Unfreeze(ctx, c, fr, switchover.FreezeOptions{Wait: wait, Log: log}); err != nil {
+		if err := switchover.Unfreeze(ctx, c, fr, o); err != nil {
 			return err
 		}
 		return Forget(ctx, c, fr.Request)

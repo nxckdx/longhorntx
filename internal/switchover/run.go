@@ -150,6 +150,11 @@ func (r *runner) run() error {
 		return r.stuck(err)
 	}
 	if err := r.guardKey(); err != nil {
+		var ke keyError
+		if errors.As(err, &ke) {
+			r.freeze = nil // stays frozen on purpose
+			return err
+		}
 		return r.stuck(err)
 	}
 	unfreezeErr := Unfreeze(r.ctx, r.c, *f, fo)
@@ -220,10 +225,15 @@ func (r *runner) guardKey() error {
 				return fmt.Errorf("the key Secret %s now holds ANOTHER key and keeping a copy of the old one failed: %v – "+
 					"the old key is lost unless your secret source keeps versions; the volume needs the old key", k, berr)
 			}
-			return fmt.Errorf("the key Secret %s now holds ANOTHER key (its manager generated a new one when the PVC was re-created) – "+
-				"the volume can only be opened with the old key, so the pods were not started. The old key is in Secret %s/%s: "+
-				"put it back into the source your manager reads from, check that %s holds it again, then lhtx unfreeze",
-				k, k.Namespace, name, k)
+			return keyError{fmt.Errorf("the key Secret %s now holds ANOTHER key – whatever manages it generated a new one when the "+
+				"PVC was re-created. The volume opens only with the old key, so its pods were not started (%s stays frozen; a wrong "+
+				"key does not harm the data, the volume just does not open).\n"+
+				"The old key is in Secret %s/%s. Put it back:\n"+
+				"  - the manager reads it from a source (Vault, a cloud KMS, Git …): restore the old value there and let it sync\n"+
+				"  - the manager generates keys itself (no source): detach the Secret from it (e.g. delete the managing object with\n"+
+				"    --cascade=orphan, or stop the policy that re-creates it) and write the old key into %s\n"+
+				"Then: lhtx --rw unfreeze %s (it checks the key against the copy first) and delete the copy",
+				k, r.p.PVCRef(), k.Namespace, name, k, r.freeze.Name)}
 		case time.Now().After(settle):
 			r.step("key Secret %s unchanged", k)
 			return nil
@@ -237,6 +247,12 @@ func (r *runner) guardKey() error {
 		}
 	}
 }
+
+// keyError: the switch stopped because the key changed – the PVC stays
+// frozen and the message says how to recover (no generic "stuck" text).
+type keyError struct{ error }
+
+func (e keyError) Unwrap() error { return e.error }
 
 // backupKey writes the old key into a Secret of its own: no owner, so no
 // manager touches it. lhtx doctor reminds to remove it.

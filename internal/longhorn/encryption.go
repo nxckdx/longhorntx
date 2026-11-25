@@ -165,7 +165,7 @@ func (c *Client) EncryptionChecks(ctx context.Context, vols []*Volume) []Finding
 		}
 		r := SecretRef{Namespace: m["namespace"], Name: m["name"]}
 		need[r] = append(need[r], v)
-		if ns := v.Status.KubernetesStatus.Namespace; ns != "" && ns != r.Namespace {
+		if ns := v.Status.KubernetesStatus.Namespace; ns != "" && ns != r.Namespace && r.Namespace != c.Namespace && !sharedKey(r, byPV, pvs.Items) {
 			out = append(out, Finding{Severity: SevInfo, Check: "encryption", Object: volLabel(v),
 				Message: "uses the key Secret " + r.String() + " from another namespace",
 				Hint:    "deleting that namespace or Secret makes the volume unusable; copy the key next to the PVC (lhtx restore/clone --copy-secret)"})
@@ -227,4 +227,20 @@ func (c *Client) keyBackupChecks(ctx context.Context) []Finding {
 			Hint:    "make sure the key Secret holds this key again (put it back into its source), then delete this Secret"})
 	}
 	return out
+}
+
+// sharedKey: more than one volume uses the Secret – a key for many volumes
+// (one per StorageClass), not a per-PVC key borrowed from elsewhere.
+func sharedKey(r SecretRef, byPV map[string]*Volume, pvs []unstructured.Unstructured) bool {
+	n := 0
+	for i := range pvs {
+		if byPV[pvs[i].GetName()] == nil {
+			continue
+		}
+		m, _, _ := unstructured.NestedStringMap(pvs[i].Object, "spec", "csi", "nodeStageSecretRef")
+		if m["name"] == r.Name && m["namespace"] == r.Namespace {
+			n++
+		}
+	}
+	return n > 1
 }

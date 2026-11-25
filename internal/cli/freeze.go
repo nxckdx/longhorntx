@@ -174,7 +174,7 @@ right to create Freeze resources then. --local skips the agent.`,
 		return g.completeNodeDisk(c, nil, s)
 	})
 
-	var uall bool
+	var uall, ignoreKey bool
 	var uwait time.Duration
 	unfreeze := &cobra.Command{
 		Use:   "unfreeze [NAME | --all]",
@@ -222,7 +222,7 @@ right to create Freeze resources then. --local skips the agent.`,
 			start := time.Now()
 			var errs []string
 			for _, fr := range sel {
-				err := agent.Unfreeze(ctx, c, fr, uwait, logger(start), plainLog)
+				err := agent.Unfreeze(ctx, c, fr, switchover.FreezeOptions{Wait: uwait, IgnoreKey: ignoreKey}, logger(start), plainLog)
 				if ctx.Err() != nil {
 					fmt.Println("\nstopped following – the agent goes on (lhtx agent status)")
 					return nil
@@ -238,6 +238,7 @@ right to create Freeze resources then. --local skips the agent.`,
 		},
 	}
 	unfreeze.Flags().BoolVar(&uall, "all", false, "end all freezes")
+	unfreeze.Flags().BoolVar(&ignoreKey, "ignore-key", false, "unfreeze even if a key Secret differs from the copy a switch kept")
 	unfreeze.Flags().DurationVar(&uwait, "wait", 10*time.Minute, "how long to wait for the volumes to be attached again")
 	return []*cobra.Command{freeze, unfreeze}
 }

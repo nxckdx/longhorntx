@@ -3,6 +3,7 @@ package switchover
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -401,6 +402,9 @@ type FreezeOptions struct {
 	Name string
 	// Request: the agent's Freeze resource, stored on the policy.
 	Request string
+	// IgnoreKey: unfreeze even if a key Secret still differs from the copy
+	// a switch kept (see checkKeys).
+	IgnoreKey bool
 }
 
 func (o *FreezeOptions) defaults() {
@@ -728,6 +732,11 @@ func removePolicy(ctx context.Context, dyn dynamic.Interface, name string) error
 func Unfreeze(ctx context.Context, c *longhorn.Client, f Freeze, o FreezeOptions) error {
 	o.defaults()
 	dyn := c.Dynamic()
+	if !o.IgnoreKey {
+		if err := checkKeys(ctx, c, f.PVCs); err != nil {
+			return err
+		}
+	}
 	if err := removePolicy(ctx, dyn, f.Name); err != nil {
 		return fmt.Errorf("remove policy %s: %w", f.Name, err)
 	}
@@ -799,6 +808,47 @@ func Unfreeze(ctx context.Context, c *longhorn.Client, f Freeze, o FreezeOptions
 		return err
 	}
 	return runPostHooks(ctx, c, f.PostHooks, o)
+}
+
+// checkKeys: a switch that saw a key Secret replaced kept the old key in a
+// copy (label lhtx.io/key-backup) and left the PVC frozen. Before pods may
+// start, the key Secret must hold that key again – else they would only
+// fail to mount. Skipped if the Secrets cannot be read.
+func checkKeys(ctx context.Context, c *longhorn.Client, pvcs []string) error {
+	want := map[string]bool{}
+	nss := map[string]bool{}
+	for _, x := range pvcs {
+		want[x] = true
+		ns, _, _ := strings.Cut(x, "/")
+		nss[ns] = true
+	}
+	for ns := range nss {
+		l, err := c.Dynamic().Resource(gvrSecret).Namespace(ns).List(ctx, metav1.ListOptions{LabelSelector: longhorn.LabelKeyBackup + "=true"})
+		if err != nil {
+			continue
+		}
+		for i := range l.Items {
+			b := &l.Items[i]
+			a := b.GetAnnotations()
+			if !want[a["lhtx.io/pvc"]] {
+				continue
+			}
+			kns, kname, _ := strings.Cut(a["lhtx.io/key-of"], "/")
+			old, err := longhorn.Fingerprint(b)
+			if err != nil {
+				continue
+			}
+			cur, err := c.KeyFingerprint(ctx, longhorn.SecretRef{Namespace: kns, Name: kname})
+			if err != nil && !errors.Is(err, longhorn.ErrNoSecret) {
+				continue
+			}
+			if cur != old {
+				return fmt.Errorf("the key Secret %s does not hold the key kept in %s/%s (the volume was encrypted with that one) – "+
+					"put it back first, or the pods only fail to mount (--ignore-key to unfreeze anyway)", a["lhtx.io/key-of"], ns, b.GetName())
+			}
+		}
+	}
+	return nil
 }
 
 // nudge touches the owner's metadata (not its spec): controllers and most

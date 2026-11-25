@@ -262,7 +262,7 @@ func (m *model) confirmUnfreeze(name string) {
 		}
 		return m.startRun("Unfreezing "+fr.Name, fr.Name+" ended", stop,
 			func(ctx context.Context, log func(string, ...any)) error {
-				return agent.Unfreeze(ctx, c, fr, 0, log, log)
+				return agent.Unfreeze(ctx, c, fr, switchover.FreezeOptions{}, log, log)
 			})
 	}}
 }

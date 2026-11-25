@@ -178,12 +178,17 @@ func world(extra ...runtime.Object) *cluster {
 		}()
 		return false, nil, nil
 	})
-	dyn.PrependReactor("delete", "persistentvolumeclaims", func(k8stesting.Action) (bool, runtime.Object, error) {
+	dyn.PrependReactor("delete", "persistentvolumeclaims", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		// the PV of the deleted claim (not one bound to a re-created claim later)
+		bound := ""
+		if o, err := dyn.Tracker().Get(gvrPVC, a.GetNamespace(), a.(k8stesting.DeleteActionImpl).GetName()); err == nil {
+			bound, _, _ = unstructured.NestedString(o.(*unstructured.Unstructured).Object, "spec", "volumeName")
+		}
 		go func() { // the PV controller releases the PV
 			time.Sleep(5 * time.Millisecond)
 			pvs, _ := dyn.Resource(gvrPV).List(ctx, metav1.ListOptions{})
 			for _, pv := range pvs.Items {
-				if n, _, _ := unstructured.NestedString(pv.Object, "spec", "claimRef", "name"); n == "data" {
+				if n, _, _ := unstructured.NestedString(pv.Object, "spec", "claimRef", "name"); n == "data" && pv.GetName() == bound {
 					if ph, _, _ := unstructured.NestedString(pv.Object, "status", "phase"); ph == "Bound" || ph == "" {
 						_ = unstructured.SetNestedField(pv.Object, "Released", "status", "phase")
 						_, _ = dyn.Resource(gvrPV).Update(ctx, &pv, metav1.UpdateOptions{})
@@ -698,5 +703,15 @@ func TestSwitchKeyGuard(t *testing.T) {
 	old, _ := longhorn.Fingerprint(keySecret("old-key"))
 	if fp, _ := longhorn.Fingerprint(&l.Items[0]); fp != old {
 		t.Error("the backup does not hold the old key")
+	}
+	// unfreeze refuses while the key Secret still holds the new key …
+	fs, _ := ActiveFreezes(ctx, k.dyn)
+	if err := Unfreeze(ctx, k.c, fs[0], fastF); err == nil || !strings.Contains(err.Error(), "does not hold the key") {
+		t.Fatalf("unfreeze with the wrong key: %v", err)
+	}
+	// … and goes on once the old key is back
+	_, _ = k.dyn.Resource(gvrSecret).Namespace("app").Update(ctx, keySecret("old-key"), metav1.UpdateOptions{})
+	if err := Unfreeze(ctx, k.c, fs[0], fastF); err != nil {
+		t.Fatalf("unfreeze with the old key back: %v", err)
 	}
 }

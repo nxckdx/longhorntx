@@ -94,7 +94,18 @@
             };
 
           default = lhtx;
+        } // nixpkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
+          # local test cluster: nix run .#lab -- start (see nix/lab)
+          lab = (import ./nix/lab { inherit nixpkgs system; lhtx = self.packages.${system}.lhtx; }).script;
         });
+
+      apps = nixpkgs.lib.genAttrs [ "x86_64-linux" "aarch64-linux" ] (system: {
+        lab = {
+          type = "app";
+          program = "${self.packages.${system}.lab}/bin/lhtx-lab";
+          meta.description = "local 3-node k3s + Longhorn cluster in NixOS VMs";
+        };
+      });
 
       # programs.lhtx: package + ~/.config/lhtx/config.yaml (see nix/home-manager.nix)
       homeManagerModules.default = import ./nix/home-manager.nix self;
@@ -112,7 +123,7 @@
               gotools
               kubectl
               pv # traffic measurements, see README
-            ];
+            ] ++ nixpkgs.lib.optional pkgs.stdenv.isLinux self.packages.${system}.lab;
           };
         });
     };

@@ -135,7 +135,7 @@ The old volume is kept for a rollback.
 
 // restoreAndSwitch plans the switch before anything is created, so blockers
 // show up first; then restore + switch run after one confirmation.
-func (g *globals) restoreAndSwitch(cmd *cobra.Command, c *longhorn.Client, p *longhorn.RestorePlan, wait time.Duration, local bool) error {
+func (g *globals) restoreAndSwitch(cmd *cobra.Command, c *longhorn.Client, p *longhorn.RestorePlan, wait time.Duration, local bool, target ...string) error {
 	ctx := cmd.Context()
 	src := ""
 	if v, err := c.Volume(ctx, p.Backup.Volume()); err == nil {
@@ -143,6 +143,9 @@ func (g *globals) restoreAndSwitch(cmd *cobra.Command, c *longhorn.Client, p *lo
 		if !cmd.Flags().Changed("replicas") {
 			p.Spec.Replicas = v.Spec.NumberOfReplicas // like the volume it replaces
 		}
+	}
+	if len(target) == 1 {
+		src = target[0] // lhtx switch NS/PVC --from-backup
 	}
 	if src == "" {
 		return fmt.Errorf("the volume of this backup has no PVC any more – nothing to switch; use --pvc to create a new one")

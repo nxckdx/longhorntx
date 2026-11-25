@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
 	"github.com/nxckdx/longhorntx/internal/agent"
 	"github.com/nxckdx/longhorntx/internal/longhorn"
@@ -15,11 +16,11 @@ import (
 )
 
 func switchCmd(g *globals) *cobra.Command {
-	var to string
+	var to, fromBackup string
 	var wait time.Duration
 	var status, local bool
 	cmd := &cobra.Command{
-		Use:   "switch NAMESPACE/PVC --to-volume VOLUME",
+		Use:   "switch NAMESPACE/PVC --to-volume VOLUME | --from-backup BACKUP",
 		Short: "Point a PVC to another Longhorn volume (restored/cloned) while its apps are frozen (needs --rw)",
 		Long: `Switches a PVC to another Longhorn volume – typically one restored from a
 backup (lhtx restore) – and takes care of everything around it:
@@ -40,7 +41,14 @@ CloudNativePG instances are allowed with a warning (one instance from a
 backup is rarely consistent with the others).
 
 Every step is written to a journal in $XDG_STATE_HOME/lhtx/switch/.
---dry-run shows the plan only.`,
+--dry-run shows the plan only.
+
+With the lhtx agent in the cluster the switch runs there (lhtx follows; it
+continues after the agent restarts). Then people with only namespace rights
+can switch their own PVCs too: bind the ClusterRole lhtx-switch with a
+RoleBinding; the agent checks that they may delete/create the PVC and delete
+its pods and that only the PVC's own data is used (--from-backup: a backup
+of it; --to-volume: a volume it had, or a restore/clone of one).`,
 		Args:              cobra.MaximumNArgs(1),
 		ValidArgsFunction: g.completeVolumes,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -54,14 +62,20 @@ Every step is written to a journal in $XDG_STATE_HOME/lhtx/switch/.
 			if !ok || ns == "" || pvc == "" {
 				return fmt.Errorf("give the PVC as NAMESPACE/NAME")
 			}
-			if to == "" {
-				return fmt.Errorf("--to-volume is required")
+			if (to == "") == (fromBackup == "") {
+				return fmt.Errorf("give --to-volume VOLUME or --from-backup BACKUP")
 			}
 			c, err := g.client()
 			if err != nil {
 				return err
 			}
+			if fromBackup != "" {
+				return g.switchFromBackup(cmd, c, ns, pvc, fromBackup, wait, local)
+			}
 			p, err := switchover.Build(cmd.Context(), c, ns, pvc, to)
+			if apierrors.IsForbidden(err) && !local {
+				return g.switchViaAgentOnly(cmd, c, ns, agent.SwitchSpec{PVC: pvc, ToVolume: to, Wait: wait.String()}, err)
+			}
 			if err != nil {
 				return err
 			}
@@ -69,6 +83,7 @@ Every step is written to a journal in $XDG_STATE_HOME/lhtx/switch/.
 		},
 	}
 	cmd.Flags().StringVar(&to, "to-volume", "", "the Longhorn volume the PVC should use")
+	cmd.Flags().StringVar(&fromBackup, "from-backup", "", "restore this backup into a new volume first (like restore --switch)")
 	cmd.Flags().DurationVar(&wait, "wait", 10*time.Minute, "how long to wait for pods to stop / the PVC to bind")
 	cmd.Flags().BoolVar(&local, "local", false, "run the switch here even if an lhtx agent could do it")
 	cmd.Flags().BoolVar(&status, "status", false, "list the switches of this machine (journals), newest first")
@@ -185,6 +200,67 @@ func (g *globals) runSwitch(ctx context.Context, c *longhorn.Client, p *switchov
 		fmt.Println("journal:", journal)
 	}
 	return err
+}
+
+// switchFromBackup: restore --switch by backup name; without the rights to
+// plan it here (namespace users) the agent does it.
+func (g *globals) switchFromBackup(cmd *cobra.Command, c *longhorn.Client, ns, pvc, backup string, wait time.Duration, local bool) error {
+	ctx := cmd.Context()
+	b, err := c.Backup(ctx, backup)
+	if apierrors.IsForbidden(err) && !local {
+		return g.switchViaAgentOnly(cmd, c, ns, agent.SwitchSpec{PVC: pvc, FromBackup: backup, Wait: wait.String()}, err)
+	}
+	if err != nil {
+		return err
+	}
+	p, err := c.PlanRestore(ctx, b, time.Now())
+	if err != nil {
+		return err
+	}
+	p.Spec.Name = longhorn.RestoreName(ns+"/"+pvc, b.Volume(), time.Now())
+	return g.restoreAndSwitch(cmd, c, p, wait, local, ns+"/"+pvc)
+}
+
+// switchViaAgentOnly hands a switch to the agent without a local plan: the
+// user may switch the PVC (namespace rights) but not read Longhorn.
+func (g *globals) switchViaAgentOnly(cmd *cobra.Command, c *longhorn.Client, ns string, spec agent.SwitchSpec, why error) error {
+	ctx := cmd.Context()
+	ag := agent.Detect(ctx, c)
+	if ag == nil || !agent.SwitchesAvailable(ctx, c, ns) {
+		return fmt.Errorf("%w (without these rights only the lhtx agent can switch it – none found that does switches)", why)
+	}
+	what := "volume " + spec.ToVolume
+	if spec.FromBackup != "" {
+		what = "a restore of backup " + spec.FromBackup
+	}
+	fmt.Printf("Switch PVC %s/%s to %s · %s\n\n", ns, spec.PVC, what, c.Cluster.Context)
+	fmt.Printf("  no preview: you may not read Longhorn (%v)\n", why)
+	fmt.Printf("  the lhtx agent %s plans and runs it: freeze the PVC, re-create it on the new volume, unfreeze\n", ag.Holder)
+	fmt.Println("  it checks that you may delete/create the PVC and delete its pods, and that only this PVC's own data is used")
+	fmt.Println("\n⚠ the apps using the PVC are down from the freeze until the unfreeze at the end")
+	if mode, _ := g.dryRun(); mode != longhorn.DryRunNone {
+		fmt.Println("\n(dry run: nothing changed)")
+		return nil
+	}
+	if err := g.confirm(true, ns+"/"+spec.PVC); err != nil {
+		return err
+	}
+	name, err := agent.RequestSwitch(ctx, c, ns, spec)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("requested Switch %s/%s from the agent\n", ns, name)
+	sw, err := agent.FollowSwitch(ctx, c, ns, name, plainLog)
+	switch {
+	case ctx.Err() != nil:
+		fmt.Printf("\nstopped following – the agent goes on (kubectl -n %s get switch %s)\n", ns, name)
+		return nil
+	case err != nil:
+		return err
+	case sw.Status.Phase != agent.SwitchDone:
+		return fmt.Errorf("switch %s: %s", sw.Status.Phase, sw.Status.Message)
+	}
+	return nil
 }
 
 func switchJournal(p *switchover.Plan) string { return switchover.NewJournalPath(p) }

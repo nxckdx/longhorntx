@@ -30,6 +30,38 @@ type RestoreSpec struct {
 	PVCName      string
 	StorageClass string // for PV/PVC; Longhorn's "static" class by default
 	FSType       string
+	// Encryption of the source (nil: not encrypted). The new volume is
+	// encrypted too and its PV refers to the key Secret.
+	Encryption *Encryption
+}
+
+// encryptionActions makes the new volume encrypted and returns the Secret
+// copy (if one is needed) to run before the PV, plus the PV's secret refs.
+func encryptionFor(s RestoreSpec, vol *Action, exists func(string) bool) (copyAct *Action, refs map[string]any, err error) {
+	e := s.Encryption
+	if e == nil {
+		return nil, nil, nil
+	}
+	vol.Object["spec"].(map[string]any)["encrypted"] = true
+	if s.PVCName == "" {
+		if e.Secret.Name != "" {
+			vol.Warnings = append(vol.Warnings, fmt.Sprintf("encrypted: a PV created later must refer to the key Secret %s (nodeStage/nodePublish/nodeExpandSecretRef)", e.Secret))
+		}
+		return nil, nil, nil
+	}
+	if e.Secret.Name == "" {
+		return nil, nil, fmt.Errorf("the source is encrypted and lhtx cannot tell which Secret holds the key (its PV is gone) – name it: --secret NAMESPACE/NAME")
+	}
+	target, from := keySecretFor(e, s.PVCNamespace, s.PVCName)
+	refs = secretRefsFor(target)
+	vol.Warnings = append(vol.Warnings, fmt.Sprintf("encrypted like the source: the PV refers to the key Secret %s", target))
+	if from != nil && !exists("secret") {
+		copyAct = &Action{Title: fmt.Sprintf("Copy key Secret %s to %s", from, target), Verb: VerbCreate,
+			GVR: gvrSecret, Namespace: target.Namespace, Name: target.Name, CopySecretFrom: from,
+			Lines:   []string{fmt.Sprintf("copy type and data of Secret %s (one Secret per PVC) – the values are not shown", from)},
+			summary: fmt.Sprintf("Secret %s with the key of %s", target, from)}
+	}
+	return copyAct, refs, nil
 }
 
 var volNameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*[a-z0-9]$`)
@@ -98,6 +130,9 @@ func RestoreBackup(b *Backup, bv *BackupVolume, s RestoreSpec, exists func(kind 
 	if size <= 0 {
 		return nil, fmt.Errorf("backup %s does not record the volume size", b.Name)
 	}
+	if b.Encrypted() && s.Encryption == nil {
+		s.Encryption = &Encryption{}
+	}
 	mode := accessModeOf(bv)
 	src := b.Volume()
 	if bv != nil && bv.LastPVC() != "" {
@@ -121,11 +156,18 @@ func RestoreBackup(b *Backup, bv *BackupVolume, s RestoreSpec, exists func(kind 
 		fmt.Sprintf("restores %s (backup of %s from %s) into a new volume; the original is not touched", humanBytes(int64(b.Status.Size)), src, backupAge(b)),
 		"the new volume stays in state \"restoring\" until all data is copied; it cannot be attached before")
 	acts := []*Action{vol}
+	copyAct, refs, err := encryptionFor(s, vol, exists)
+	if err != nil {
+		return nil, err
+	}
 	if s.PVCName == "" {
 		vol.Warnings = append(vol.Warnings, "no PVC: create one later (Longhorn UI \"Create PV/PVC\" or lhtx restore --pvc on a new restore)")
 		return acts, nil
 	}
-	more, err := pvAndPVC(s, size, mode, exists)
+	if copyAct != nil {
+		acts = append(acts, copyAct)
+	}
+	more, err := pvAndPVC(s, size, mode, refs, exists)
 	if err != nil {
 		return nil, err
 	}
@@ -135,7 +177,7 @@ func RestoreBackup(b *Backup, bv *BackupVolume, s RestoreSpec, exists func(kind 
 
 // pvAndPVC builds the PV (volumeHandle = the Longhorn volume) and a PVC
 // bound to it, like the web UI's "Create PV/PVC".
-func pvAndPVC(s RestoreSpec, size int64, mode string, exists func(string) bool) ([]*Action, error) {
+func pvAndPVC(s RestoreSpec, size int64, mode string, secretRefs map[string]any, exists func(string) bool) ([]*Action, error) {
 	if s.PVCNamespace == "" {
 		return nil, fmt.Errorf("PVC needs a namespace (namespace/name)")
 	}
@@ -154,6 +196,16 @@ func pvAndPVC(s RestoreSpec, size int64, mode string, exists func(string) bool) 
 	if mode == "rwx" {
 		k8sMode = "ReadWriteMany"
 	}
+	csi := map[string]any{
+		"driver": "driver.longhorn.io", "fsType": fs, "volumeHandle": s.Name,
+		"volumeAttributes": map[string]any{"numberOfReplicas": strconv.Itoa(s.Replicas), "staleReplicaTimeout": "30"},
+	}
+	if secretRefs != nil {
+		csi["volumeAttributes"].(map[string]any)["encrypted"] = "true"
+		for k, v := range secretRefs {
+			csi[k] = v
+		}
+	}
 	pv := &Action{
 		Title: "Create PersistentVolume " + s.Name, Verb: VerbCreate, GVR: GVRPV, Name: s.Name, ClusterScoped: true,
 		Object: map[string]any{
@@ -165,10 +217,7 @@ func pvAndPVC(s RestoreSpec, size int64, mode string, exists func(string) bool) 
 				"accessModes":                   []any{k8sMode},
 				"persistentVolumeReclaimPolicy": "Retain",
 				"storageClassName":              s.StorageClass,
-				"csi": map[string]any{
-					"driver": "driver.longhorn.io", "fsType": fs, "volumeHandle": s.Name,
-					"volumeAttributes": map[string]any{"numberOfReplicas": strconv.Itoa(s.Replicas), "staleReplicaTimeout": "30"},
-				},
+				"csi":                           csi,
 			},
 		},
 		summary: fmt.Sprintf("PV %s (%s, %s, reclaim Retain)", s.Name, sizeQ, s.StorageClass),
@@ -262,12 +311,21 @@ func (c *Client) PlanRestore(ctx context.Context, b *Backup, now time.Time) (*Re
 			pvc = v.BoundPVC()
 		}
 	}
+	var enc *Encryption
+	if b.Encrypted() {
+		enc = &Encryption{}
+		if v, err := c.Volume(ctx, b.Volume()); err == nil {
+			if e, err := c.VolumeEncryption(ctx, v); err == nil && e != nil {
+				enc = e
+			}
+		}
+	}
 	rc, _ := c.Setting(ctx, "default-replica-count")
 	sc, _ := c.Setting(ctx, "default-longhorn-static-storage-class")
 	if sc == "" {
 		sc = "longhorn-static"
 	}
-	p.Spec = RestoreSpec{Name: RestoreName(pvc, b.Volume(), now), Replicas: DefaultReplicas(rc), StorageClass: sc, FSType: "ext4"}
+	p.Spec = RestoreSpec{Name: RestoreName(pvc, b.Volume(), now), Replicas: DefaultReplicas(rc), StorageClass: sc, FSType: "ext4", Encryption: enc}
 	if ns, _, ok := strings.Cut(pvc, "/"); ok {
 		p.Spec.PVCNamespace = ns
 	}
@@ -301,8 +359,9 @@ func (c *Client) CloneDefaults(ctx context.Context, src *Volume, now time.Time) 
 	if sc == "" {
 		sc = "longhorn-static"
 	}
+	enc, _ := c.VolumeEncryption(ctx, src)
 	return RestoreSpec{Name: CloneName(src, now), Replicas: max(src.Spec.NumberOfReplicas, 1), StorageClass: sc,
-		FSType: "ext4", PVCNamespace: src.Status.KubernetesStatus.Namespace}
+		FSType: "ext4", PVCNamespace: src.Status.KubernetesStatus.Namespace, Encryption: enc}
 }
 
 func (c *Client) existsFn(ctx context.Context, spec RestoreSpec) (func(string) bool, *error) {
@@ -318,6 +377,11 @@ func (c *Client) existsFn(ctx context.Context, spec RestoreSpec) (func(string) b
 			ok, err = c.Exists(ctx, GVRPV, "", p.Spec.Name, true)
 		case "pvc":
 			ok, err = c.Exists(ctx, GVRPVC, p.Spec.PVCNamespace, p.Spec.PVCName, false)
+		case "secret":
+			if e := p.Spec.Encryption; e != nil {
+				t, _ := keySecretFor(e, p.Spec.PVCNamespace, p.Spec.PVCName)
+				ok, err = c.SecretExists(ctx, t)
+			}
 		}
 		if err != nil && lookupErr == nil {
 			lookupErr = fmt.Errorf("checking %s: %w", kind, err)

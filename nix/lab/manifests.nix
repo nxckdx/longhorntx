@@ -81,4 +81,67 @@ in
     }
     (pvc "lab-apps" "spare" "1Gi")
   ];
+
+  # encrypted volumes (dm-crypt with a key from a Kubernetes Secret), both
+  # ways Longhorn documents: one global Secret, or one Secret per PVC
+  crypto.content =
+    let
+      key = value: {
+        CRYPTO_KEY_VALUE = value; # lab only – never a real key
+        CRYPTO_KEY_PROVIDER = "secret";
+        CRYPTO_KEY_CIPHER = "aes-xts-plain64";
+        CRYPTO_KEY_HASH = "sha256";
+        CRYPTO_KEY_SIZE = "256";
+        CRYPTO_PBKDF = "argon2i";
+      };
+      secret = namespace: name: value: {
+        apiVersion = "v1"; kind = "Secret"; type = "Opaque";
+        metadata = { inherit name namespace; };
+        stringData = key value;
+      };
+      sc = name: secretName: secretNamespace: {
+        apiVersion = "storage.k8s.io/v1"; kind = "StorageClass";
+        metadata.name = name;
+        provisioner = "driver.longhorn.io";
+        allowVolumeExpansion = true;
+        reclaimPolicy = "Delete";
+        volumeBindingMode = "Immediate";
+        parameters = {
+          numberOfReplicas = "2";
+          encrypted = "true";
+        } // builtins.listToAttrs (map (k: { name = "csi.storage.k8s.io/${k}-secret-name"; value = secretName; })
+          [ "provisioner" "node-publish" "node-stage" "node-expand" ])
+          // builtins.listToAttrs (map (k: { name = "csi.storage.k8s.io/${k}-secret-namespace"; value = secretNamespace; })
+          [ "provisioner" "node-publish" "node-stage" "node-expand" ]);
+      };
+      app = name: claim: {
+        apiVersion = "apps/v1"; kind = "Deployment";
+        metadata = { inherit name; namespace = "lab-crypto"; };
+        spec = {
+          replicas = 1;
+          selector.matchLabels.app = name;
+          template = {
+            metadata.labels.app = name;
+            spec = {
+              containers = [ (writer "/data") ];
+              volumes = [{ name = "data"; persistentVolumeClaim.claimName = claim; }];
+            };
+          };
+        };
+      };
+      cpvc = name: sc: (pvc "lab-crypto" name "1Gi") // {
+        spec = { accessModes = [ "ReadWriteOnce" ]; storageClassName = sc; resources.requests.storage = "1Gi"; };
+      };
+    in
+    [
+      (ns "lab-crypto")
+      (secret "longhorn-system" "longhorn-crypto" "lab-global-key-not-secret")
+      (sc "longhorn-crypto-global" "longhorn-crypto" "longhorn-system")
+      (sc "longhorn-crypto-per-pvc" "\${pvc.name}" "\${pvc.namespace}")
+      (secret "lab-crypto" "vault-data" "lab-per-pvc-key-not-secret")
+      (cpvc "notes-data" "longhorn-crypto-global")
+      (app "notes" "notes-data")
+      (cpvc "vault-data" "longhorn-crypto-per-pvc")
+      (app "vault" "vault-data")
+    ];
 }

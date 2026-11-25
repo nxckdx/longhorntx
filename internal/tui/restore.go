@@ -241,7 +241,7 @@ func (m *model) planRestoreSwitch(c *longhorn.Client, p *longhorn.RestorePlan, s
 		return err
 	}
 	ns, pvc, _ := strings.Cut(srcPVC, "/")
-	sw, err := switchover.BuildPending(ctx, c, ns, pvc, p.Spec.Name, int64(p.Backup.Status.VolumeSize))
+	sw, err := switchover.BuildPending(ctx, c, ns, pvc, p.Spec.Name, int64(p.Backup.Status.VolumeSize), p.Backup.Encrypted())
 	if err != nil {
 		return err
 	}

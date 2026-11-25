@@ -52,8 +52,12 @@ type Action struct {
 	Warnings    []string
 	Destructive bool
 	// Lines replace the request details in the preview (batch summaries).
-	Lines   []string
-	summary string // one-line description used in batch summaries
+	Lines []string
+	// CopySecretFrom: create a Secret with the type and data of this one.
+	// The data is read only when the action is applied (also server dry
+	// run) and never shown.
+	CopySecretFrom *SecretRef
+	summary        string // one-line description used in batch summaries
 }
 
 // Summary is a one-line description of the action for batch previews.
@@ -155,6 +159,9 @@ func (c *Client) Apply(ctx context.Context, a *Action, mode DryRun) error {
 	case a.Namespace != "":
 		res = c.dyn.Resource(a.GVR).Namespace(a.Namespace)
 	}
+	if a.CopySecretFrom != nil {
+		return c.copySecret(ctx, a, dry)
+	}
 	switch a.Verb {
 	case VerbCreate:
 		obj := &unstructured.Unstructured{Object: a.Object}
@@ -179,6 +186,33 @@ func (c *Client) Apply(ctx context.Context, a *Action, mode DryRun) error {
 		return res.Delete(ctx, a.Name, opts)
 	}
 	return fmt.Errorf("unknown verb %q", a.Verb)
+}
+
+// copySecret creates a.Namespace/a.Name with the type and data of
+// a.CopySecretFrom (an encryption key for a new PVC).
+func (c *Client) copySecret(ctx context.Context, a *Action, dry []string) error {
+	src, err := c.dyn.Resource(gvrSecret).Namespace(a.CopySecretFrom.Namespace).Get(ctx, a.CopySecretFrom.Name, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("read Secret %s: %w", a.CopySecretFrom, err)
+	}
+	obj := map[string]any{"apiVersion": "v1", "kind": "Secret",
+		"metadata": map[string]any{"name": a.Name, "namespace": a.Namespace,
+			"annotations": map[string]any{"lhtx.io/copied-from": a.CopySecretFrom.String()}},
+		"type": src.Object["type"], "data": src.Object["data"]}
+	if l := src.GetLabels(); len(l) > 0 {
+		obj["metadata"].(map[string]any)["labels"] = toAnyMap(l)
+	}
+	_, err = c.dyn.Resource(gvrSecret).Namespace(a.Namespace).Create(ctx, &unstructured.Unstructured{Object: obj},
+		metav1.CreateOptions{DryRun: dry, FieldManager: "lhtx"})
+	return err
+}
+
+func toAnyMap(m map[string]string) map[string]any {
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
 }
 
 func lhObject(kind, name string, labels map[string]string, spec map[string]any) map[string]any {

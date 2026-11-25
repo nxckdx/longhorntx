@@ -13,7 +13,7 @@ import (
 )
 
 func restoreCmd(g *globals) *cobra.Command {
-	var name, pvc, sc, fs string
+	var name, pvc, sc, fs, secret string
 	var replicas int
 	var doSwitch bool
 	var wait time.Duration
@@ -84,6 +84,9 @@ The old volume is kept for a rollback.
 			if f.Changed("fs") {
 				p.Spec.FSType = fs
 			}
+			if err := applySecretFlag(secret, p.Backup.Encrypted(), &p.Spec); err != nil {
+				return err
+			}
 			if doSwitch {
 				if pvc != "" {
 					return fmt.Errorf("--switch re-creates the original PVC: leave out --pvc")
@@ -119,6 +122,7 @@ The old volume is kept for a rollback.
 	f.IntVar(&replicas, "replicas", 0, "number of replicas (default: the default-replica-count setting)")
 	f.StringVar(&sc, "storage-class", "", "StorageClass of PV/PVC (default: Longhorn's static class)")
 	f.StringVar(&fs, "fs", "", "filesystem of the PV (default ext4)")
+	f.StringVar(&secret, "secret", "", "encrypted backup: the Secret NAMESPACE/NAME with its key, if the source PV is gone")
 	f.BoolVar(&doSwitch, "switch", false, "then switch the original PVC to the restored volume (its pods are frozen meanwhile)")
 	f.DurationVar(&wait, "wait", 10*time.Minute, "with --switch: how long to wait for pods to stop / the PVC to bind")
 	return cmd
@@ -143,7 +147,7 @@ func (g *globals) restoreAndSwitch(cmd *cobra.Command, c *longhorn.Client, p *lo
 	if err != nil {
 		return err
 	}
-	sw, err := switchover.BuildPending(ctx, c, ns, pvc, p.Spec.Name, int64(p.Backup.Status.VolumeSize))
+	sw, err := switchover.BuildPending(ctx, c, ns, pvc, p.Spec.Name, int64(p.Backup.Status.VolumeSize), p.Backup.Encrypted())
 	if err != nil {
 		return err
 	}
@@ -151,6 +155,22 @@ func (g *globals) restoreAndSwitch(cmd *cobra.Command, c *longhorn.Client, p *lo
 	acts[0].Warnings = []string{fmt.Sprintf("restores %s of backup %s; the PVC then uses the restored data – changes since that backup are not in it",
 		humanSize(int64(p.Backup.Status.Size)), p.Backup.Name)}
 	return g.runSwitch(ctx, c, sw, acts[0], wait)
+}
+
+// applySecretFlag sets the key Secret of an encrypted source (--secret).
+func applySecretFlag(flag string, encrypted bool, s *longhorn.RestoreSpec) error {
+	if flag == "" {
+		return nil
+	}
+	if !encrypted {
+		return fmt.Errorf("--secret: the source is not encrypted")
+	}
+	ns, n, ok := strings.Cut(flag, "/")
+	if !ok || ns == "" || n == "" {
+		return fmt.Errorf("--secret NAMESPACE/NAME")
+	}
+	s.Encryption = &longhorn.Encryption{Secret: longhorn.SecretRef{Namespace: ns, Name: n}}
+	return nil
 }
 
 func humanSize(n int64) string { return format.Bytes(n) }

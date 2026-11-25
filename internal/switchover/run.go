@@ -305,6 +305,11 @@ func (r *runner) bindNew() error {
 		for k, v := range p.PVAttributes {
 			attrs[k] = v
 		}
+		csi := map[string]any{"driver": longhornDriver, "fsType": p.FSType, "volumeHandle": p.NewVolume,
+			"volumeAttributes": attrs}
+		for k, v := range p.SecretRefs {
+			csi[k] = v
+		}
 		pv := &unstructured.Unstructured{Object: map[string]any{
 			"apiVersion": "v1", "kind": "PersistentVolume",
 			"metadata": map[string]any{"name": pvName,
@@ -316,8 +321,7 @@ func (r *runner) bindNew() error {
 				"persistentVolumeReclaimPolicy": reclaim,
 				"storageClassName":              p.StorageClass,
 				"claimRef":                      claimRef,
-				"csi": map[string]any{"driver": longhornDriver, "fsType": p.FSType, "volumeHandle": p.NewVolume,
-					"volumeAttributes": attrs},
+				"csi":                           csi,
 			},
 		}}
 		if _, err := r.dyn.Resource(gvrPV).Create(r.ctx, pv, metav1.CreateOptions{FieldManager: "lhtx"}); err != nil {

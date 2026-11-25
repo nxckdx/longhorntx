@@ -59,11 +59,21 @@ func CloneVolume(src *Volume, snapshot string, s RestoreSpec, exists func(kind s
 	if src.Status.Robustness == "faulted" {
 		vol.Warnings = append(vol.Warnings, "the source is faulted: the clone will fail until a replica is usable")
 	}
+	if src.Spec.Encrypted && s.Encryption == nil {
+		s.Encryption = &Encryption{}
+	}
 	acts := []*Action{vol}
+	copyAct, refs, err := encryptionFor(s, vol, exists)
+	if err != nil {
+		return nil, err
+	}
 	if s.PVCName == "" {
 		return acts, nil
 	}
-	more, err := pvAndPVC(s, size, mode, exists)
+	if copyAct != nil {
+		acts = append(acts, copyAct)
+	}
+	more, err := pvAndPVC(s, size, mode, refs, exists)
 	if err != nil {
 		return nil, err
 	}

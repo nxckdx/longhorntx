@@ -335,7 +335,12 @@ func (a *Agent) prepareTarget(ctx context.Context, lg *switchLog, s *Switch, adm
 			plan.Spec.Replicas = v.Spec.NumberOfReplicas
 		}
 		if v, err := a.c.Volume(ctx, plan.Spec.Name); err == nil {
-			lg.add("✔ volume %s exists already – using it", v.Name)
+			// only the restore of THIS backup (the agent restarted right
+			// after creating it) – any other volume of that name is not ours
+			if v.Spec.FromBackup != b.Status.URL {
+				return "", fmt.Errorf("volume %s exists and is not a restore of %s – give another name (spec.volumeName)", v.Name, b.Name)
+			}
+			lg.add("✔ volume %s is the restore of %s already – using it", v.Name, b.Name)
 			return v.Name, nil
 		}
 		acts, err := a.c.BuildRestore(ctx, plan)

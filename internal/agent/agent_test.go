@@ -229,3 +229,35 @@ func TestAgentSwitchNeedsPolicy(t *testing.T) {
 		t.Fatalf("%s: %s", s.Status.Phase, s.Status.Message)
 	}
 }
+
+// A volume that happens to have the restore's name is not taken.
+func TestAgentSwitchNameTaken(t *testing.T) {
+	ctx, c, _ := setup(t)
+	vap := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "admissionregistration.k8s.io/v1",
+		"kind": "ValidatingAdmissionPolicy", "metadata": map[string]any{"name": agent.RequesterPolicy}}}
+	_, _ = c.Dynamic().Resource(gvrVAPt).Create(ctx, vap, metav1.CreateOptions{})
+	vols, _ := c.Volumes(ctx)
+	var pvc, backup, other string
+	for _, v := range vols {
+		if b, _ := c.Backups(ctx, v.Name); v.BoundPVC() != "" && longhorn.LatestBackup(b) != nil && pvc == "" {
+			pvc, backup = v.BoundPVC(), longhorn.LatestBackup(b).Name
+		} else if other == "" {
+			other = v.Name
+		}
+	}
+	ns, name, _ := strings.Cut(pvc, "/")
+	// spec.volumeName points at an unrelated, existing volume
+	sw, err := agent.RequestSwitch(ctx, c, ns, agent.SwitchSpec{PVC: name, FromBackup: backup, VolumeName: other})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	s, err := agent.FollowSwitch(fctx, c, ns, sw, t.Logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Status.Phase != agent.SwitchFailed || !strings.Contains(s.Status.Message, "is not a restore of") {
+		t.Fatalf("%s: %s", s.Status.Phase, s.Status.Message)
+	}
+}

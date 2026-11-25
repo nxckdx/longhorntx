@@ -10,6 +10,7 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
+	"github.com/nxckdx/longhorntx/internal/agent"
 	"github.com/nxckdx/longhorntx/internal/format"
 	"github.com/nxckdx/longhorntx/internal/kube"
 	"github.com/nxckdx/longhorntx/internal/longhorn"
@@ -34,8 +35,10 @@ type Summary struct {
 	Warnings     int               `json:"warnings"`
 	Worst        longhorn.Severity `json:"worst"`
 	Top          string            `json:"top,omitempty"` // most severe finding
-	Traffic      int64             `json:"trafficBytes"`
-	Took         time.Duration     `json:"took"`
+	// Agent: the pod holding the lhtx agent's lease ("" = no agent)
+	Agent   string        `json:"agent,omitempty"`
+	Traffic int64         `json:"trafficBytes"`
+	Took    time.Duration `json:"took"`
 }
 
 // Check connects to a context and summarizes it. Traffic: one LIST of
@@ -75,6 +78,9 @@ func Summarize(ctx context.Context, c *longhorn.Client) (s Summary) {
 		return s
 	}
 	s.Version, _ = c.LonghornVersion(ctx)
+	if a := agent.Detect(ctx, c); a != nil { // one small GET
+		s.Agent = a.Holder
+	}
 	s.Volumes, s.Nodes = len(in.Volumes), len(in.Nodes)
 	for _, v := range in.Volumes {
 		if v.Status.State == "attached" {

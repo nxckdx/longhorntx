@@ -21,6 +21,9 @@ rules:
   - apiGroups: [authorization.k8s.io]
     resources: [subjectaccessreviews]
     verbs: [create]
+  - apiGroups: [lhtx.io]
+    resources: [volumedigests]
+    verbs: [get, list, watch, create, update, delete]
   - apiGroups: [admissionregistration.k8s.io]
     resources: [validatingadmissionpolicies, validatingadmissionpolicybindings]
     verbs: [get, list, create, patch, delete]
@@ -186,6 +189,18 @@ subjects:
     apiGroup: rbac.authorization.k8s.io
 {{- end }}
 {{- if .Values.rbac.freezeRole }}
+---
+# Read the VolumeDigests (bind it to lhtx users who may not read volumes).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}-view
+  labels:
+    {{- include "lhtx-agent.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [lhtx.io]
+    resources: [volumedigests]
+    verbs: [get, list, watch]
 ---
 # Bind it with a RoleBinding in a namespace: who may switch PVCs there.
 apiVersion: rbac.authorization.k8s.io/v1

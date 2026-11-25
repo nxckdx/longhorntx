@@ -1,0 +1,41 @@
+# VolumeDigest: kept by the lhtx agent, one per Longhorn volume (same name,
+# Longhorn namespace) – the fields lhtx shows, rewritten only when one of
+# them changes notably. lhtx watches these instead of the volumes, which
+# saves most of the traffic on busy clusters (lhtx --refresh agent; auto
+# picks it).
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: volumedigests.lhtx.io
+  labels:
+    app.kubernetes.io/name: lhtx-agent
+spec:
+  group: lhtx.io
+  scope: Namespaced
+  names:
+    kind: VolumeDigest
+    listKind: VolumeDigestList
+    plural: volumedigests
+    singular: volumedigest
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            data:
+              description: The volume's fields lhtx uses, as JSON.
+              type: string
+---
+# Read the digests (who uses lhtx; bind it yourself if those people may not
+# read Longhorn volumes already – they show the same data).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: lhtx-view
+rules:
+  - apiGroups: [lhtx.io]
+    resources: [volumedigests]
+    verbs: [get, list, watch]

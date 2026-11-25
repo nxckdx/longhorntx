@@ -272,3 +272,45 @@ func TestAgentSwitchNameTaken(t *testing.T) {
 		t.Fatalf("%s: %s", s.Status.Phase, s.Status.Message)
 	}
 }
+
+// The agent keeps a digest per volume; lhtx's store watches the digests
+// (auto picks them when an agent keeps them) and sees every volume.
+func TestAgentDigests(t *testing.T) {
+	t.Setenv("LHTX_DEMO_AGENT", "1")
+	ctx := t.Context()
+	c := demo.NewClient(ctx)
+	vols := mustVolumes(t, ctx, c)
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		l, _ := c.Dynamic().Resource(longhorn.GVRVolumeDigest).Namespace(c.Namespace).List(ctx, metav1.ListOptions{})
+		if len(l.Items) == len(vols) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d digests for %d volumes", len(l.Items), len(vols))
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	s := longhorn.NewStore(c)
+	s.Start(ctx)
+	if err := s.WaitSynced(ctx, 20*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if s.RefreshInterval() != longhorn.RefreshAgent {
+		t.Fatalf("refresh %v, want agent", s.RefreshInterval())
+	}
+	st := s.State()
+	if len(st.Volumes) != len(vols) {
+		t.Fatalf("%d volumes from digests, want %d", len(st.Volumes), len(vols))
+	}
+	byName := map[string]*longhorn.Volume{}
+	for _, v := range st.Volumes {
+		byName[v.Name] = v
+	}
+	for _, v := range vols {
+		d := byName[v.Name]
+		if d == nil || d.Status.State != v.Status.State || d.BoundPVC() != v.BoundPVC() || d.Spec.NumberOfReplicas != v.Spec.NumberOfReplicas {
+			t.Errorf("%s: digest %+v differs", v.Name, d)
+		}
+	}
+}

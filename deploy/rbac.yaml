@@ -20,6 +20,9 @@ rules:
   - apiGroups: [lhtx.io]
     resources: [freezes/status, freezes/finalizers, switches/status]
     verbs: [get, patch, update]
+  - apiGroups: [lhtx.io]
+    resources: [volumedigests]
+    verbs: [get, list, watch, create, update, delete]
   - apiGroups: [authorization.k8s.io]
     resources: [subjectaccessreviews]
     verbs: [create] # what may the person who asked for a Switch do?

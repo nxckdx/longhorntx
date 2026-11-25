@@ -95,6 +95,9 @@ func InCluster() (*Cluster, error) {
 
 func wrap(name string, cfg *rest.Config) *Cluster {
 	cfg.UserAgent = "lhtx"
+	// API server warnings (e.g. about Longhorn's own finalizer names) went
+	// to stderr via klog – noise for the user, and they break the TUI.
+	cfg.WarningHandler = rest.NoWarnings{}
 	// Defaults are tuned for controllers; we issue few requests.
 	cfg.QPS, cfg.Burst = 20, 40
 

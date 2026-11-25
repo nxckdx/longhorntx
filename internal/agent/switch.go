@@ -449,14 +449,23 @@ func (a *Agent) authorize(ctx context.Context, s *Switch) (admin bool, err error
 }
 
 func (a *Agent) can(ctx context.Context, s *Switch, verb, group, resource, ns string) (bool, error) {
-	groups := make([]any, len(s.Spec.RequestedGroups))
-	for i, g := range s.Spec.RequestedGroups {
-		groups[i] = g
+	return a.sar(ctx, s.Spec.RequestedBy, s.Spec.RequestedGroups, verb, group, resource, "", ns)
+}
+
+// sar asks the API server whether user (with groups) may do verb on the
+// resource (and subresource) in ns.
+func (a *Agent) sar(ctx context.Context, user string, groups []string, verb, group, resource, subresource, ns string) (bool, error) {
+	g := make([]any, len(groups))
+	for i, x := range groups {
+		g[i] = x
+	}
+	ra := map[string]any{"verb": verb, "group": group, "resource": resource, "namespace": ns}
+	if subresource != "" {
+		ra["subresource"] = subresource
 	}
 	sar := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "authorization.k8s.io/v1", "kind": "SubjectAccessReview",
-		"spec": map[string]any{"user": s.Spec.RequestedBy, "groups": groups,
-			"resourceAttributes": map[string]any{"verb": verb, "group": group, "resource": resource, "namespace": ns}},
+		"spec": map[string]any{"user": user, "groups": g, "resourceAttributes": ra},
 	}}
 	out, err := a.c.Dynamic().Resource(gvrSAR).Create(ctx, sar, metav1.CreateOptions{})
 	if err != nil {

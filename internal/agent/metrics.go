@@ -29,6 +29,9 @@ type metrics struct {
 	volumeEvents  atomic.Int64 // volume updates the agent saw (what lhtx would have received)
 	digestVolumes atomic.Int64 // volumes with a digest
 	historyEvents atomic.Int64 // history events recorded
+	historyKinds  sync.Map     // kind → *atomic.Int64
+	rebuildSecs   atomic.Int64 // summed durations of finished rebuilds
+	rebuilds      atomic.Int64
 
 	freezes, switches cache.Store // set by Run (leader)
 	version           string
@@ -112,8 +115,16 @@ func (a *Agent) writeMetrics(w io.Writer) {
 	fmt.Fprintf(w, "lhtx_agent_digest_writes_total %d\n", a.digestWrites.Load())
 	p("lhtx_agent_digest_volumes", "gauge", "Volumes with a VolumeDigest.")
 	fmt.Fprintf(w, "lhtx_agent_digest_volumes %d\n", m.digestVolumes.Load())
-	p("lhtx_agent_history_events_total", "counter", "History events recorded (rebuilds, failures, backups, …).")
-	fmt.Fprintf(w, "lhtx_agent_history_events_total %d\n", m.historyEvents.Load())
+	p("lhtx_agent_history_events_total", "counter", "History events recorded by kind (rebuilt, replica-failed, backup-failed, …).")
+	var kinds []string
+	m.historyKinds.Range(func(k, _ any) bool { kinds = append(kinds, k.(string)); return true })
+	sort.Strings(kinds)
+	for _, k := range kinds {
+		v, _ := m.historyKinds.Load(k)
+		fmt.Fprintf(w, "lhtx_agent_history_events_total{kind=%q} %d\n", k, v.(*atomic.Int64).Load())
+	}
+	p("lhtx_agent_rebuild_seconds", "summary", "Durations of finished rebuilds.")
+	fmt.Fprintf(w, "lhtx_agent_rebuild_seconds_sum %d\nlhtx_agent_rebuild_seconds_count %d\n", m.rebuildSecs.Load(), m.rebuilds.Load())
 }
 
 func writeByLabel(w io.Writer, name, label string, by map[string]int) {

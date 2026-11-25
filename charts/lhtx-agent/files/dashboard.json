@@ -481,6 +481,90 @@
      "mode": "multi"
     }
    }
+  },
+  {
+   "id": 11,
+   "type": "timeseries",
+   "title": "History: failures and rebuilds (per hour)",
+   "description": "From the agent's history: failed backups and replicas, finished rebuilds, robustness changes.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 26,
+    "w": 12,
+    "h": 8
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum by (kind) (increase(lhtx_agent_history_events_total{kind=~\"backup-failed|replica-failed|rebuilt|robustness\"}[1h]))",
+     "legendFormat": "{{kind}}"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "lineWidth": 2,
+      "fillOpacity": 10
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   }
+  },
+  {
+   "id": 12,
+   "type": "timeseries",
+   "title": "Average rebuild duration",
+   "description": "Finished rebuilds in the last 6 hours: how long a replica rebuild takes on average.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 26,
+    "w": 12,
+    "h": 8
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "increase(lhtx_agent_rebuild_seconds_sum[6h]) / (increase(lhtx_agent_rebuild_seconds_count[6h]) > 0)",
+     "legendFormat": "avg (6h)"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s",
+     "custom": {
+      "lineWidth": 2,
+      "fillOpacity": 10
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   }
   }
  ],
  "annotations": {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -147,6 +148,14 @@ func (r *recorder) record(vol *longhorn.Volume, evs []longhorn.HistoryEvent) {
 	}
 	r.vols[vol.Name] = vol
 	r.a.metrics.historyEvents.Add(int64(len(evs)))
+	for _, e := range evs {
+		c, _ := r.a.metrics.historyKinds.LoadOrStore(e.Kind, new(atomic.Int64))
+		c.(*atomic.Int64).Add(1)
+		if e.Kind == longhorn.HistRebuildDone && e.Took > 0 {
+			r.a.metrics.rebuildSecs.Add(int64(e.Took.Seconds()))
+			r.a.metrics.rebuilds.Add(1)
+		}
+	}
 }
 
 // flush writes the pending events: one update per volume touched, and the

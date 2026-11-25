@@ -76,13 +76,18 @@ const MaxVolumeName = 40
 
 // RestoreName suggests a name for the restored volume: "<pvc>-restore-<MMDD>".
 func RestoreName(pvc, volume string, now time.Time) string {
+	return RestoreNameMax(pvc, volume, now, MaxVolumeName)
+}
+
+// RestoreNameMax is RestoreName within max characters (room for a suffix).
+func RestoreNameMax(pvc, volume string, now time.Time, max int) string {
 	base := volume
 	if _, n, ok := strings.Cut(pvc, "/"); ok && n != "" {
 		base = n
 	}
 	suffix := "-restore-" + now.Format("0102")
-	if len(base)+len(suffix) > MaxVolumeName {
-		base = strings.TrimRight(base[:MaxVolumeName-len(suffix)], "-")
+	if len(base)+len(suffix) > max {
+		base = strings.TrimRight(base[:max-len(suffix)], "-")
 	}
 	return base + suffix
 }

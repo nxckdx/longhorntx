@@ -207,6 +207,17 @@ func TestAgentSwitchFromBackup(t *testing.T) {
 			t.Errorf("PVC still on %s, want %s", v.Name, s.Status.TargetVolume)
 		}
 	}
+	// the same backup again: the first restore holds changes now, so a new
+	// volume (…-2) is restored instead of taking it
+	sw2, err := agent.RequestSwitch(ctx, c, ns, agent.SwitchSpec{PVC: name, FromBackup: backup, Wait: "30s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(1100 * time.Millisecond) // distinct Switch names (seconds)
+	s2, err := agent.FollowSwitch(fctx, c, ns, sw2, t.Logf)
+	if err != nil || s2.Status.Phase != agent.SwitchDone || !strings.HasSuffix(s2.Status.TargetVolume, "-restore-"+time.Now().Format("0102")+"-2") {
+		t.Fatalf("second switch: %v %s %s → %s", err, s2.Status.Phase, s2.Status.Message, s2.Status.TargetVolume)
+	}
 }
 
 var gvrVAPt = schema.GroupVersionResource{Group: "admissionregistration.k8s.io", Version: "v1", Resource: "validatingadmissionpolicies"}
@@ -257,7 +268,7 @@ func TestAgentSwitchNameTaken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.Status.Phase != agent.SwitchFailed || !strings.Contains(s.Status.Message, "is not a restore of") {
+	if s.Status.Phase != agent.SwitchFailed || !strings.Contains(s.Status.Message, "give another spec.volumeName") {
 		t.Fatalf("%s: %s", s.Status.Phase, s.Status.Message)
 	}
 }

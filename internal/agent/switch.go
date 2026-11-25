@@ -42,6 +42,9 @@ var (
 	gvrVAP = schema.GroupVersionResource{Group: "admissionregistration.k8s.io", Version: "v1", Resource: "validatingadmissionpolicies"}
 )
 
+// annSwitch marks a volume the agent restored for a Switch (namespace/name).
+const annSwitch = "lhtx.io/switch"
+
 // RequesterPolicy is the admission policy that vouches for requestedBy.
 const RequesterPolicy = "lhtx-switch-requester"
 
@@ -325,28 +328,43 @@ func (a *Agent) prepareTarget(ctx context.Context, lg *switchLog, s *Switch, adm
 		if err != nil {
 			return "", err
 		}
-		plan.Spec.Name = longhorn.RestoreName(pvc, b.Volume(), time.Now())
+		mine := s.Namespace + "/" + s.Name
+		base := longhorn.RestoreName(pvc, b.Volume(), time.Now())
 		if s.Spec.VolumeName != "" {
-			plan.Spec.Name = s.Spec.VolumeName
+			base = s.Spec.VolumeName
 		}
-		if s.Spec.Replicas > 0 {
-			plan.Spec.Replicas = s.Spec.Replicas
-		} else if v, err := a.c.Volume(ctx, b.Volume()); err == nil && v.Spec.NumberOfReplicas > 0 {
-			plan.Spec.Replicas = v.Spec.NumberOfReplicas
-		}
-		if v, err := a.c.Volume(ctx, plan.Spec.Name); err == nil {
-			// only the restore of THIS backup (the agent restarted right
-			// after creating it) – any other volume of that name is not ours
-			if v.Spec.FromBackup != b.Status.URL {
-				return "", fmt.Errorf("volume %s exists and is not a restore of %s – give another name (spec.volumeName)", v.Name, b.Name)
+		// a free name; a volume this Switch created already (the agent
+		// restarted right after) is taken – no other: it may hold changes
+		name := ""
+		for i := 1; i <= 9 && name == ""; i++ {
+			cand := base
+			if i > 1 {
+				suf := fmt.Sprintf("-%d", i)
+				cand = longhorn.RestoreNameMax(pvc, b.Volume(), time.Now(), longhorn.MaxVolumeName-len(suf)) + suf
 			}
-			lg.add("✔ volume %s is the restore of %s already – using it", v.Name, b.Name)
-			return v.Name, nil
+			v, err := a.c.Volume(ctx, cand)
+			switch {
+			case apierrors.IsNotFound(err):
+				name = cand
+			case err != nil:
+				return "", err
+			case v.Annotations[annSwitch] == mine:
+				lg.add("✔ volume %s was created by this switch already – using it", v.Name)
+				return v.Name, nil
+			case s.Spec.VolumeName != "":
+				return "", fmt.Errorf("volume %s exists – give another spec.volumeName", cand)
+			}
 		}
+		if name == "" {
+			return "", fmt.Errorf("no free volume name for the restore (%s-2 … -9 exist)", base)
+		}
+		plan.Spec.Name = name
 		acts, err := a.c.BuildRestore(ctx, plan)
 		if err != nil {
 			return "", err
 		}
+		md := acts[0].Object["metadata"].(map[string]any)
+		md["annotations"] = map[string]any{annSwitch: mine}
 		if err := a.c.Apply(ctx, acts[0], longhorn.DryRunNone); err != nil {
 			return "", fmt.Errorf("create the restore volume: %w", err)
 		}

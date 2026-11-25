@@ -109,6 +109,18 @@ lhtx history shop/db-data          # everything about one volume
 
 In the TUI: `H` in the volume details. `lhtx agent --no-history` turns it off.
 
+### How much history is kept
+
+By count, not by time: the last **50** events per volume and the last
+**300** notable ones cluster-wide (older ones fall out when new ones are
+written). A volume's history is deleted with the volume (owner reference).
+Configurable: `lhtx agent --history-per-volume N --history-cluster N
+--history-max-age 2160h` (chart: `history.perVolume`, `history.cluster`,
+`history.maxAge`; `history.enabled: false` = `--no-history`). The age limit
+applies when a history is written, so a quiet volume keeps its old events
+until something new happens. The histories stay when the agent is removed
+(`kubectl -n longhorn-system delete volumehistories --all`).
+
 ## Diagnostics: logs filtered in the cluster
 
 `lhtx diag VOLUME` needs the instance-manager and longhorn-manager logs of

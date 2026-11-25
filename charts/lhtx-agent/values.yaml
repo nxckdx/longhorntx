@@ -55,6 +55,15 @@ metrics:
     annotations: {} # e.g. grafana_folder: Storage
     namespace: "" # default: the release namespace
 
+# History (lhtx history, TUI H): how much the agent keeps. Older events are
+# pushed out by the count; maxAge additionally drops events older than that
+# whenever a history is written (e.g. 2160h = 90 days; "" = no age limit).
+history:
+  enabled: true
+  perVolume: 50 # at most 1000
+  cluster: 300 # notable events cluster-wide, at most 5000
+  maxAge: ""
+
 podDisruptionBudget:
   # created when replicaCount > 1
   minAvailable: 1

@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -38,6 +39,10 @@ type Agent struct {
 	DigestQPS float64
 	// NoDigests: do not keep VolumeDigests.
 	NoDigests bool
+	// RW: carry out Freezes and Switches (lhtx agent --rw). Without it the
+	// agent only reads – digests, history, metrics, log queries – and
+	// refuses Freezes and Switches (lhtx then does them itself).
+	RW bool
 	// NoHistory: do not record VolumeHistories.
 	NoHistory bool
 	// HistoryVolumeMax / HistoryClusterMax: events kept per volume and in the
@@ -86,7 +91,7 @@ func (a *Agent) RunWithLeaderElection(ctx context.Context, namespace string) err
 		LeaseMeta:  metav1.ObjectMeta{Name: LeaseName, Namespace: namespace},
 		Client:     cc,
 		LockConfig: resourcelock.ResourceLockConfig{Identity: a.identity},
-		Labels:     map[string]string{"app.kubernetes.io/name": "lhtx-agent"},
+		Labels:     map[string]string{"app.kubernetes.io/name": "lhtx-agent", LabelRW: strconv.FormatBool(a.RW)},
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -268,7 +273,7 @@ func (a *Agent) reconcile(ctx context.Context, name string) {
 	a.mu.Unlock()
 	switch {
 	case fr.Deleting:
-		if !slices.Contains(fr.Finalizers, Finalizer) {
+		if !slices.Contains(fr.Finalizers, Finalizer) || !a.RW {
 			return
 		}
 		if t != nil && !t.unfreeze {
@@ -280,6 +285,13 @@ func (a *Agent) reconcile(ctx context.Context, name string) {
 			a.start(ctx, fr, true)
 		}
 	case t != nil:
+	case !a.RW:
+		if fr.Status.Phase == "" || fr.Status.Phase == PhasePending {
+			lg := a.statusLog(fr)
+			lg.add("refused: %s", ErrReadOnly)
+			_ = lg.flush(ctx, map[string]any{"phase": PhaseFailed, "message": ErrReadOnly.Error()})
+			a.op("freeze", "refused")
+		}
 	case fr.Status.Phase == "", fr.Status.Phase == PhasePending, fr.Status.Phase == PhaseFreezing:
 		a.start(ctx, fr, false)
 	case fr.Status.Phase == PhaseFrozen && fr.Spec.AutoUnfreezeAfter != "" && fr.Status.FrozenAt != nil:

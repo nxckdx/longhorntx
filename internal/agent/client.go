@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -20,7 +21,15 @@ import (
 )
 
 // Info describes a running agent.
+// LabelRW on the agent's lease: "true" if it carries out Freezes and
+// Switches (started with --rw), "false" if it only reads.
+const LabelRW = "lhtx.io/rw"
+
+// ErrReadOnly: the agent was started without --rw.
+var ErrReadOnly = errors.New("the lhtx agent is read-only (started without --rw; Helm value rw: true) – lhtx does freezes and switches itself")
+
 type Info struct {
+	RW        bool      // carries out Freezes and Switches
 	Holder    string    // pod name
 	Namespace string    // where its lease is
 	Renewed   time.Time // last heartbeat
@@ -57,7 +66,16 @@ func leaseInfo(u *unstructured.Unstructured) *Info {
 	if holder == "" || err != nil || time.Since(t) > time.Minute {
 		return nil
 	}
-	return &Info{Holder: holder, Namespace: u.GetNamespace(), Renewed: t}
+	return &Info{Holder: holder, Namespace: u.GetNamespace(), Renewed: t, RW: u.GetLabels()[LabelRW] != "false"}
+}
+
+// DetectRW is Detect, but only an agent that carries out Freezes and
+// Switches (started with --rw).
+func DetectRW(ctx context.Context, c *longhorn.Client) *Info {
+	if i := Detect(ctx, c); i != nil && i.RW {
+		return i
+	}
+	return nil
 }
 
 // Request asks the agent to freeze PVCs: it creates a Freeze with the
@@ -218,9 +236,9 @@ func Unfreeze(ctx context.Context, c *longhorn.Client, fr switchover.Freeze, o s
 	if fr.Request == "" {
 		return switchover.Unfreeze(ctx, c, fr, o)
 	}
-	ag := Detect(ctx, c)
+	ag := DetectRW(ctx, c)
 	if ag == nil {
-		log("no lhtx agent running – unfreezing here")
+		log("no lhtx agent with --rw running – unfreezing here")
 		if err := switchover.Unfreeze(ctx, c, fr, o); err != nil {
 			return err
 		}

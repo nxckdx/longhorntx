@@ -141,6 +141,13 @@ func (a *Agent) reconcileSwitch(ctx context.Context, key string) {
 	if err != nil || SwitchFinished(s) {
 		return
 	}
+	if !a.RW {
+		lg := a.switchStatus(s)
+		lg.add("refused: %s", ErrReadOnly)
+		lg.flush(ctx, map[string]any{"phase": SwitchFailed, "message": ErrReadOnly.Error()})
+		a.op("switch", "refused")
+		return
+	}
 	tkey := "sw:" + key
 	a.mu.Lock()
 	_, running := a.tasks[tkey]

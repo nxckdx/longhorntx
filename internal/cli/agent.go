@@ -17,7 +17,7 @@ import (
 func agentCmd(g *globals) *cobra.Command {
 	var noLeader bool
 	var leaseNS, healthAddr string
-	var noDigests bool
+	var noDigests, noHistory bool
 	cmd := &cobra.Command{
 		Use:   "agent",
 		Short: "Optional in-cluster agent: carries out freezes so they do not depend on your laptop",
@@ -57,7 +57,7 @@ lhtx-freeze to them. The agent itself needs rights like cluster-admin
 				return err
 			}
 			a := agent.New(c, os.Getenv("POD_NAME"))
-			a.NoDigests = noDigests
+			a.NoDigests, a.NoHistory = noDigests, noHistory
 			a.SetVersion(Version)
 			if healthAddr != "" {
 				go func() {
@@ -78,6 +78,7 @@ lhtx-freeze to them. The agent itself needs rights like cluster-admin
 			return a.RunWithLeaderElection(cmd.Context(), leaseNS)
 		},
 	}
+	cmd.Flags().BoolVar(&noHistory, "no-history", false, "do not record VolumeHistories (lhtx history)")
 	cmd.Flags().BoolVar(&noDigests, "no-digests", false, "do not keep VolumeDigests (lhtx --refresh agent then has nothing to watch)")
 	cmd.Flags().StringVar(&healthAddr, "health-addr", ":8081", "address for the probes /healthz, /readyz and the Prometheus /metrics (read-only; empty = off)")
 	cmd.Flags().StringVar(&leaseNS, "lease-namespace", "", "namespace of the lease (default: the Longhorn namespace, where lhtx looks first; elsewhere lhtx finds it by label if users may list leases)")

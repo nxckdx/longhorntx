@@ -3,6 +3,7 @@ package longhorn
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -172,6 +173,7 @@ func (c *Client) EncryptionChecks(ctx context.Context, vols []*Volume) []Finding
 		}
 	}
 	have := map[SecretRef]bool{}
+	manager := map[SecretRef]string{}
 	listed := map[string]bool{}
 	for r := range need {
 		if listed[r.Namespace] {
@@ -191,11 +193,23 @@ func (c *Client) EncryptionChecks(ctx context.Context, vols []*Volume) []Finding
 			return out // not allowed to list: no finding rather than a wrong one
 		}
 		for _, it := range l.Items {
-			have[SecretRef{Namespace: r.Namespace, Name: it.Name}] = true
+			ref := SecretRef{Namespace: r.Namespace, Name: it.Name}
+			have[ref] = true
+			manager[ref] = managerOf(it.OwnerReferences, it.ManagedFields)
 		}
 	}
 	out = append(out, c.keyBackupChecks(ctx)...)
 	for r, vs := range need {
+		if m := manager[r]; have[r] && m != "" {
+			how := "is managed by " + m
+			if w, ok := strings.CutPrefix(m, "(last written by) "); ok {
+				how = "was last written by the controller " + w
+			}
+			out = append(out, Finding{Severity: SevInfo, Check: "encryption", Object: r.String(),
+				Message: fmt.Sprintf("key Secret of %d encrypted volume(s) %s", len(vs), how),
+				Hint: "make sure it never generates or rotates this key: Longhorn cannot re-key a volume – a new value " +
+					"makes these volumes (and their backups) unreadable. lhtx switch watches for it, nothing else does"})
+		}
 		if have[r] {
 			continue
 		}

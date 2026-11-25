@@ -9,7 +9,8 @@ import (
 )
 
 func cloneCmd(g *globals) *cobra.Command {
-	var name, pvc, snapshot, sc, secret string
+	var name, pvc, snapshot, sc string
+	var keys keyFlags
 	var replicas int
 	cmd := &cobra.Command{
 		Use:   "clone VOLUME [--snapshot S] [--name NEW] [--pvc NS/NAME|auto]",
@@ -61,7 +62,10 @@ namespace and the new volume's name.`,
 			if f.Changed("storage-class") {
 				s.StorageClass = sc
 			}
-			if err := applySecretFlag(secret, v.Spec.Encrypted, &s); err != nil {
+			if keys.fromContext != "" {
+				return fmt.Errorf("--key-from-context: a clone stays in its cluster")
+			}
+			if err := keys.apply(cmd, g, v.Name, v.Spec.Encrypted, &s); err != nil {
 				return err
 			}
 			switch {
@@ -93,6 +97,6 @@ namespace and the new volume's name.`,
 	f.StringVar(&pvc, "pvc", "", "also create PV + PVC: NAMESPACE/NAME, or auto")
 	f.IntVar(&replicas, "replicas", 0, "number of replicas (default: like the source)")
 	f.StringVar(&sc, "storage-class", "", "StorageClass of PV/PVC (default: Longhorn's static class)")
-	f.StringVar(&secret, "secret", "", "encrypted source: the Secret NAMESPACE/NAME with its key, if the source PV is gone")
+	keys.register(f)
 	return cmd
 }

@@ -57,7 +57,8 @@ type Action struct {
 	// The data is read only when the action is applied (also server dry
 	// run) and never shown.
 	CopySecretFrom *SecretRef
-	summary        string // one-line description used in batch summaries
+	CopyFromClient *Client // the cluster CopySecretFrom is in (nil: this one)
+	summary        string  // one-line description used in batch summaries
 }
 
 // Summary is a one-line description of the action for batch previews.
@@ -191,13 +192,17 @@ func (c *Client) Apply(ctx context.Context, a *Action, mode DryRun) error {
 // copySecret creates a.Namespace/a.Name with the type and data of
 // a.CopySecretFrom (an encryption key for a new PVC).
 func (c *Client) copySecret(ctx context.Context, a *Action, dry []string) error {
-	src, err := c.dyn.Resource(gvrSecret).Namespace(a.CopySecretFrom.Namespace).Get(ctx, a.CopySecretFrom.Name, metav1.GetOptions{})
+	from := c
+	if a.CopyFromClient != nil {
+		from = a.CopyFromClient
+	}
+	src, err := from.dyn.Resource(gvrSecret).Namespace(a.CopySecretFrom.Namespace).Get(ctx, a.CopySecretFrom.Name, metav1.GetOptions{})
 	if err != nil {
 		return fmt.Errorf("read Secret %s: %w", a.CopySecretFrom, err)
 	}
 	obj := map[string]any{"apiVersion": "v1", "kind": "Secret",
 		"metadata": map[string]any{"name": a.Name, "namespace": a.Namespace,
-			"annotations": map[string]any{"lhtx.io/copied-from": a.CopySecretFrom.String()}},
+			"annotations": map[string]any{"lhtx.io/copied-from": from.Cluster.Context + ":" + a.CopySecretFrom.String()}},
 		"type": src.Object["type"], "data": src.Object["data"]}
 	if l := src.GetLabels(); len(l) > 0 {
 		obj["metadata"].(map[string]any)["labels"] = toAnyMap(l)

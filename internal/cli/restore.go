@@ -6,14 +6,17 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"github.com/nxckdx/longhorntx/internal/format"
+	"github.com/nxckdx/longhorntx/internal/kube"
 	"github.com/nxckdx/longhorntx/internal/longhorn"
 	"github.com/nxckdx/longhorntx/internal/switchover"
 )
 
 func restoreCmd(g *globals) *cobra.Command {
-	var name, pvc, sc, fs, secret string
+	var name, pvc, sc, fs string
+	var keys keyFlags
 	var replicas int
 	var doSwitch bool
 	var wait time.Duration
@@ -84,7 +87,7 @@ The old volume is kept for a rollback.
 			if f.Changed("fs") {
 				p.Spec.FSType = fs
 			}
-			if err := applySecretFlag(secret, p.Backup.Encrypted(), &p.Spec); err != nil {
+			if err := keys.apply(cmd, g, p.Backup.Volume(), p.Backup.Encrypted(), &p.Spec); err != nil {
 				return err
 			}
 			if doSwitch {
@@ -122,7 +125,7 @@ The old volume is kept for a rollback.
 	f.IntVar(&replicas, "replicas", 0, "number of replicas (default: the default-replica-count setting)")
 	f.StringVar(&sc, "storage-class", "", "StorageClass of PV/PVC (default: Longhorn's static class)")
 	f.StringVar(&fs, "fs", "", "filesystem of the PV (default ext4)")
-	f.StringVar(&secret, "secret", "", "encrypted backup: the Secret NAMESPACE/NAME with its key, if the source PV is gone")
+	keys.register(f)
 	f.BoolVar(&doSwitch, "switch", false, "then switch the original PVC to the restored volume (its pods are frozen meanwhile)")
 	f.DurationVar(&wait, "wait", 10*time.Minute, "with --switch: how long to wait for pods to stop / the PVC to bind")
 	return cmd
@@ -157,19 +160,77 @@ func (g *globals) restoreAndSwitch(cmd *cobra.Command, c *longhorn.Client, p *lo
 	return g.runSwitch(ctx, c, sw, acts[0], wait)
 }
 
-// applySecretFlag sets the key Secret of an encrypted source (--secret).
-func applySecretFlag(flag string, encrypted bool, s *longhorn.RestoreSpec) error {
-	if flag == "" {
+// keyFlags choose how an encrypted source's key gets to the new PV.
+type keyFlags struct {
+	secret, source, fromContext string
+	copy                        bool
+}
+
+func (k *keyFlags) register(f *pflag.FlagSet) {
+	f.StringVar(&k.secret, "secret", "", "encrypted source: use this Secret NAMESPACE/NAME with the key (e.g. from your secret manager); lhtx checks it holds the source's key")
+	f.BoolVar(&k.copy, "copy-secret", false, "encrypted source: copy the source's key Secret next to the new PVC (also from --key-from-context)")
+	f.StringVar(&k.source, "key-source", "", "encrypted source: the Secret NAMESPACE/NAME with the source's key, if lhtx cannot find it (PV gone)")
+	f.StringVar(&k.fromContext, "key-from-context", "", "encrypted source: the kubeconfig context of the cluster the source volume and its key are in (migration)")
+}
+
+// apply resolves the source encryption (also in another cluster) and the
+// chosen mode into the spec.
+func (k *keyFlags) apply(cmd *cobra.Command, g *globals, srcVolume string, encrypted bool, s *longhorn.RestoreSpec) error {
+	if k.secret == "" && !k.copy && k.source == "" && k.fromContext == "" {
 		return nil
 	}
 	if !encrypted {
-		return fmt.Errorf("--secret: the source is not encrypted")
+		return fmt.Errorf("--secret/--copy-secret/--key-source/--key-from-context: the source is not encrypted")
 	}
-	ns, n, ok := strings.Cut(flag, "/")
-	if !ok || ns == "" || n == "" {
-		return fmt.Errorf("--secret NAMESPACE/NAME")
+	if k.secret != "" && k.copy {
+		return fmt.Errorf("--secret or --copy-secret, not both")
 	}
-	s.Encryption = &longhorn.Encryption{Secret: longhorn.SecretRef{Namespace: ns, Name: n}}
+	if s.Encryption == nil {
+		s.Encryption = &longhorn.Encryption{}
+	}
+	e := s.Encryption
+	if k.fromContext != "" {
+		o := g.kube
+		o.Context = k.fromContext
+		cl, err := kube.Connect(o)
+		if err != nil {
+			return err
+		}
+		other, err := longhorn.NewClient(cl, g.namespaceFor(k.fromContext))
+		if err != nil {
+			return err
+		}
+		*e = longhorn.Encryption{From: other}
+		if v, err := other.Volume(cmd.Context(), srcVolume); err == nil {
+			if oe, err := other.VolumeEncryption(cmd.Context(), v); err == nil && oe != nil {
+				e.Secret, e.PerPVC = oe.Secret, oe.PerPVC
+			}
+		}
+	}
+	ref := func(flag, v string) (longhorn.SecretRef, error) {
+		ns, n, ok := strings.Cut(v, "/")
+		if !ok || ns == "" || n == "" {
+			return longhorn.SecretRef{}, fmt.Errorf("%s NAMESPACE/NAME", flag)
+		}
+		return longhorn.SecretRef{Namespace: ns, Name: n}, nil
+	}
+	if k.source != "" {
+		r, err := ref("--key-source", k.source)
+		if err != nil {
+			return err
+		}
+		e.Secret, e.PerPVC = r, false
+	}
+	switch {
+	case k.secret != "":
+		r, err := ref("--secret", k.secret)
+		if err != nil {
+			return err
+		}
+		e.Mode, e.Target = longhorn.KeyExisting, r
+	case k.copy:
+		e.Mode = longhorn.KeyCopy
+	}
 	return nil
 }
 

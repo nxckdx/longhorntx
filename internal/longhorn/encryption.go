@@ -25,13 +25,44 @@ type SecretRef struct {
 
 func (r SecretRef) String() string { return r.Namespace + "/" + r.Name }
 
-// Encryption of a volume as lhtx found it.
+// Encryption of a source volume, and how the new volume gets its key.
 type Encryption struct {
-	// Secret the PV refers to; empty if unknown (no PV any more).
+	// Secret the source PV refers to; empty if unknown (no PV any more).
 	Secret SecretRef
 	// PerPVC: the Secret is named after the PVC (StorageClass with
-	// ${pvc.name}) – a new PVC name needs a copy of the Secret.
+	// ${pvc.name}).
 	PerPVC bool
+	// From: the cluster the source key lives in (nil: this one) – a
+	// migration restores in another cluster.
+	From *Client `json:"-"`
+
+	// how the new PV gets its key (see ResolveKey)
+	Mode   KeyMode
+	Target SecretRef // KeyExisting: the Secret to use; KeyCopy: optional name
+}
+
+// KeyMode: how a restored or cloned encrypted volume gets its key.
+type KeyMode string
+
+const (
+	// KeyAuto: refer to the source's Secret in the same namespace;
+	// anything else needs an explicit choice.
+	KeyAuto KeyMode = ""
+	// KeyReference: the new PV refers to the source's Secret.
+	KeyReference KeyMode = "reference"
+	// KeyExisting: a Secret that is already there (created by ESO, Sealed
+	// Secrets, by hand …); lhtx checks it holds the same key.
+	KeyExisting KeyMode = "existing"
+	// KeyCopy: lhtx copies the source's Secret (also across clusters).
+	KeyCopy KeyMode = "copy"
+)
+
+// KeyPlan is the resolved key handling for the new PV.
+type KeyPlan struct {
+	Target     SecretRef  // the Secret the new PV refers to
+	CopyFrom   *SecretRef // copy this one to Target first
+	CopyClient *Client    // the cluster CopyFrom lives in
+	Notes      []string   // shown as warnings
 }
 
 // pvSecretKeys are the CSI secret references a Longhorn PV can have.
@@ -90,21 +121,6 @@ func (c *Client) SecretExists(ctx context.Context, r SecretRef) (bool, error) {
 		return false, nil
 	}
 	return err == nil, err
-}
-
-// keySecretFor decides which Secret the PV of a new PVC refers to: the
-// same one, or – one Secret per PVC – one named after the new PVC, copied
-// from the source's if needed.
-func keySecretFor(e *Encryption, pvcNamespace, pvcName string) (target SecretRef, copyFrom *SecretRef) {
-	if !e.PerPVC {
-		return e.Secret, nil
-	}
-	target = SecretRef{Namespace: pvcNamespace, Name: pvcName}
-	if target != e.Secret {
-		src := e.Secret
-		copyFrom = &src
-	}
-	return target, copyFrom
 }
 
 func secretRefsFor(r SecretRef) map[string]any {

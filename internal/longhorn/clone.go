@@ -63,7 +63,7 @@ func CloneVolume(src *Volume, snapshot string, s RestoreSpec, exists func(kind s
 		s.Encryption = &Encryption{}
 	}
 	acts := []*Action{vol}
-	copyAct, refs, err := encryptionFor(s, vol, exists)
+	copyAct, refs, err := encryptionFor(s, vol)
 	if err != nil {
 		return nil, err
 	}

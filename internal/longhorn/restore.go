@@ -31,13 +31,16 @@ type RestoreSpec struct {
 	StorageClass string // for PV/PVC; Longhorn's "static" class by default
 	FSType       string
 	// Encryption of the source (nil: not encrypted). The new volume is
-	// encrypted too and its PV refers to the key Secret.
+	// encrypted too and its PV refers to a Secret with the same key.
 	Encryption *Encryption
+	// Key: resolved by Client.ResolveKey (Build* do it).
+	Key *KeyPlan
 }
 
-// encryptionActions makes the new volume encrypted and returns the Secret
+// encryptionFor makes the new volume encrypted and returns the Secret
 // copy (if one is needed) to run before the PV, plus the PV's secret refs.
-func encryptionFor(s RestoreSpec, vol *Action, exists func(string) bool) (copyAct *Action, refs map[string]any, err error) {
+// s.Key comes from Client.ResolveKey.
+func encryptionFor(s RestoreSpec, vol *Action) (copyAct *Action, refs map[string]any, err error) {
 	e := s.Encryption
 	if e == nil {
 		return nil, nil, nil
@@ -45,21 +48,21 @@ func encryptionFor(s RestoreSpec, vol *Action, exists func(string) bool) (copyAc
 	vol.Object["spec"].(map[string]any)["encrypted"] = true
 	if s.PVCName == "" {
 		if e.Secret.Name != "" {
-			vol.Warnings = append(vol.Warnings, fmt.Sprintf("encrypted: a PV created later must refer to the key Secret %s (nodeStage/nodePublish/nodeExpandSecretRef)", e.Secret))
+			vol.Warnings = append(vol.Warnings, fmt.Sprintf("encrypted: a PV created later must refer to a Secret with the key of %s (nodeStage/nodePublish/nodeExpandSecretRef)", e.Secret))
 		}
 		return nil, nil, nil
 	}
-	if e.Secret.Name == "" {
-		return nil, nil, fmt.Errorf("the source is encrypted and lhtx cannot tell which Secret holds the key (its PV is gone) – name it: --secret NAMESPACE/NAME")
+	k := s.Key
+	if k == nil {
+		return nil, nil, fmt.Errorf("encrypted source: the key for the new PV is not resolved")
 	}
-	target, from := keySecretFor(e, s.PVCNamespace, s.PVCName)
-	refs = secretRefsFor(target)
-	vol.Warnings = append(vol.Warnings, fmt.Sprintf("encrypted like the source: the PV refers to the key Secret %s", target))
-	if from != nil && !exists("secret") {
-		copyAct = &Action{Title: fmt.Sprintf("Copy key Secret %s to %s", from, target), Verb: VerbCreate,
-			GVR: gvrSecret, Namespace: target.Namespace, Name: target.Name, CopySecretFrom: from,
-			Lines:   []string{fmt.Sprintf("copy type and data of Secret %s (one Secret per PVC) – the values are not shown", from)},
-			summary: fmt.Sprintf("Secret %s with the key of %s", target, from)}
+	refs = secretRefsFor(k.Target)
+	vol.Warnings = append(vol.Warnings, k.Notes...)
+	if k.CopyFrom != nil {
+		copyAct = &Action{Title: fmt.Sprintf("Copy key Secret %s to %s", k.CopyFrom, k.Target), Verb: VerbCreate,
+			GVR: gvrSecret, Namespace: k.Target.Namespace, Name: k.Target.Name, CopySecretFrom: k.CopyFrom, CopyFromClient: k.CopyClient,
+			Lines:   []string{fmt.Sprintf("copy type and data of Secret %s – the values are not shown", k.CopyFrom)},
+			summary: fmt.Sprintf("Secret %s with the key of %s", k.Target, k.CopyFrom)}
 	}
 	return copyAct, refs, nil
 }
@@ -156,7 +159,7 @@ func RestoreBackup(b *Backup, bv *BackupVolume, s RestoreSpec, exists func(kind 
 		fmt.Sprintf("restores %s (backup of %s from %s) into a new volume; the original is not touched", humanBytes(int64(b.Status.Size)), src, backupAge(b)),
 		"the new volume stays in state \"restoring\" until all data is copied; it cannot be attached before")
 	acts := []*Action{vol}
-	copyAct, refs, err := encryptionFor(s, vol, exists)
+	copyAct, refs, err := encryptionFor(s, vol)
 	if err != nil {
 		return nil, err
 	}
@@ -334,6 +337,14 @@ func (c *Client) PlanRestore(ctx context.Context, b *Backup, now time.Time) (*Re
 
 // Build checks for existing objects and returns the actions.
 func (c *Client) BuildRestore(ctx context.Context, p *RestorePlan) ([]*Action, error) {
+	if p.Backup.Encrypted() && p.Spec.Encryption == nil {
+		p.Spec.Encryption = &Encryption{}
+	}
+	k, err := c.ResolveKey(ctx, p.Spec)
+	if err != nil {
+		return nil, err
+	}
+	p.Spec.Key = k
 	exists, lookupErr := c.existsFn(ctx, p.Spec)
 	acts, err := RestoreBackup(p.Backup, p.BackupVolume, p.Spec, exists)
 	if err != nil {
@@ -344,6 +355,14 @@ func (c *Client) BuildRestore(ctx context.Context, p *RestorePlan) ([]*Action, e
 
 // BuildClone checks for existing objects and returns the clone actions.
 func (c *Client) BuildClone(ctx context.Context, src *Volume, snapshot string, s RestoreSpec) ([]*Action, error) {
+	if src.Spec.Encrypted && s.Encryption == nil {
+		s.Encryption = &Encryption{}
+	}
+	k, err := c.ResolveKey(ctx, s)
+	if err != nil {
+		return nil, err
+	}
+	s.Key = k
 	exists, lookupErr := c.existsFn(ctx, s)
 	acts, err := CloneVolume(src, snapshot, s, exists)
 	if err != nil {
@@ -377,11 +396,6 @@ func (c *Client) existsFn(ctx context.Context, spec RestoreSpec) (func(string) b
 			ok, err = c.Exists(ctx, GVRPV, "", p.Spec.Name, true)
 		case "pvc":
 			ok, err = c.Exists(ctx, GVRPVC, p.Spec.PVCNamespace, p.Spec.PVCName, false)
-		case "secret":
-			if e := p.Spec.Encryption; e != nil {
-				t, _ := keySecretFor(e, p.Spec.PVCNamespace, p.Spec.PVCName)
-				ok, err = c.SecretExists(ctx, t)
-			}
 		}
 		if err != nil && lookupErr == nil {
 			lookupErr = fmt.Errorf("checking %s: %w", kind, err)

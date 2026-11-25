@@ -140,7 +140,11 @@ func findHooks(ctx context.Context, c *longhorn.Client, pod *unstructured.Unstru
 		if err != nil {
 			break
 		}
-		take(o, ow.Kind+" "+ow.Name+" annotation")
+		// a ReplicaSet carries copies of its Deployment's annotations:
+		// name the Deployment as the source
+		if ow.Kind != "ReplicaSet" {
+			take(o, ow.Kind+" "+ow.Name+" annotation")
+		}
 		cur = o
 	}
 	for _, r := range rules {

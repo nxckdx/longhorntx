@@ -557,3 +557,39 @@ func TestFreezeResume(t *testing.T) {
 		t.Error("took over a policy of other PVCs")
 	}
 }
+
+// A controller still in its back-off ignores the first nudge (seen with a
+// ReplicaSet on k3s): unfreeze nudges again until the volume is attached.
+func TestUnfreezeRenudge(t *testing.T) {
+	k := world()
+	ctx := context.Background()
+	p, err := PlanFreeze(ctx, k.c, []string{"app/data"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ApplyFreeze(ctx, k.c, p, fastF); err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	patches := 0
+	k.dyn.PrependReactor("patch", "replicasets", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		patches++
+		if patches == 1 {
+			return true, &unstructured.Unstructured{Object: map[string]any{}}, nil // ignored
+		}
+		return false, nil, nil
+	})
+	fs, _ := ActiveFreezes(ctx, k.dyn)
+	o := fastF
+	o.Renudge = 50 * time.Millisecond
+	if err := Unfreeze(ctx, k.c, fs[0], o); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if patches < 2 {
+		t.Errorf("nudged %d times", patches)
+	}
+}

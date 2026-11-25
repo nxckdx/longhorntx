@@ -393,6 +393,9 @@ type FreezeOptions struct {
 	Log  func(format string, a ...any)
 	Wait time.Duration // waits for detach / pods to come back (default 10 min)
 	Poll time.Duration // default 3 s
+	// Renudge: how often owners are nudged again while volumes are still
+	// not attached after an unfreeze (default 30 s).
+	Renudge time.Duration
 	// Name of the policy; empty = lhtx-freeze-<UTC time>. With a name an
 	// existing policy is taken over (the agent resuming after a restart).
 	Name string
@@ -409,6 +412,9 @@ func (o *FreezeOptions) defaults() {
 	}
 	if o.Poll == 0 {
 		o.Poll = 3 * time.Second
+	}
+	if o.Renudge == 0 {
+		o.Renudge = 30 * time.Second
 	}
 }
 
@@ -482,7 +488,7 @@ func ApplyFreeze(ctx context.Context, c *longhorn.Client, p *FreezePlan, o Freez
 	}
 	return f, waitVolumes(ctx, c, p.Attached, "detached", o, func(left []string) error {
 		return fmt.Errorf("still attached after %s: %s (frozen anyway: lhtx unfreeze %s)", o.Wait, strings.Join(firstN(left, 5), ", "), name)
-	})
+	}, nil)
 }
 
 // verifyEnforced creates a test pod that mounts a frozen PVC in a server
@@ -525,7 +531,7 @@ func verifyEnforced(ctx context.Context, dyn dynamic.Interface, p *FreezePlan, o
 }
 
 // waitVolumes waits until the volumes of the PVCs reach state.
-func waitVolumes(ctx context.Context, c *longhorn.Client, pvcs []string, state string, o FreezeOptions, timeout func([]string) error) error {
+func waitVolumes(ctx context.Context, c *longhorn.Client, pvcs []string, state string, o FreezeOptions, timeout func([]string) error, tick func(left []string)) error {
 	if len(pvcs) == 0 {
 		return nil
 	}
@@ -566,6 +572,9 @@ func waitVolumes(ctx context.Context, c *longhorn.Client, pvcs []string, state s
 		if time.Since(lastLog) > 10*time.Second {
 			lastLog = time.Now()
 			o.Log("… %d of %d volumes not %s yet: %s", len(left), len(pvcs), state, strings.Join(firstN(left, 3), ", "))
+		}
+		if tick != nil {
+			tick(left)
 		}
 		select {
 		case <-ctx.Done():
@@ -727,9 +736,34 @@ func Unfreeze(ctx context.Context, c *longhorn.Client, f Freeze, o FreezeOptions
 	if nudged > 0 {
 		o.Log("✔ %d owners nudged (annotation lhtx.io/unfrozen-at) so they start their pods now", nudged)
 	}
+	// Controllers that failed to create pods during the freeze may still
+	// be in their back-off (a ReplicaSet waits for its "expectations" up to
+	// 5 minutes and ignores a nudge until then): nudge the owners in the
+	// namespaces of the volumes still missing again, every Renudge.
+	lastNudge := time.Now()
+	renudge := func(left []string) {
+		if time.Since(lastNudge) < o.Renudge {
+			return
+		}
+		lastNudge = time.Now()
+		nss := map[string]bool{}
+		for _, x := range left {
+			ns, _, _ := strings.Cut(x, "/")
+			nss[ns] = true
+		}
+		n := 0
+		for _, ow := range f.Owners {
+			if nss[ow.Namespace] && !woken[ow.String()] && nudge(ctx, c, ow) == nil {
+				n++
+			}
+		}
+		if n > 0 {
+			o.Log("↻ %d owners nudged again (controllers may still be in their back-off)", n)
+		}
+	}
 	if err := waitVolumes(ctx, c, f.Attached, "attached", o, func(left []string) error {
 		return fmt.Errorf("not attached again after %s: %s – check their pods/operators", o.Wait, strings.Join(firstN(left, 8), ", "))
-	}); err != nil {
+	}, renudge); err != nil {
 		return err
 	}
 	return runPostHooks(ctx, c, f.PostHooks, o)
@@ -742,7 +776,9 @@ func nudge(ctx context.Context, c *longhorn.Client, ow Owner) error {
 	if err != nil {
 		return err
 	}
-	body := fmt.Sprintf(`{"metadata":{"annotations":{"lhtx.io/unfrozen-at":%q}}}`, time.Now().UTC().Format(time.RFC3339))
+	// nanoseconds: a repeated nudge must change the object, or no update
+	// event reaches the controller
+	body := fmt.Sprintf(`{"metadata":{"annotations":{"lhtx.io/unfrozen-at":%q}}}`, time.Now().UTC().Format(time.RFC3339Nano))
 	_, err = c.Dynamic().Resource(gvr).Namespace(ow.Namespace).Patch(ctx, ow.Name, types.MergePatchType, []byte(body), metav1.PatchOptions{FieldManager: "lhtx"})
 	return err
 }

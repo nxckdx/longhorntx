@@ -309,9 +309,9 @@ func (c *Client) PlanRestore(ctx context.Context, b *Backup, now time.Time) (*Re
 	if p.BackupVolume != nil {
 		pvc = p.BackupVolume.LastPVC()
 	}
-	if pvc == "" { // the backup volume does not always know it; the volume does
+	if pvc == "" { // the backup volume does not always know it; the volume does (also a former PVC)
 		if v, err := c.Volume(ctx, b.Volume()); err == nil {
-			pvc = v.BoundPVC()
+			pvc = v.PVC()
 		}
 	}
 	var enc *Encryption

@@ -1,0 +1,191 @@
+{{- if .Values.rbac.create }}
+{{- $name := include "lhtx-agent.fullname" . }}
+{{- $sa := include "lhtx-agent.serviceAccountName" . }}
+{{- $leaseNS := .Values.leaseNamespace | default .Values.longhornNamespace }}
+# The agent stops and starts apps: it deletes pods anywhere, execs hook
+# commands in them, creates admission policies and patches the owners of the
+# pods it stopped (any kind, hence "*"). Treat it like cluster-admin.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "lhtx-agent.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [lhtx.io]
+    resources: [freezes]
+    verbs: [get, list, watch, patch, update, delete]
+  - apiGroups: [lhtx.io]
+    resources: [freezes/status, freezes/finalizers]
+    verbs: [get, patch, update]
+  - apiGroups: [admissionregistration.k8s.io]
+    resources: [validatingadmissionpolicies, validatingadmissionpolicybindings]
+    verbs: [get, list, create, patch, delete]
+  - apiGroups: [authentication.k8s.io]
+    resources: [selfsubjectreviews]
+    verbs: [create]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, create, delete] # create: only the server dry run that checks the policy
+  - apiGroups: [""]
+    resources: [pods/exec]
+    verbs: [get, create]
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims]
+    verbs: [get, list]
+  - apiGroups: [longhorn.io]
+    resources: [volumes, settings]
+    verbs: [get, list]
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "lhtx-agent.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $sa }}
+    namespace: {{ .Release.Namespace }}
+---
+# the hooks ConfigMap in the Longhorn namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Values.longhornNamespace }}
+  labels:
+    {{- include "lhtx-agent.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [lhtx-hooks]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Values.longhornNamespace }}
+  labels:
+    {{- include "lhtx-agent.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $sa }}
+    namespace: {{ .Release.Namespace }}
+---
+# the leader election lease (the heartbeat lhtx looks for)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}-lease
+  namespace: {{ $leaseNS }}
+  labels:
+    {{- include "lhtx-agent.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, create, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}-lease
+  namespace: {{ $leaseNS }}
+  labels:
+    {{- include "lhtx-agent.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}-lease
+subjects:
+  - kind: ServiceAccount
+    name: {{ $sa }}
+    namespace: {{ .Release.Namespace }}
+{{- if .Values.rbac.leaseReaderForAllUsers }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}-lease-reader
+  namespace: {{ $leaseNS }}
+  labels:
+    {{- include "lhtx-agent.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    resourceNames: [lhtx-agent]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}-lease-reader
+  namespace: {{ $leaseNS }}
+  labels:
+    {{- include "lhtx-agent.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}-lease-reader
+subjects:
+  - kind: Group
+    name: system:authenticated
+    apiGroup: rbac.authorization.k8s.io
+{{- end }}
+{{- if .Values.rbac.leaseListForAllUsers }}
+---
+# lhtx finds a lease outside the Longhorn namespace by its label
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}-lease-list
+  labels:
+    {{- include "lhtx-agent.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $name }}-lease-list
+  labels:
+    {{- include "lhtx-agent.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $name }}-lease-list
+subjects:
+  - kind: Group
+    name: system:authenticated
+    apiGroup: rbac.authorization.k8s.io
+{{- end }}
+{{- if .Values.rbac.freezeRole }}
+---
+# Bind it to the people who may freeze: creating a Freeze stops every pod
+# that uses the listed PVCs.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}-freeze
+  labels:
+    {{- include "lhtx-agent.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [lhtx.io]
+    resources: [freezes]
+    verbs: [get, list, watch, create, delete]
+{{- end }}
+{{- end }}

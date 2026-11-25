@@ -3,7 +3,9 @@ package longhorn
 import (
 	"strings"
 	"testing"
+	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8stypes "k8s.io/apimachinery/pkg/types"
 )
 
@@ -110,10 +112,52 @@ func TestSetReplicaCount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !a.Destructive || len(a.Warnings) < 2 {
+	if !a.Destructive || len(a.Warnings) < 1 {
 		t.Errorf("reducing to 1 should warn: %+v", a)
 	}
 	if !strings.Contains(a.Preview("longhorn-system"), `"numberOfReplicas": 1`) {
 		t.Error(a.Preview("longhorn-system"))
+	}
+}
+
+// Lowering the replica count also deletes the surplus (Longhorn keeps it):
+// a failed one first, then one sharing a node, never below n healthy.
+func TestReplicaCountActionsSurplus(t *testing.T) {
+	v := &Volume{}
+	v.Name, v.Spec.NumberOfReplicas, v.Status.State = "vol", 3, "attached"
+	rep := func(name, node string, healthy, failed bool, age int) *Replica {
+		r := &Replica{}
+		r.Name, r.Spec.VolumeName, r.Spec.NodeID, r.Status.CurrentState = name, "vol", node, "running"
+		r.CreationTimestamp = metav1.NewTime(time.Unix(int64(1000+age), 0))
+		if healthy {
+			r.Spec.HealthyAt = "2026-01-01T00:00:00Z"
+		}
+		if failed {
+			r.Spec.FailedAt, r.Status.CurrentState = "2026-01-02T00:00:00Z", "stopped"
+		}
+		return r
+	}
+	reps := []*Replica{rep("a", "n1", true, false, 1), rep("b", "n2", true, false, 2), rep("c", "n3", true, false, 3), rep("d", "n3", false, true, 4)}
+	acts, err := ReplicaCountActions(v, 2, reps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var del []string
+	for _, a := range acts[1:] {
+		del = append(del, a.Name)
+	}
+	// 4 live, want 2: the failed d, then c (shares n3 with d)
+	if strings.Join(del, ",") != "d,c" {
+		t.Errorf("deleted %v, want d,c", del)
+	}
+	// raising does not delete anything
+	if acts, _ := ReplicaCountActions(v, 4, reps); len(acts) != 1 {
+		t.Errorf("raise: %d actions", len(acts))
+	}
+	// never below n healthy: only 2 healthy, want 2 → only the failed one goes
+	reps = []*Replica{rep("a", "n1", true, false, 1), rep("b", "n2", true, false, 2), rep("d", "n3", false, true, 4)}
+	acts, _ = ReplicaCountActions(v, 2, reps)
+	if len(acts) != 2 || acts[1].Name != "d" {
+		t.Errorf("kept healthy: %+v", acts)
 	}
 }

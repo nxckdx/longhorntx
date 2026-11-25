@@ -58,8 +58,14 @@ type Backup struct {
 		URL                 string   `json:"url"`
 		Error               string   `json:"error"`
 		ReplicaAddress      string   `json:"replicaAddress"`
+		// Labels: Longhorn records e.g. "volume-encrypted": "enabled"
+		Labels map[string]string `json:"labels"`
 	} `json:"status"`
 }
+
+// Encrypted: the backup holds the data of an encrypted volume (still
+// encrypted – restoring it needs the same key).
+func (b *Backup) Encrypted() bool { return b.Status.Labels["volume-encrypted"] == "enabled" }
 
 // Running reports whether the backup is still in flight.
 func (b *Backup) Running() bool {

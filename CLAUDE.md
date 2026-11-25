@@ -2,7 +2,7 @@
 
 lhtx: low-traffic TUI (k9s style) and CLI for Longhorn, replacing the Longhorn
 web UI on slow/metered links. Repo `github.com/nxckdx/longhorntx`, binary `lhtx`,
-also usable as kubectl plugin (`kubectl-lhtx`). See README.md for user docs.
+also usable as kubectl plugin (`kubectl-lhtx`). User docs: README.md (short) and docs/*.md.
 
 ## Principles (do not break)
 
@@ -35,7 +35,7 @@ internal/longhorn   slim CRD structs (no longhorn-manager import), Client (one-s
                     metadata API only (secrets.go)
 internal/fuzzy      fzf-style matching (TUI filter, CLI volume fallback)
 internal/demo       --demo: fake dynamic client with made-up data and a
-                    simulated rebuild loop (README GIFs: docs/*.tape + docs/tapes/,
+                    simulated rebuild loop (doc GIFs: docs/*.tape + docs/tapes/,
                     nix shell nixpkgs#vhs -c docs/tapes/record.sh)
 internal/config     ~/.config/lhtx/config.yaml: defaults + per-context overrides
                     (exact name or glob); flags/env beat it (cli/root.go loadConfig,
@@ -45,6 +45,16 @@ internal/switchover freeze (ValidatingAdmissionPolicy denies pods mounting the P
                     owners) and switch (restore → freeze → swap PV/PVC → unfreeze;
                     rollback until the old PVC is deleted; journal). No per-operator
                     or per-GitOps logic – the desired state is never changed.
+internal/agent      optional in-cluster agent (`lhtx agent`, image ghcr.io/nxckdx/lhtx):
+                    Freeze CRD lhtx.io/v1alpha1 (cluster-scoped), controller reusing
+                    switchover (named, resumable freezes; status log; finalizer =
+                    unfreeze; autoUnfreezeAfter; leader election lease lhtx-agent, by
+                    default in the Longhorn namespace, labelled = heartbeat). Client:
+                    Detect (GET of the lease in the Longhorn ns, else LIST by label), Request, Follow (watch of one object), Unfreeze. lhtx must
+                    keep working without it. No HTTP endpoint – requests only via CRs.
+deploy/             agent manifests, embedded (lhtx agent manifests); charts/lhtx-agent
+                    is the Helm chart – its templates/crd.yaml must equal deploy/crd.yaml
+                    (test). Demo: LHTX_DEMO_AGENT=1 runs the agent in-process.
 internal/overview   doctor summary per context (lhtx overview, TUI context picker o)
 internal/update     release check (daily, cached) and self-update from GitHub releases
 internal/cli        cobra commands (read: volumes.go, nodes.go, data.go, activity.go,
@@ -107,6 +117,10 @@ internal/tui        Bubble Tea v2 (charm.land/*): tui.go model/update/keys,
 - TUI testing: run in tmux (`tmux new-session -d -x 160 -y 40 ./lhtx`,
   `send-keys`, `capture-pane -p`). Send `Escape` and the next key separately
   (otherwise read as Alt+key). Render tests in `internal/tui/render_test.go`.
+- **Local lab for real tests:** `nix run .#lab -- start` (nix/lab: 3 NixOS VMs, k3s,
+  Longhorn, NFS backup target, test apps with hooks). Write actions may be run
+  freely against the lab (`lhtx-lab lhtx …`, kubeconfig in ~/.local/state/lhtx-lab) –
+  it found bugs the demo could not (ReplicaSet back-off, Longhorn name limit).
 - **Clusters are read-only for Claude.** Only read via kubectl/lhtx. Never apply
   a write action, never `--rw` without `--dry-run`, and no `--dry-run=server`
   unless the user explicitly allows it.
@@ -120,4 +134,8 @@ internal/tui        Bubble Tea v2 (charm.land/*): tui.go model/update/keys,
   `lhtx-bin` flake package. `nix/release.json` (version + SHA256 per system)
   is committed by the release workflow after goreleaser
   (`nix/update-release.sh`); do not edit by hand.
-- Keep README.md in sync with features (usage, keys, data model, traffic notes).
+- Keep the docs in sync with features: README.md stays short (pitch, install,
+  feature list with links); details go into the matching docs/*.md (usage.md:
+  commands + TUI keys, write-actions.md, freeze.md, restore-switch.md,
+  encryption.md, agent.md, configuration.md, traffic.md, development.md:
+  lab, releases, layout, data model, roadmap).

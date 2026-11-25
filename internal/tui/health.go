@@ -21,7 +21,7 @@ type healthExtra struct {
 	jobs      []*longhorn.RecurringJob
 	orphans   int
 	snapshots []*longhorn.VolumeSnapshot
-	extra     []longhorn.Finding // Flux suspended, unfinished switches
+	extra     []longhorn.Finding // active freezes, unfinished switches
 	loadedAt  time.Time
 	err       error
 }
@@ -37,6 +37,7 @@ func (m *model) loadHealth() tea.Cmd {
 	}
 	c, ctx := m.client, m.ctx
 	rebuilding := longhorn.RebuildingVolumes(m.state.Replicas)
+	vols := m.state.Volumes
 	m.healthLoading = true
 	return func() tea.Msg {
 		x := &healthExtra{loadedAt: time.Now()}
@@ -48,7 +49,7 @@ func (m *model) loadHealth() tea.Cmd {
 			x.err = err
 		}
 		x.orphans, _, _ = c.ListCount(ctx, "orphans")
-		x.extra = switchover.Checks(ctx, c, switchover.JournalDir())
+		x.extra = append(switchover.Checks(ctx, c, switchover.JournalDir()), c.EncryptionChecks(ctx, vols)...)
 		for _, v := range rebuilding {
 			if s, err := c.Snapshots(ctx, v); err == nil {
 				x.snapshots = append(x.snapshots, s...)

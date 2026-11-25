@@ -2,8 +2,10 @@ package switchover
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -51,7 +53,8 @@ func ownedBy(u *unstructured.Unstructured, apiVersion, kind, name string) *unstr
 
 func pod(name, claim string, ownerKind, ownerName string) *unstructured.Unstructured {
 	return ownedBy(obj("v1", "Pod", "app", name, nil, map[string]any{
-		"spec": map[string]any{"volumes": []any{map[string]any{"name": "d", "persistentVolumeClaim": map[string]any{"claimName": claim}}}},
+		"spec":   map[string]any{"volumes": []any{map[string]any{"name": "d", "persistentVolumeClaim": map[string]any{"claimName": claim}}}},
+		"status": map[string]any{"conditions": []any{map[string]any{"type": "Ready", "status": "True"}}},
 	}), "apps/v1", ownerKind, ownerName)
 }
 
@@ -75,6 +78,7 @@ func world(extra ...runtime.Object) *cluster {
 		GVRPolicy: "ValidatingAdmissionPolicyList", GVRBinding: "ValidatingAdmissionPolicyBindingList",
 		longhorn.GVRVolume: "VolumeList", longhorn.GVREngine: "EngineList", gvrConfigMap: "ConfigMapList",
 		{Group: "postgresql.cnpg.io", Version: "v1", Resource: "clusters"}: "ClusterList",
+		gvrSecret: "SecretList",
 	}
 	objs := []runtime.Object{
 		obj("v1", "PersistentVolumeClaim", "app", "data", fluxLabels, map[string]any{
@@ -174,12 +178,17 @@ func world(extra ...runtime.Object) *cluster {
 		}()
 		return false, nil, nil
 	})
-	dyn.PrependReactor("delete", "persistentvolumeclaims", func(k8stesting.Action) (bool, runtime.Object, error) {
+	dyn.PrependReactor("delete", "persistentvolumeclaims", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		// the PV of the deleted claim (not one bound to a re-created claim later)
+		bound := ""
+		if o, err := dyn.Tracker().Get(gvrPVC, a.GetNamespace(), a.(k8stesting.DeleteActionImpl).GetName()); err == nil {
+			bound, _, _ = unstructured.NestedString(o.(*unstructured.Unstructured).Object, "spec", "volumeName")
+		}
 		go func() { // the PV controller releases the PV
 			time.Sleep(5 * time.Millisecond)
 			pvs, _ := dyn.Resource(gvrPV).List(ctx, metav1.ListOptions{})
 			for _, pv := range pvs.Items {
-				if n, _, _ := unstructured.NestedString(pv.Object, "spec", "claimRef", "name"); n == "data" {
+				if n, _, _ := unstructured.NestedString(pv.Object, "spec", "claimRef", "name"); n == "data" && pv.GetName() == bound {
 					if ph, _, _ := unstructured.NestedString(pv.Object, "status", "phase"); ph == "Bound" || ph == "" {
 						_ = unstructured.SetNestedField(pv.Object, "Released", "status", "phase")
 						_, _ = dyn.Resource(gvrPV).Update(ctx, &pv, metav1.UpdateOptions{})
@@ -330,7 +339,7 @@ func TestFreezeUnfreeze(t *testing.T) {
 	if len(p.Pods) != 1 || len(p.Attached) != 1 {
 		t.Fatalf("%+v", p)
 	}
-	pol, _ := policyObjects("x", p, time.Now())
+	pol, _ := policyObjects("x", p, time.Now(), "")
 	vals, _, _ := unstructured.NestedSlice(pol.Object, "spec", "validations")
 	if e := vals[1].(map[string]any)["expression"].(string); !strings.Contains(e, "'tester'") {
 		t.Errorf("own user not exempt: %s", e)
@@ -398,6 +407,17 @@ func TestChecks(t *testing.T) {
 	}
 	if strings.Join(got, ",") != "switch,freeze" {
 		t.Errorf("%v", got)
+	}
+	// a switch finished by hand (the PVC uses the target, nothing frozen) is no warning
+	fs, _ := ActiveFreezes(ctx, k.dyn)
+	if err := Unfreeze(ctx, k.c, fs[0], fastF); err != nil {
+		t.Fatal(err)
+	}
+	pvc := get(t, k.dyn, gvrPVC, "app", "data")
+	_ = unstructured.SetNestedField(pvc.Object, "pvc-new", "spec", "volumeName")
+	_, _ = k.dyn.Resource(gvrPVC).Namespace("app").Update(ctx, pvc, metav1.UpdateOptions{})
+	if f := Checks(ctx, k.c, dir); len(f) != 0 {
+		t.Errorf("finished switch still reported: %+v", f)
 	}
 }
 
@@ -514,5 +534,195 @@ func TestFreezeCNPGHibernation(t *testing.T) {
 	}
 	if get(t, k.dyn, gvrCluster, "app", "db").GetAnnotations()[annCNPG] != "off" {
 		t.Error("not woken up")
+	}
+}
+
+// The agent restarts in the middle of a freeze: the second run takes the
+// existing policy over and keeps the owners of the pods already deleted.
+func TestFreezeResume(t *testing.T) {
+	k := world()
+	ctx := context.Background()
+	p, err := PlanFreeze(ctx, k.c, []string{"app/data"}, "upgrade")
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := fastF
+	o.Name, o.Request = freezePrefix+"upgrade", "upgrade"
+	if _, err := ApplyFreeze(ctx, k.c, p, o); err != nil {
+		t.Fatal(err)
+	}
+	p2, err := PlanFreeze(ctx, k.c, []string{"app/data"}, "upgrade")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p2.Pods) != 0 || len(p2.Owners) != 0 {
+		t.Fatalf("pods still there: %+v", p2)
+	}
+	f, err := ApplyFreeze(ctx, k.c, p2, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Owners) != 1 || len(f.Attached) != 1 || f.Request != "upgrade" {
+		t.Fatalf("resumed freeze lost state: %+v", f)
+	}
+	got, _ := GetFreeze(ctx, k.dyn, o.Name)
+	if got == nil || len(got.Owners) != 1 || got.Request != "upgrade" {
+		t.Fatalf("stored: %+v", got)
+	}
+	p3, err := PlanFreeze(ctx, k.c, []string{"app/other"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ApplyFreeze(ctx, k.c, p3, o); err == nil {
+		t.Error("took over a policy of other PVCs")
+	}
+}
+
+// A controller still in its back-off ignores the first nudge (seen with a
+// ReplicaSet on k3s): unfreeze nudges again until the volume is attached.
+func TestUnfreezeRenudge(t *testing.T) {
+	k := world()
+	ctx := context.Background()
+	p, err := PlanFreeze(ctx, k.c, []string{"app/data"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ApplyFreeze(ctx, k.c, p, fastF); err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	patches := 0
+	k.dyn.PrependReactor("patch", "replicasets", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		patches++
+		if patches == 1 {
+			return true, &unstructured.Unstructured{Object: map[string]any{}}, nil // ignored
+		}
+		return false, nil, nil
+	})
+	fs, _ := ActiveFreezes(ctx, k.dyn)
+	o := fastF
+	o.Renudge = 50 * time.Millisecond
+	if err := Unfreeze(ctx, k.c, fs[0], o); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if patches < 2 {
+		t.Errorf("nudged %d times", patches)
+	}
+}
+
+// A pre-freeze hook runs only in a ready pod; an app that is not running
+// has nothing to prepare, the freeze goes on.
+func TestPreHookSkippedWithoutReadyPod(t *testing.T) {
+	k := world()
+	ctx := context.Background()
+	p, err := PlanFreeze(ctx, k.c, []string{"app/data"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Groups[0].Pre = &Hook{Command: "false", Timeout: time.Second, Source: "test"}
+	for _, x := range p.Pods {
+		ns, n, _ := strings.Cut(x, "/")
+		u, _ := k.dyn.Resource(gvrPod).Namespace(ns).Get(ctx, n, metav1.GetOptions{})
+		_ = unstructured.SetNestedSlice(u.Object, []any{map[string]any{"type": "Ready", "status": "False"}}, "status", "conditions")
+		_, _ = k.dyn.Resource(gvrPod).Namespace(ns).Update(ctx, u, metav1.UpdateOptions{})
+	}
+	var logs []string
+	o := fastF
+	o.Log = func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) }
+	k.c.SetExec(func(context.Context, string, string, string, string) (string, error) {
+		t.Error("hook ran in a pod that is not ready")
+		return "", nil
+	})
+	if _, err := ApplyFreeze(ctx, k.c, p, o); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(logs, "\n"), "hook skipped") {
+		t.Errorf("no skip logged: %v", logs)
+	}
+}
+
+// encrypted: app/data's volumes are encrypted with the key in Secret app/data
+func encrypted(t *testing.T, k *cluster) {
+	ctx := context.Background()
+	pv := get(t, k.dyn, gvrPV, "", "pvc-old")
+	_ = unstructured.SetNestedField(pv.Object, "true", "spec", "csi", "volumeAttributes", "encrypted")
+	_ = unstructured.SetNestedMap(pv.Object, map[string]any{"name": "data", "namespace": "app"}, "spec", "csi", "nodeStageSecretRef")
+	_, _ = k.dyn.Resource(gvrPV).Update(ctx, pv, metav1.UpdateOptions{})
+	for _, v := range []string{"pvc-old", "pvc-new"} {
+		u := get(t, k.dyn, longhorn.GVRVolume, lhNS, v)
+		_ = unstructured.SetNestedField(u.Object, true, "spec", "encrypted")
+		_, _ = k.dyn.Resource(longhorn.GVRVolume).Namespace(lhNS).Update(ctx, u, metav1.UpdateOptions{})
+	}
+	_, _ = k.dyn.Resource(gvrSecret).Namespace("app").Create(ctx, keySecret("old-key"), metav1.CreateOptions{})
+}
+
+func keySecret(key string) *unstructured.Unstructured {
+	data := map[string]any{}
+	for f, v := range map[string]string{"CRYPTO_KEY_VALUE": key, "CRYPTO_KEY_CIPHER": "aes-xts-plain64", "CRYPTO_KEY_HASH": "sha256",
+		"CRYPTO_KEY_SIZE": "256", "CRYPTO_PBKDF": "argon2i"} {
+		data[f] = base64.StdEncoding.EncodeToString([]byte(v))
+	}
+	return obj("v1", "Secret", "app", "data", nil, map[string]any{"type": "Opaque", "data": data})
+}
+
+// The switch of an encrypted volume keeps the key refs; a manager that
+// replaces the key when the PVC is re-created is caught before any pod
+// starts, and the old key is kept.
+func TestSwitchKeyGuard(t *testing.T) {
+	ctx := context.Background()
+	o := Options{Poll: 10 * time.Millisecond, Wait: 3 * time.Second, KeySettle: 100 * time.Millisecond}
+
+	k := world()
+	encrypted(t, k)
+	p, err := Build(ctx, k.c, "app", "data", "pvc-new")
+	if err != nil || len(p.Blockers) > 0 || p.KeySecret == nil {
+		t.Fatalf("plan: %v %v %+v", err, p.Blockers, p.KeySecret)
+	}
+	if err := Run(ctx, k.c, p, o); err != nil {
+		t.Fatalf("unchanged key: %v", err)
+	}
+	if ref, _, _ := unstructured.NestedString(get(t, k.dyn, gvrPV, "", "pvc-new").Object, "spec", "csi", "nodeStageSecretRef", "name"); ref != "data" {
+		t.Errorf("new PV lost the key ref: %q", ref)
+	}
+
+	// a "manager" generates a new key when the PVC is created again
+	k = world()
+	encrypted(t, k)
+	k.dyn.PrependReactor("create", "persistentvolumeclaims", func(k8stesting.Action) (bool, runtime.Object, error) {
+		go func() {
+			time.Sleep(20 * time.Millisecond)
+			_, _ = k.dyn.Resource(gvrSecret).Namespace("app").Update(ctx, keySecret("NEW-random-key"), metav1.UpdateOptions{})
+		}()
+		return false, nil, nil
+	})
+	p, _ = Build(ctx, k.c, "app", "data", "pvc-new")
+	err = Run(ctx, k.c, p, o)
+	if err == nil || !strings.Contains(err.Error(), "ANOTHER key") {
+		t.Fatalf("replaced key not caught: %v", err)
+	}
+	if fs, _ := ActiveFreezes(ctx, k.dyn); len(fs) != 1 {
+		t.Error("the PVC must stay frozen")
+	}
+	l, _ := k.dyn.Resource(gvrSecret).Namespace("app").List(ctx, metav1.ListOptions{LabelSelector: longhorn.LabelKeyBackup + "=true"})
+	if len(l.Items) != 1 {
+		t.Fatalf("no key backup: %d", len(l.Items))
+	}
+	old, _ := longhorn.Fingerprint(keySecret("old-key"))
+	if fp, _ := longhorn.Fingerprint(&l.Items[0]); fp != old {
+		t.Error("the backup does not hold the old key")
+	}
+	// unfreeze refuses while the key Secret still holds the new key …
+	fs, _ := ActiveFreezes(ctx, k.dyn)
+	if err := Unfreeze(ctx, k.c, fs[0], fastF); err == nil || !strings.Contains(err.Error(), "does not hold the key") {
+		t.Fatalf("unfreeze with the wrong key: %v", err)
+	}
+	// … and goes on once the old key is back
+	_, _ = k.dyn.Resource(gvrSecret).Namespace("app").Update(ctx, keySecret("old-key"), metav1.UpdateOptions{})
+	if err := Unfreeze(ctx, k.c, fs[0], fastF); err != nil {
+		t.Fatalf("unfreeze with the old key back: %v", err)
 	}
 }

@@ -26,6 +26,7 @@ import (
 	"k8s.io/client-go/rest"
 	k8stesting "k8s.io/client-go/testing"
 
+	"github.com/nxckdx/longhorntx/internal/agent"
 	"github.com/nxckdx/longhorntx/internal/kube"
 	"github.com/nxckdx/longhorntx/internal/longhorn"
 )
@@ -57,7 +58,8 @@ func NewClient(ctx context.Context) *longhorn.Client {
 		gvrHPA: "HorizontalPodAutoscalerList", gvrKS: "KustomizationList", gvrHR: "HelmReleaseList",
 		gvrVAP: "ValidatingAdmissionPolicyList", gvrVAPB: "ValidatingAdmissionPolicyBindingList",
 		gvrCluster: "ClusterList", gvrProm: "PrometheusList",
-		{Version: "v1", Resource: "configmaps"}: "ConfigMapList"} {
+		{Version: "v1", Resource: "configmaps"}: "ConfigMapList", {Version: "v1", Resource: "secrets"}: "SecretList",
+		agent.GVRFreeze: "FreezeList", gvrLease: "LeaseList"} {
 		kinds[g] = k
 	}
 	objs := append(d.objects(), operatorObjects()...)
@@ -93,6 +95,7 @@ func NewClient(ctx context.Context) *longhorn.Client {
 	s.registerPods(objs)
 	s.workloadReactors(ctx)
 	s.admissionReactors(ctx)
+	s.freezeReactors()
 	// Expanding a PVC: grow the volume a moment later, like the CSI resizer.
 	dyn.PrependReactor("patch", "persistentvolumeclaims", func(a k8stesting.Action) (bool, runtime.Object, error) {
 		pa := a.(k8stesting.PatchActionImpl)
@@ -182,6 +185,7 @@ func NewClient(ctx context.Context) *longhorn.Client {
 		return "ok (demo: " + cmd + ")", nil
 	})
 	go s.run(ctx)
+	startAgent(ctx, c)
 	return c
 }
 

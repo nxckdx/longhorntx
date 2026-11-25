@@ -31,6 +31,17 @@ archives:
       - LICENSE
       - README.md
 
+# the agent image (lhtx agent): ghcr.io/nxckdx/lhtx:<version>
+dockers_v2:
+  - images: [ghcr.io/nxckdx/lhtx]
+    tags: ["{{ .Version }}", latest]
+    platforms: [linux/amd64, linux/arm64]
+    labels:
+      org.opencontainers.image.source: https://github.com/nxckdx/longhorntx
+      org.opencontainers.image.description: lhtx agent – carries out Longhorn PVC freezes in the cluster
+      org.opencontainers.image.licenses: MIT
+      org.opencontainers.image.version: "{{ .Version }}"
+
 checksum:
   name_template: checksums.txt
 

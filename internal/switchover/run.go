@@ -32,6 +32,9 @@ type Options struct {
 	Wait time.Duration
 	// Poll is the interval of the status checks (default 3 s).
 	Poll time.Duration
+	// KeySettle: how long after the PVC is re-created the key Secret of an
+	// encrypted volume is watched before the pods may start (default 20 s).
+	KeySettle time.Duration
 }
 
 // journal is what the journal file holds.
@@ -51,7 +54,9 @@ type runner struct {
 	p      *Plan
 	o      Options
 	j      journal
-	freeze *Freeze // active while the PVC is swapped
+	freeze *Freeze                    // active while the PVC is swapped
+	key    *unstructured.Unstructured // the key Secret as it was (memory only)
+	keyFP  string
 }
 
 // pastReturn marks a failure after the old PVC's delete was accepted:
@@ -76,6 +81,9 @@ func Run(ctx context.Context, c *longhorn.Client, p *Plan, o Options) error {
 	}
 	if o.Poll == 0 {
 		o.Poll = 3 * time.Second
+	}
+	if o.KeySettle == 0 {
+		o.KeySettle = 20 * time.Second
 	}
 	r := &runner{ctx: ctx, c: c, dyn: c.Dynamic(), p: p, o: o, j: journal{Plan: p, Context: c.Cluster.Context}}
 	err := r.run()
@@ -111,6 +119,9 @@ func (r *runner) run() error {
 	if err := r.waitTargetReady(); err != nil {
 		return err
 	}
+	if err := r.readKey(); err != nil {
+		return err
+	}
 
 	// --- reversible part ---------------------------------------------
 	fo := FreezeOptions{Log: r.o.Log, Wait: r.o.Wait, Poll: r.o.Poll}
@@ -138,6 +149,14 @@ func (r *runner) run() error {
 	if err := r.bindNew(); err != nil {
 		return r.stuck(err)
 	}
+	if err := r.guardKey(); err != nil {
+		var ke keyError
+		if errors.As(err, &ke) {
+			r.freeze = nil // stays frozen on purpose
+			return err
+		}
+		return r.stuck(err)
+	}
 	unfreezeErr := Unfreeze(r.ctx, r.c, *f, fo)
 	r.freeze = nil
 	switch {
@@ -152,6 +171,108 @@ func (r *runner) run() error {
 		p.PVCRef(), p.NewVolume, p.OldVolume, p.PVCRef(), p.OldVolume)
 	r.step("finished")
 	return nil
+}
+
+// readKey keeps the key Secret of an encrypted volume in memory: the
+// guard compares it after the PVC is re-created and restores it into a
+// backup Secret if a manager replaced it.
+func (r *runner) readKey() error {
+	if r.p.KeySecret == nil {
+		return nil
+	}
+	k := r.p.KeySecret
+	u, err := r.dyn.Resource(gvrSecret).Namespace(k.Namespace).Get(r.ctx, k.Name, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("read the key Secret %s to guard it during the switch: %w (nothing changed)", k, err)
+	}
+	fp, err := longhorn.Fingerprint(u)
+	if err != nil {
+		return fmt.Errorf("%w (nothing changed)", err)
+	}
+	r.key, r.keyFP = u, fp
+	return nil
+}
+
+// guardKey: after the PVC is re-created, whatever manages the key Secret
+// may react (re-create it, generate a new key). Before any pod starts,
+// lhtx waits KeySettle and checks the key: missing → wait for it to come
+// back; another key → keep the old one in a backup Secret and stop, the
+// PVC stays frozen.
+func (r *runner) guardKey() error {
+	if r.key == nil {
+		return nil
+	}
+	k := *r.p.KeySecret
+	r.o.Log("… watching the key Secret %s for %s (a manager may react to the new PVC)", k, r.o.KeySettle)
+	settle := time.Now().Add(r.o.KeySettle)
+	deadline := time.Now().Add(r.o.Wait)
+	missingLogged := false
+	for {
+		fp, err := r.c.KeyFingerprint(r.ctx, k)
+		switch {
+		case errors.Is(err, longhorn.ErrNoSecret):
+			if !missingLogged {
+				r.o.Log("… the key Secret %s is gone – waiting for its manager to create it again", k)
+				missingLogged = true
+			}
+		case err != nil && r.ctx.Err() != nil:
+			return r.ctx.Err()
+		case err != nil:
+			r.o.Log("⚠ reading the key Secret: %v", err)
+		case fp != r.keyFP:
+			name, berr := r.backupKey()
+			if berr != nil {
+				return fmt.Errorf("the key Secret %s now holds ANOTHER key and keeping a copy of the old one failed: %v – "+
+					"the old key is lost unless your secret source keeps versions; the volume needs the old key", k, berr)
+			}
+			return keyError{fmt.Errorf("the key Secret %s now holds ANOTHER key – whatever manages it generated a new one when the "+
+				"PVC was re-created. The volume opens only with the old key, so its pods were not started (%s stays frozen; a wrong "+
+				"key does not harm the data, the volume just does not open).\n"+
+				"The old key is in Secret %s/%s. Put it back:\n"+
+				"  - the manager reads it from a source (Vault, a cloud KMS, Git …): restore the old value there and let it sync\n"+
+				"  - the manager generates keys itself (no source): detach the Secret from it (e.g. delete the managing object with\n"+
+				"    --cascade=orphan, or stop the policy that re-creates it) and write the old key into %s\n"+
+				"Then: lhtx --rw unfreeze %s (it checks the key against the copy first) and delete the copy",
+				k, r.p.PVCRef(), k.Namespace, name, k, r.freeze.Name)}
+		case time.Now().After(settle):
+			r.step("key Secret %s unchanged", k)
+			return nil
+		}
+		if time.Now().After(deadline) {
+			name, _ := r.backupKey()
+			return fmt.Errorf("the key Secret %s did not come back within %s – the old key is kept in Secret %s/%s", k, r.o.Wait, k.Namespace, name)
+		}
+		if err := r.sleep(); err != nil {
+			return err
+		}
+	}
+}
+
+// keyError: the switch stopped because the key changed – the PVC stays
+// frozen and the message says how to recover (no generic "stuck" text).
+type keyError struct{ error }
+
+func (e keyError) Unwrap() error { return e.error }
+
+// backupKey writes the old key into a Secret of its own: no owner, so no
+// manager touches it. lhtx doctor reminds to remove it.
+func (r *runner) backupKey() (string, error) {
+	k := r.p.KeySecret
+	name := fmt.Sprintf("lhtx-key-backup-%s-%s", r.p.PVC, time.Now().UTC().Format("20060102-150405"))
+	if len(name) > 253 {
+		name = name[:253]
+	}
+	obj := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "v1", "kind": "Secret", "type": r.key.Object["type"],
+		"metadata": map[string]any{"name": name, "namespace": k.Namespace,
+			"labels": map[string]any{longhorn.LabelKeyBackup: "true"},
+			"annotations": map[string]any{"lhtx.io/key-of": k.String(), "lhtx.io/pvc": r.p.PVCRef(),
+				"lhtx.io/reason": "the key Secret was replaced during lhtx switch"}},
+		"data": r.key.Object["data"]}}
+	_, err := r.dyn.Resource(gvrSecret).Namespace(k.Namespace).Create(context.WithoutCancel(r.ctx), obj, metav1.CreateOptions{FieldManager: "lhtx"})
+	if err == nil {
+		r.o.Log("⚠ the old key is kept in Secret %s/%s", k.Namespace, name)
+	}
+	return name, err
 }
 
 // rollback ends the freeze (before the old PVC was deleted): the pods
@@ -305,6 +426,11 @@ func (r *runner) bindNew() error {
 		for k, v := range p.PVAttributes {
 			attrs[k] = v
 		}
+		csi := map[string]any{"driver": longhornDriver, "fsType": p.FSType, "volumeHandle": p.NewVolume,
+			"volumeAttributes": attrs}
+		for k, v := range p.SecretRefs {
+			csi[k] = v
+		}
 		pv := &unstructured.Unstructured{Object: map[string]any{
 			"apiVersion": "v1", "kind": "PersistentVolume",
 			"metadata": map[string]any{"name": pvName,
@@ -316,8 +442,7 @@ func (r *runner) bindNew() error {
 				"persistentVolumeReclaimPolicy": reclaim,
 				"storageClassName":              p.StorageClass,
 				"claimRef":                      claimRef,
-				"csi": map[string]any{"driver": longhornDriver, "fsType": p.FSType, "volumeHandle": p.NewVolume,
-					"volumeAttributes": attrs},
+				"csi":                           csi,
 			},
 		}}
 		if _, err := r.dyn.Resource(gvrPV).Create(r.ctx, pv, metav1.CreateOptions{FieldManager: "lhtx"}); err != nil {

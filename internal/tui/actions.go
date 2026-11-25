@@ -385,15 +385,17 @@ func (m *model) volumeAction(vols []string, key string, detail *page) tea.Cmd {
 			var acts []*longhorn.Action
 			var skipped []string
 			for _, vv := range views {
-				if a, err := longhorn.SetReplicaCount(vv.Volume, n); err != nil {
+				if as, err := longhorn.ReplicaCountActions(vv.Volume, n, m.state.Replicas); err != nil {
 					skipped = append(skipped, dash(vv.PVC)+": "+err.Error())
 				} else {
-					acts = append(acts, a)
+					acts = append(acts, as...)
 				}
 			}
 			if w := longhorn.ReplicaCountWarning(n, m.state.Nodes); w != "" {
 				for _, a := range acts {
-					a.Warnings = append(a.Warnings, w)
+					if a.Verb == longhorn.VerbPatch {
+						a.Warnings = append(a.Warnings, w)
+					}
 				}
 			}
 			m.confirmBatch(fmt.Sprintf("Set replica count of %s to %d", label, n), acts, skipped)

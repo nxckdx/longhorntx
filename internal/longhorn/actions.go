@@ -52,8 +52,13 @@ type Action struct {
 	Warnings    []string
 	Destructive bool
 	// Lines replace the request details in the preview (batch summaries).
-	Lines   []string
-	summary string // one-line description used in batch summaries
+	Lines []string
+	// CopySecretFrom: create a Secret with the type and data of this one.
+	// The data is read only when the action is applied (also server dry
+	// run) and never shown.
+	CopySecretFrom *SecretRef
+	CopyFromClient *Client // the cluster CopySecretFrom is in (nil: this one)
+	summary        string  // one-line description used in batch summaries
 }
 
 // Summary is a one-line description of the action for batch previews.
@@ -155,6 +160,9 @@ func (c *Client) Apply(ctx context.Context, a *Action, mode DryRun) error {
 	case a.Namespace != "":
 		res = c.dyn.Resource(a.GVR).Namespace(a.Namespace)
 	}
+	if a.CopySecretFrom != nil {
+		return c.copySecret(ctx, a, dry)
+	}
 	switch a.Verb {
 	case VerbCreate:
 		obj := &unstructured.Unstructured{Object: a.Object}
@@ -179,6 +187,37 @@ func (c *Client) Apply(ctx context.Context, a *Action, mode DryRun) error {
 		return res.Delete(ctx, a.Name, opts)
 	}
 	return fmt.Errorf("unknown verb %q", a.Verb)
+}
+
+// copySecret creates a.Namespace/a.Name with the type and data of
+// a.CopySecretFrom (an encryption key for a new PVC).
+func (c *Client) copySecret(ctx context.Context, a *Action, dry []string) error {
+	from := c
+	if a.CopyFromClient != nil {
+		from = a.CopyFromClient
+	}
+	src, err := from.dyn.Resource(gvrSecret).Namespace(a.CopySecretFrom.Namespace).Get(ctx, a.CopySecretFrom.Name, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("read Secret %s: %w", a.CopySecretFrom, err)
+	}
+	obj := map[string]any{"apiVersion": "v1", "kind": "Secret",
+		"metadata": map[string]any{"name": a.Name, "namespace": a.Namespace,
+			"annotations": map[string]any{"lhtx.io/copied-from": from.Cluster.Context + ":" + a.CopySecretFrom.String()}},
+		"type": src.Object["type"], "data": src.Object["data"]}
+	if l := src.GetLabels(); len(l) > 0 {
+		obj["metadata"].(map[string]any)["labels"] = toAnyMap(l)
+	}
+	_, err = c.dyn.Resource(gvrSecret).Namespace(a.Namespace).Create(ctx, &unstructured.Unstructured{Object: obj},
+		metav1.CreateOptions{DryRun: dry, FieldManager: "lhtx"})
+	return err
+}
+
+func toAnyMap(m map[string]string) map[string]any {
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
 }
 
 func lhObject(kind, name string, labels map[string]string, spec map[string]any) map[string]any {
@@ -358,12 +397,91 @@ func SetReplicaCount(v *Volume, n int) (*Action, error) {
 		a.Warnings = append(a.Warnings, fmt.Sprintf("Longhorn will build %d new replica(s), each a full copy (%s)", n-v.Spec.NumberOfReplicas, humanBytes(int64(v.Spec.Size))))
 	} else {
 		a.Destructive = true
-		a.Warnings = append(a.Warnings, "Longhorn will remove surplus replicas")
 	}
 	if n == 1 {
 		a.Warnings = append(a.Warnings, "with 1 replica the volume has no redundancy")
 	}
 	return a, nil
+}
+
+// ReplicaCountActions sets the replica count; when it goes down it also
+// deletes the surplus replicas – Longhorn keeps them otherwise (verified on
+// v1.12: spec 2, still 3 running). Which ones go: failed or stopped first,
+// then ones not rebuilt yet, then ones on a node that holds more than one,
+// then the newest. At least n healthy replicas always stay.
+func ReplicaCountActions(v *Volume, n int, replicas []*Replica) ([]*Action, error) {
+	var live []*Replica
+	perNode := map[string]int{}
+	for _, r := range replicas {
+		if r.Spec.VolumeName == v.Name && r.DeletionTimestamp == nil {
+			live = append(live, r)
+			perNode[r.Spec.NodeID]++
+		}
+	}
+	surplus := len(live) - n
+	var acts []*Action
+	var a *Action
+	if n == v.Spec.NumberOfReplicas && surplus > 0 {
+		// the count was lowered before (e.g. in the web UI) and the
+		// surplus stayed: only clean it up
+		if err := checkVolumeWritable(v); err != nil {
+			return nil, err
+		}
+	} else {
+		var err error
+		if a, err = SetReplicaCount(v, n); err != nil {
+			return nil, err
+		}
+		acts = append(acts, a)
+		if n > v.Spec.NumberOfReplicas || surplus <= 0 {
+			return acts, nil
+		}
+	}
+	rank := func(r *Replica) int {
+		switch {
+		case r.Spec.FailedAt != "" || r.Status.CurrentState != "running":
+			return 0
+		case r.Spec.HealthyAt == "":
+			return 1
+		case perNode[r.Spec.NodeID] > 1:
+			return 2
+		}
+		return 3
+	}
+	sort.SliceStable(live, func(i, j int) bool {
+		if ri, rj := rank(live[i]), rank(live[j]); ri != rj {
+			return ri < rj
+		}
+		return live[i].CreationTimestamp.After(live[j].CreationTimestamp.Time)
+	})
+	healthy := 0
+	for _, r := range live {
+		if availableReplica(r) {
+			healthy++
+		}
+	}
+	for _, r := range live[:surplus] {
+		if availableReplica(r) {
+			if healthy <= n {
+				continue
+			}
+			healthy--
+		}
+		d, err := DeleteReplica(r, nil, live)
+		if err != nil {
+			continue
+		}
+		acts = append(acts, d)
+	}
+	switch {
+	case a != nil && len(acts) > 1:
+		a.Warnings = append(a.Warnings, fmt.Sprintf("Longhorn does not remove surplus replicas itself: %d deleted with this change", len(acts)-1))
+	case a == nil && len(acts) == 0:
+		return nil, fmt.Errorf("volume already has %d replicas", n)
+	case a == nil:
+		acts[0].Warnings = append(acts[0].Warnings, fmt.Sprintf("the volume should have %d replicas but has %d – Longhorn does not remove surplus replicas itself", n, len(live)))
+	}
+	return acts, nil
 }
 
 // ---------------------------------------------------------------- nodes / disks

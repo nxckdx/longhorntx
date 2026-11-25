@@ -14,7 +14,7 @@ func TestRestoreHelpers(t *testing.T) {
 	if got := RestoreName("", "pvc-1", now); got != "pvc-1-restore-1124" {
 		t.Error(got)
 	}
-	if got := RestoreName("ns/"+strings.Repeat("a", 70), "", now); len(got) > 63 {
+	if got := RestoreName("ns/"+strings.Repeat("a", 70), "", now); len(got) > MaxVolumeName {
 		t.Error(len(got))
 	}
 	for in, want := range map[string]int{"3": 3, `{"v1":"2","v2":"1"}`: 2, "x": 3} {

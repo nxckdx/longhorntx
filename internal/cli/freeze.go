@@ -1,7 +1,10 @@
 package cli
 
 import (
+	"context"
 	"fmt"
+
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"os"
 	"sort"
 	"strings"
@@ -9,14 +12,15 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/nxckdx/longhorntx/internal/agent"
 	"github.com/nxckdx/longhorntx/internal/longhorn"
 	"github.com/nxckdx/longhorntx/internal/switchover"
 )
 
 func freezeCmds(g *globals) []*cobra.Command {
-	var all, status bool
+	var all, status, local bool
 	var node, reason string
-	var wait time.Duration
+	var wait, autoUnfreeze time.Duration
 	freeze := &cobra.Command{
 		Use:   "freeze [NS/PVC…] [--node NODE | --all]",
 		Short: "Stop everything that uses Longhorn volumes, without scaling anything (needs --rw)",
@@ -63,7 +67,12 @@ unfreeze removes the policy and nudges the owners of the deleted pods
 (annotation lhtx.io/unfrozen-at) so they start their pods at once instead of
 after their back-off, then waits until the volumes are attached again.
 The freeze lives in the cluster (lhtx freeze --status, lhtx doctor) – it can
-be ended from any machine. Needs cluster-admin rights.`,
+be ended from any machine. Needs cluster-admin rights.
+
+With the lhtx agent in the cluster (lhtx agent --help) lhtx hands the freeze
+to it and only follows its progress – Ctrl+C or a lost connection does not
+stop it halfway – and --auto-unfreeze ends it on its own. Needs only the
+right to create Freeze resources then. --local skips the agent.`,
 		ValidArgsFunction: g.completeVolumes,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
@@ -79,6 +88,13 @@ be ended from any machine. Needs cluster-admin rights.`,
 				return err
 			}
 			p, err := switchover.PlanFreeze(ctx, c, pvcs, reason)
+			if apierrors.IsForbidden(err) && !local {
+				// may create Freezes but not read pods/volumes: the agent
+				// plans it and logs every step
+				if ag := agent.Detect(ctx, c); ag != nil {
+					return requestBlind(cmd, g, c, ag, pvcs, reason, wait, autoUnfreeze, err)
+				}
+			}
 			if err != nil {
 				return err
 			}
@@ -95,11 +111,31 @@ be ended from any machine. Needs cluster-admin rights.`,
 				fmt.Printf("  %d of %d apps have no hooks – add lhtx.io/pre-freeze / lhtx.io/post-unfreeze if they need a clean shutdown (lhtx freeze --help)\n",
 					without, with+without)
 			}
-			fmt.Printf("  policy: deny pods mounting them, deny PVC create/delete except by %s\n\n", p.User)
+			ag := (*agent.Info)(nil)
+			if !local {
+				ag = agent.Detect(ctx, c)
+			}
+			if ag != nil {
+				fmt.Printf("  policy: deny pods mounting them, deny PVC create/delete except by the agent\n")
+				fmt.Printf("  carried out by the lhtx agent %s – lhtx only follows (Ctrl+C stops following, not the freeze)\n", ag.Holder)
+				if autoUnfreeze > 0 {
+					fmt.Printf("  the agent ends the freeze on its own %s after it is frozen\n", autoUnfreeze)
+				}
+				fmt.Println()
+			} else {
+				if autoUnfreeze > 0 {
+					return fmt.Errorf("--auto-unfreeze needs the lhtx agent in the cluster (lhtx agent --help)")
+				}
+				fmt.Printf("  policy: deny pods mounting them, deny PVC create/delete except by %s\n\n", p.User)
+			}
 			for _, w := range p.Warnings {
 				fmt.Println("⚠ " + w)
 			}
-			fmt.Println("⚠ until lhtx unfreeze, these workloads stay down – also if lhtx stops or this machine goes away")
+			if ag == nil {
+				fmt.Println("⚠ until lhtx unfreeze, these workloads stay down – also if lhtx stops or this machine goes away")
+			} else {
+				fmt.Println("⚠ until lhtx unfreeze, these workloads stay down")
+			}
 			mode, err := g.dryRun()
 			if err != nil {
 				return err
@@ -112,6 +148,13 @@ be ended from any machine. Needs cluster-admin rights.`,
 				return err
 			}
 			start := time.Now()
+			if ag != nil {
+				spec := agent.Spec{PVCs: p.PVCs, Reason: reason, Wait: wait.String()}
+				if autoUnfreeze > 0 {
+					spec.AutoUnfreezeAfter = strings.TrimSuffix(strings.TrimSuffix(autoUnfreeze.String(), "0s"), "0m")
+				}
+				return requestFreeze(ctx, c, spec, p.User)
+			}
 			f, err := switchover.ApplyFreeze(ctx, c, p, switchover.FreezeOptions{Wait: wait, Log: logger(start)})
 			if f != nil {
 				fmt.Printf("\nfrozen: %s – end it with: lhtx --rw unfreeze %s\n", f.Name, f.Name)
@@ -125,11 +168,13 @@ be ended from any machine. Needs cluster-admin rights.`,
 	f.StringVar(&reason, "reason", "", "note stored with the freeze (shown by --status and doctor)")
 	f.DurationVar(&wait, "wait", 10*time.Minute, "how long to wait for the volumes to detach")
 	f.BoolVar(&status, "status", false, "list the active freezes")
+	f.BoolVar(&local, "local", false, "do not hand the freeze to the lhtx agent, even if one runs")
+	f.DurationVar(&autoUnfreeze, "auto-unfreeze", 0, "with the agent: end the freeze on its own this long after it is frozen (e.g. 4h)")
 	_ = freeze.RegisterFlagCompletionFunc("node", func(c *cobra.Command, _ []string, s string) ([]string, cobra.ShellCompDirective) {
 		return g.completeNodeDisk(c, nil, s)
 	})
 
-	var uall bool
+	var uall, ignoreKey bool
 	var uwait time.Duration
 	unfreeze := &cobra.Command{
 		Use:   "unfreeze [NAME | --all]",
@@ -141,7 +186,7 @@ be ended from any machine. Needs cluster-admin rights.`,
 			if err != nil {
 				return err
 			}
-			fs, err := switchover.ActiveFreezes(ctx, c.Dynamic())
+			fs, err := activeFreezes(ctx, c)
 			if err != nil {
 				return err
 			}
@@ -177,7 +222,12 @@ be ended from any machine. Needs cluster-admin rights.`,
 			start := time.Now()
 			var errs []string
 			for _, fr := range sel {
-				if err := switchover.Unfreeze(ctx, c, fr, switchover.FreezeOptions{Wait: uwait, Log: logger(start)}); err != nil {
+				err := agent.Unfreeze(ctx, c, fr, switchover.FreezeOptions{Wait: uwait, IgnoreKey: ignoreKey}, logger(start), plainLog)
+				if ctx.Err() != nil {
+					fmt.Println("\nstopped following – the agent goes on (lhtx agent status)")
+					return nil
+				}
+				if err != nil {
 					errs = append(errs, err.Error())
 				}
 			}
@@ -188,9 +238,68 @@ be ended from any machine. Needs cluster-admin rights.`,
 		},
 	}
 	unfreeze.Flags().BoolVar(&uall, "all", false, "end all freezes")
+	unfreeze.Flags().BoolVar(&ignoreKey, "ignore-key", false, "unfreeze even if a key Secret differs from the copy a switch kept")
 	unfreeze.Flags().DurationVar(&uwait, "wait", 10*time.Minute, "how long to wait for the volumes to be attached again")
 	return []*cobra.Command{freeze, unfreeze}
 }
+
+// requestBlind hands a freeze to the agent without a local plan: the user
+// may create Freezes but not read the pods and volumes behind them.
+func requestBlind(cmd *cobra.Command, g *globals, c *longhorn.Client, ag *agent.Info, pvcs []string, reason string,
+	wait, autoUnfreeze time.Duration, why error) error {
+	ctx := cmd.Context()
+	fmt.Printf("Freeze %d PVCs · %s\n\n", len(pvcs), c.Cluster.Context)
+	fmt.Printf("  PVCs:   %s\n", strings.Join(short(pvcs, 8), ", "))
+	fmt.Printf("  no preview: you may not read what uses them (%v)\n", why)
+	fmt.Printf("  the lhtx agent %s plans it, stops every pod that mounts them and logs each step\n", ag.Holder)
+	if autoUnfreeze > 0 {
+		fmt.Printf("  the agent ends the freeze on its own %s after it is frozen\n", autoUnfreeze)
+	}
+	fmt.Println("\n⚠ until lhtx unfreeze, these workloads stay down")
+	if mode, _ := g.dryRun(); mode != longhorn.DryRunNone {
+		fmt.Println("\n(dry run: nothing changed)")
+		return nil
+	}
+	if err := g.confirm(true, "freeze"); err != nil {
+		return err
+	}
+	user, _ := switchover.Username(ctx, c.Dynamic())
+	spec := agent.Spec{PVCs: pvcs, Reason: reason, Wait: wait.String()}
+	if autoUnfreeze > 0 {
+		spec.AutoUnfreezeAfter = strings.TrimSuffix(strings.TrimSuffix(autoUnfreeze.String(), "0s"), "0m")
+	}
+	return requestFreeze(ctx, c, spec, user)
+}
+
+// requestFreeze creates the Freeze and follows the agent until it is frozen
+// or failed (a failed Freeze is removed: nothing is frozen).
+func requestFreeze(ctx context.Context, c *longhorn.Client, spec agent.Spec, user string) error {
+	name, err := agent.Request(ctx, c, spec, user)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("requested Freeze %s from the agent\n", name)
+	fr, _, err := agent.Follow(ctx, c, name, true, plainLog, agent.Settled)
+	switch {
+	case ctx.Err() != nil:
+		fmt.Printf("\nstopped following – the agent goes on (lhtx agent status)\n")
+		return nil
+	case err != nil:
+		return err
+	case fr == nil || fr.Status.Phase == agent.PhaseFailed:
+		msg := "the Freeze was removed"
+		if fr != nil {
+			msg = fr.Status.Message
+			_ = agent.End(ctx, c, name)
+		}
+		return fmt.Errorf("the agent could not freeze: %s", msg)
+	}
+	fmt.Printf("\nfrozen: %s – end it with: lhtx --rw unfreeze %s\n", agent.PolicyName(name), agent.PolicyName(name))
+	return nil
+}
+
+// plainLog prints the agent's lines: they carry their own time (UTC).
+func plainLog(f string, a ...any) { fmt.Printf("  %s\n", fmt.Sprintf(f, a...)) }
 
 func logger(start time.Time) func(string, ...any) {
 	return func(f string, a ...any) {
@@ -232,8 +341,34 @@ func selectPVCs(cmd *cobra.Command, c *longhorn.Client, args []string, all bool,
 	return out, nil
 }
 
+// activeFreezes lists the freezes; who may not read admission policies
+// (only create Freezes for the agent) gets the agent's Freezes instead.
+func activeFreezes(ctx context.Context, c *longhorn.Client) ([]switchover.Freeze, error) {
+	fs, err := switchover.ActiveFreezes(ctx, c.Dynamic())
+	if !apierrors.IsForbidden(err) {
+		return fs, err
+	}
+	crs, lerr := agent.List(ctx, c)
+	if lerr != nil || crs == nil {
+		return nil, err
+	}
+	fs = nil
+	for _, cr := range crs {
+		if cr.Status.Phase != agent.PhaseFrozen && cr.Status.Phase != agent.PhaseFreezing {
+			continue
+		}
+		f := switchover.Freeze{Name: agent.PolicyName(cr.Name), Request: cr.Name, PVCs: cr.Spec.PVCs,
+			Reason: cr.Spec.Reason, User: cr.RequestedBy, Created: cr.Created}
+		if cr.Status.Freeze != nil {
+			f.Owners = cr.Status.Freeze.Owners
+		}
+		fs = append(fs, f)
+	}
+	return fs, nil
+}
+
 func printFreezes(cmd *cobra.Command, c *longhorn.Client) error {
-	fs, err := switchover.ActiveFreezes(cmd.Context(), c.Dynamic())
+	fs, err := activeFreezes(cmd.Context(), c)
 	if err != nil {
 		return err
 	}

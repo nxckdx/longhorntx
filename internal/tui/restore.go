@@ -78,7 +78,10 @@ func (m *model) restoreForm(msg restorePlanMsg) {
 	}
 	if srcPVC != "" {
 		fields = append(fields, formField{key: "then", label: "then", value: newOnly, options: []string{newOnly, switchTo},
-			hint: "←→: switch = workload down, PVC re-created on the restored data, Flux paused meanwhile"})
+			hint: "←→: switch = pods frozen, PVC re-created on the restored data, then unfrozen"})
+	}
+	if b.Encrypted() {
+		fields = append(fields, keyFields(p.Spec.Encryption)...)
 	}
 	f := &form{title: fmt.Sprintf("Restore %s (%s) into a new volume", b.Name, backupWhen(b)), fields: fields}
 	f.live = func(v map[string]string) []string {
@@ -106,6 +109,11 @@ func (m *model) restoreForm(msg restorePlanMsg) {
 			}
 			p.Spec.PVCNamespace, p.Spec.PVCName = ns, name
 		}
+		if b.Encrypted() {
+			if err := applyKey(v, &p.Spec); err != nil {
+				return "", nil, err
+			}
+		}
 		// a few GETs (volume, PV, PVC exist?) – short, so done inline
 		ctx, cancel := context.WithTimeout(m.ctx, 10*time.Second)
 		defer cancel()
@@ -116,6 +124,52 @@ func (m *model) restoreForm(msg restorePlanMsg) {
 		return acts[0].Title, acts, nil
 	}
 	m.openForm(f)
+}
+
+// Key of an encrypted source: the same Secret (same namespace), a Secret
+// that is already there (checked against the source's key) or a copy.
+const (
+	keyAuto  = "same Secret as the source"
+	keyExist = "existing Secret (below)"
+	keyCopy  = "copy the source's Secret"
+)
+
+func keyFields(e *longhorn.Encryption) []formField {
+	src := "unknown – the source's PV is gone"
+	if e != nil && e.Secret.Name != "" {
+		src = e.Secret.String()
+	}
+	return []formField{
+		{key: "key", label: "key", value: keyAuto, options: []string{keyAuto, keyExist, keyCopy},
+			hint: "🔒 encrypted, source key: " + src + " – another namespace needs existing or copy"},
+		{key: "keysecret", label: "key Secret", hint: "namespace/name – for existing: must hold the same key (lhtx compares)"},
+	}
+}
+
+func applyKey(v map[string]string, s *longhorn.RestoreSpec) error {
+	if s.Encryption == nil {
+		s.Encryption = &longhorn.Encryption{}
+	}
+	e := s.Encryption
+	e.Mode, e.Target = longhorn.KeyAuto, longhorn.SecretRef{}
+	switch v["key"] {
+	case keyExist:
+		ns, n, ok := strings.Cut(strings.TrimSpace(v["keysecret"]), "/")
+		if !ok || ns == "" || n == "" {
+			return fmt.Errorf("key Secret: namespace/name of a Secret with the key")
+		}
+		e.Mode, e.Target = longhorn.KeyExisting, longhorn.SecretRef{Namespace: ns, Name: n}
+	case keyCopy:
+		e.Mode = longhorn.KeyCopy
+		if t := strings.TrimSpace(v["keysecret"]); t != "" {
+			ns, n, ok := strings.Cut(t, "/")
+			if !ok || ns == "" || n == "" {
+				return fmt.Errorf("key Secret: namespace/name for the copy, or empty")
+			}
+			e.Target = longhorn.SecretRef{Namespace: ns, Name: n}
+		}
+	}
+	return nil
 }
 
 func backupWhen(b *longhorn.Backup) string {
@@ -191,12 +245,16 @@ func (m *model) cloneForm(msg clonePlanMsg) {
 	if msg.snapshot != "" {
 		what = "snapshot " + msg.snapshot
 	}
-	f := &form{title: "Clone " + what + " of " + volLabelOf(msg.src) + " into a new volume", fields: []formField{
+	fields := []formField{
 		{key: "name", label: "new volume", value: s.Name, hint: "also the PV name"},
 		{key: "replicas", label: "replicas", value: fmt.Sprint(s.Replicas)},
 		{key: "pvc", label: "PVC", value: pvc, hint: "namespace/name, empty = volume only"},
 		{key: "sc", label: "storage class", value: s.StorageClass, hint: "of PV and PVC"},
-	}}
+	}
+	if msg.src.Spec.Encrypted {
+		fields = append(fields, keyFields(s.Encryption)...)
+	}
+	f := &form{title: "Clone " + what + " of " + volLabelOf(msg.src) + " into a new volume", fields: fields}
 	f.live = func(map[string]string) []string {
 		return []string{"the source volume is not changed – mount the clone next to it to look at the old data"}
 	}
@@ -214,6 +272,11 @@ func (m *model) cloneForm(msg clonePlanMsg) {
 				return "", nil, fmt.Errorf("PVC: namespace/name")
 			}
 			s.PVCNamespace, s.PVCName = ns, name
+		}
+		if msg.src.Spec.Encrypted {
+			if err := applyKey(v, &s); err != nil {
+				return "", nil, err
+			}
 		}
 		ctx, cancel := context.WithTimeout(m.ctx, 10*time.Second)
 		defer cancel()
@@ -241,7 +304,7 @@ func (m *model) planRestoreSwitch(c *longhorn.Client, p *longhorn.RestorePlan, s
 		return err
 	}
 	ns, pvc, _ := strings.Cut(srcPVC, "/")
-	sw, err := switchover.BuildPending(ctx, c, ns, pvc, p.Spec.Name, int64(p.Backup.Status.VolumeSize))
+	sw, err := switchover.BuildPending(ctx, c, ns, pvc, p.Spec.Name, int64(p.Backup.Status.VolumeSize), p.Backup.Encrypted())
 	if err != nil {
 		return err
 	}

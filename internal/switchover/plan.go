@@ -15,9 +15,10 @@ import (
 )
 
 var (
-	gvrPod = schema.GroupVersionResource{Version: "v1", Resource: "pods"}
-	gvrPVC = schema.GroupVersionResource{Version: "v1", Resource: "persistentvolumeclaims"}
-	gvrPV  = schema.GroupVersionResource{Version: "v1", Resource: "persistentvolumes"}
+	gvrPod    = schema.GroupVersionResource{Version: "v1", Resource: "pods"}
+	gvrPVC    = schema.GroupVersionResource{Version: "v1", Resource: "persistentvolumeclaims"}
+	gvrPV     = schema.GroupVersionResource{Version: "v1", Resource: "persistentvolumes"}
+	gvrSecret = schema.GroupVersionResource{Version: "v1", Resource: "secrets"}
 )
 
 const longhornDriver = "driver.longhorn.io"
@@ -45,6 +46,12 @@ type Plan struct {
 	Annotations  map[string]string `json:"annotations,omitempty"`
 	FSType       string            `json:"fsType"`
 	PVAttributes map[string]string `json:"pvAttributes,omitempty"`
+	// SecretRefs: the key Secret refs of an encrypted volume's PV, copied
+	// to the new PV (same PVC name, so the same Secret)
+	SecretRefs map[string]any `json:"secretRefs,omitempty"`
+	// KeySecret: the key of an encrypted volume; the switch guards it (a
+	// manager reacting to the PVC being re-created must not replace it)
+	KeySecret *longhorn.SecretRef `json:"keySecret,omitempty"`
 
 	// Freeze: the pods that mount the PVC and their owners; they are
 	// stopped by freezing the PVC (no scaling, no GitOps changes)
@@ -74,8 +81,16 @@ func Build(ctx context.Context, c *longhorn.Client, namespace, pvc, newVolume st
 // BuildPending plans a switch to a volume that does not exist yet (it is
 // restored right before the switch); size is its future size. This finds
 // blockers before anything is restored.
-func BuildPending(ctx context.Context, c *longhorn.Client, namespace, pvc, newVolume string, size int64) (*Plan, error) {
-	return build(ctx, c, namespace, pvc, newVolume, size)
+func BuildPending(ctx context.Context, c *longhorn.Client, namespace, pvc, newVolume string, size int64, encrypted bool) (*Plan, error) {
+	p, err := build(ctx, c, namespace, pvc, newVolume, size)
+	if err == nil && encrypted != (p.PVAttributes["encrypted"] == "true") {
+		if encrypted {
+			p.block("the backup is of an encrypted volume but the PVC's volume is not encrypted")
+		} else {
+			p.block("the PVC's volume is encrypted but the backup is not – the PV would ask for a key the volume does not use")
+		}
+	}
+	return p, err
 }
 
 func build(ctx context.Context, c *longhorn.Client, namespace, pvc, newVolume string, pendingSize int64) (*Plan, error) {
@@ -116,6 +131,7 @@ func build(ctx context.Context, c *longhorn.Client, namespace, pvc, newVolume st
 		p.FSType, _, _ = unstructured.NestedString(pv.Object, "spec", "csi", "fsType")
 		attrs, _, _ := unstructured.NestedStringMap(pv.Object, "spec", "csi", "volumeAttributes")
 		p.PVAttributes = keepPVAttributes(attrs)
+		p.SecretRefs = longhorn.PVSecretRefs(pv)
 	}
 	if p.FSType == "" {
 		p.FSType = "ext4"
@@ -143,6 +159,26 @@ func build(ctx context.Context, c *longhorn.Client, namespace, pvc, newVolume st
 	}
 	if nv.Spec.DataEngine == "v2" {
 		p.block("v2 data engine volumes are not supported by lhtx")
+	}
+	oldEnc := p.PVAttributes["encrypted"] == "true"
+	switch {
+	case pendingSize > 0: // the restore is not created yet: it follows the backup
+	case nv.Spec.Encrypted && !oldEnc:
+		p.block("target volume %s is encrypted but the PVC's volume is not – the PVC has no key Secret for it", newVolume)
+	case !nv.Spec.Encrypted && oldEnc:
+		p.block("the PVC's volume is encrypted but target volume %s is not – the PV would ask for a key the volume does not use", newVolume)
+	case oldEnc && p.SecretRefs == nil:
+		p.block("the PVC's PV is encrypted but names no key Secret")
+	}
+	if oldEnc && p.SecretRefs != nil {
+		if r, ok := p.SecretRefs["nodeStageSecretRef"].(map[string]any); ok {
+			ref := longhorn.SecretRef{Namespace: fmt.Sprint(r["namespace"]), Name: fmt.Sprint(r["name"])}
+			p.KeySecret = &ref
+			p.warn("encrypted: the new PV uses the same key Secret %s – the target volume must have been encrypted with that key (a restore of this PVC's backup was)", ref)
+			if m := c.SecretManager(ctx, ref); m != "" {
+				p.warn("the key Secret is managed by %s: if it reacts to the PVC being re-created with a new key, lhtx notices it before any pod starts, keeps a copy of the old key and stops", m)
+			}
+		}
 	}
 	if pvName := nv.Status.KubernetesStatus.PVName; pvName != "" {
 		pv, err := dyn.Resource(gvrPV).Get(ctx, pvName, metav1.GetOptions{})
@@ -283,6 +319,9 @@ func (p *Plan) Steps() []string {
 		add("create PV %s (volume %s, %s, class %s)", p.NewVolume, p.NewVolume, human(p.NewSize), p.StorageClass)
 	}
 	add("create PVC %s (same labels/annotations, %s) bound to it, wait until Bound", p.PVCRef(), human(p.Request))
+	if p.KeySecret != nil {
+		add("check that the key Secret %s still holds the same key (its manager may react to the new PVC) – if not: keep the old key in a backup Secret, stay frozen", p.KeySecret)
+	}
 	owners := "their controllers"
 	if p.Freeze != nil && len(p.Freeze.Owners) > 0 {
 		var o []string

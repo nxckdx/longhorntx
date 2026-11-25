@@ -22,8 +22,8 @@ func CloneVolume(src *Volume, snapshot string, s RestoreSpec, exists func(kind s
 	if src.Spec.DataEngine == "v2" {
 		return nil, fmt.Errorf("cloning v2 data engine volumes is not supported by lhtx")
 	}
-	if !volNameRE.MatchString(s.Name) || len(s.Name) > 63 {
-		return nil, fmt.Errorf("volume name %q: lowercase letters, digits and '-', at most 63 characters", s.Name)
+	if !volNameRE.MatchString(s.Name) || len(s.Name) > MaxVolumeName {
+		return nil, fmt.Errorf("volume name %q: lowercase letters, digits and '-', at most %d characters", s.Name, MaxVolumeName)
 	}
 	if exists("volume") {
 		return nil, fmt.Errorf("volume %s exists – choose another name", s.Name)
@@ -59,11 +59,21 @@ func CloneVolume(src *Volume, snapshot string, s RestoreSpec, exists func(kind s
 	if src.Status.Robustness == "faulted" {
 		vol.Warnings = append(vol.Warnings, "the source is faulted: the clone will fail until a replica is usable")
 	}
+	if src.Spec.Encrypted && s.Encryption == nil {
+		s.Encryption = &Encryption{}
+	}
 	acts := []*Action{vol}
+	copyAct, refs, err := encryptionFor(s, vol)
+	if err != nil {
+		return nil, err
+	}
 	if s.PVCName == "" {
 		return acts, nil
 	}
-	more, err := pvAndPVC(s, size, mode, exists)
+	if copyAct != nil {
+		acts = append(acts, copyAct)
+	}
+	more, err := pvAndPVC(s, size, mode, refs, exists)
 	if err != nil {
 		return nil, err
 	}

@@ -231,6 +231,9 @@ func (m *model) detailTop(p *page) string {
 	vol := v.Volume
 	info := fmt.Sprintf(" actual %s · %d/%d replicas healthy · data engine %s · %s",
 		format.Bytes(v.Actual), v.HealthyReplicas(), v.Desired, dash(v.Engine), strings.ToUpper(dash(vol.Spec.AccessMode)))
+	if vol.Spec.Encrypted {
+		info += " · 🔒 encrypted"
+	}
 	if vol.Status.LastBackupAt != "" {
 		info += " · last backup " + format.Age(vol.Status.LastBackupAt, time.Now()) + " ago"
 	}
@@ -436,7 +439,7 @@ func (m *model) viewHelp() string {
    C (snapshots panel) clone the snapshot into a new volume (+ PV/PVC)
    B (health tab) back up every attached volume with a late/missing backup
    r (backups panel / backups tab) restore into a new volume (+ PV/PVC),
-     optionally switching the original PVC to it (workload + Flux handled)
+     optionally switching the original PVC to it (its pods frozen meanwhile)
    w (volume details) switch a PVC to this volume – e.g. back to the old one
    Z freeze: stop every pod using the selected / this / a node's / ALL volumes
      with an admission policy (no scaling – works with any operator/GitOps);

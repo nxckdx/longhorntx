@@ -10,6 +10,9 @@ import (
 	"strings"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
 	"github.com/nxckdx/longhorntx/internal/longhorn"
 )
 
@@ -78,12 +81,22 @@ func Journals(dir string) []JournalEntry {
 // finish.
 func Checks(ctx context.Context, c *longhorn.Client, journalDir string) []longhorn.Finding {
 	var f []longhorn.Finding
+	fs, ferr := ActiveFreezes(ctx, c.Dynamic())
+	frozen := map[string]bool{}
+	for _, fr := range fs {
+		for _, p := range fr.PVCs {
+			frozen[p] = true
+		}
+	}
 	for _, e := range Journals(journalDir) {
 		if e.Context != c.Cluster.Context || e.Finished || e.RolledBack || time.Since(e.At) > 30*24*time.Hour {
 			continue
 		}
 		if e.Error != "" && e.LastStep == "" {
 			continue // failed before it changed anything
+		}
+		if !frozen[e.PVC] && pvcUses(ctx, c, e.PVC, e.To) {
+			continue // finished by hand (e.g. after the key guard stopped it)
 		}
 		msg := "switch to " + e.To + " did not finish"
 		if e.Error != "" {
@@ -95,7 +108,7 @@ func Checks(ctx context.Context, c *longhorn.Client, journalDir string) []longho
 			Hint: "see " + e.Path + "; check the PVC and active freezes (lhtx freeze --status)"})
 	}
 	// active freezes: pods of these PVCs cannot start until unfrozen
-	if fs, err := ActiveFreezes(ctx, c.Dynamic()); err == nil {
+	if ferr == nil {
 		for _, fr := range fs {
 			f = append(f, longhorn.Finding{Severity: longhorn.SevWarning, Check: "freeze", Object: fr.Name,
 				Message: fmt.Sprintf("%d PVCs frozen since %s (%s): their pods cannot start", len(fr.PVCs),
@@ -104,6 +117,18 @@ func Checks(ctx context.Context, c *longhorn.Client, journalDir string) []longho
 		}
 	}
 	return f
+}
+
+// pvcUses: the PVC is bound to the volume (the switch reached its goal).
+func pvcUses(ctx context.Context, c *longhorn.Client, pvc, volume string) bool {
+	ns, n, _ := strings.Cut(pvc, "/")
+	u, err := c.Dynamic().Resource(gvrPVC).Namespace(ns).Get(ctx, n, metav1.GetOptions{})
+	if err != nil {
+		return false
+	}
+	v, _, _ := unstructured.NestedString(u.Object, "spec", "volumeName")
+	ph, _, _ := unstructured.NestedString(u.Object, "status", "phase")
+	return v == volume && ph == "Bound"
 }
 
 func firstLine(s string) string {

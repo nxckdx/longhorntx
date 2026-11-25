@@ -408,6 +408,17 @@ func TestChecks(t *testing.T) {
 	if strings.Join(got, ",") != "switch,freeze" {
 		t.Errorf("%v", got)
 	}
+	// a switch finished by hand (the PVC uses the target, nothing frozen) is no warning
+	fs, _ := ActiveFreezes(ctx, k.dyn)
+	if err := Unfreeze(ctx, k.c, fs[0], fastF); err != nil {
+		t.Fatal(err)
+	}
+	pvc := get(t, k.dyn, gvrPVC, "app", "data")
+	_ = unstructured.SetNestedField(pvc.Object, "pvc-new", "spec", "volumeName")
+	_, _ = k.dyn.Resource(gvrPVC).Namespace("app").Update(ctx, pvc, metav1.UpdateOptions{})
+	if f := Checks(ctx, k.c, dir); len(f) != 0 {
+		t.Errorf("finished switch still reported: %+v", f)
+	}
 }
 
 func TestStopOrder(t *testing.T) {

@@ -13,11 +13,14 @@ metadata:
     {{- include "lhtx-agent.labels" . | nindent 4 }}
 rules:
   - apiGroups: [lhtx.io]
-    resources: [freezes]
+    resources: [freezes, switches]
     verbs: [get, list, watch, patch, update, delete]
   - apiGroups: [lhtx.io]
-    resources: [freezes/status, freezes/finalizers]
+    resources: [freezes/status, freezes/finalizers, switches/status]
     verbs: [get, patch, update]
+  - apiGroups: [authorization.k8s.io]
+    resources: [subjectaccessreviews]
+    verbs: [create]
   - apiGroups: [admissionregistration.k8s.io]
     resources: [validatingadmissionpolicies, validatingadmissionpolicybindings]
     verbs: [get, list, create, patch, delete]
@@ -32,9 +35,18 @@ rules:
     verbs: [get, create]
   - apiGroups: [""]
     resources: [persistentvolumeclaims]
-    verbs: [get, list]
+    verbs: [get, list, create, delete]
+  - apiGroups: [""]
+    resources: [persistentvolumes]
+    verbs: [get, list, create, patch]
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get, list, create]
   - apiGroups: [longhorn.io]
-    resources: [volumes, settings]
+    resources: [volumes]
+    verbs: [get, list, create]
+  - apiGroups: [longhorn.io]
+    resources: [settings, backups, backupvolumes, engines]
     verbs: [get, list]
   - apiGroups: ["*"]
     resources: ["*"]
@@ -174,6 +186,18 @@ subjects:
     apiGroup: rbac.authorization.k8s.io
 {{- end }}
 {{- if .Values.rbac.freezeRole }}
+---
+# Bind it with a RoleBinding in a namespace: who may switch PVCs there.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}-switch
+  labels:
+    {{- include "lhtx-agent.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [lhtx.io]
+    resources: [switches]
+    verbs: [get, list, watch, create, delete]
 ---
 # Bind it to the people who may freeze: creating a Freeze stops every pod
 # that uses the listed PVCs.

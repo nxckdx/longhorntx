@@ -1,0 +1,34 @@
+# Vouches for spec.requestedBy/requestedGroups: the agent acts for that user
+# (after asking the API server what the user may do) and refuses to work
+# without this policy.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: lhtx-switch-requester
+  labels:
+    app.kubernetes.io/name: lhtx-agent
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [lhtx.io]
+        apiVersions: [v1alpha1]
+        operations: [CREATE]
+        resources: [switches]
+  validations:
+    - expression: object.spec.requestedBy == request.userInfo.username
+      message: spec.requestedBy must be your own user name (lhtx fills it in)
+    - expression: >-
+        (has(object.spec.requestedGroups) ? object.spec.requestedGroups : []) ==
+        (has(request.userInfo.groups) ? request.userInfo.groups : [])
+      message: spec.requestedGroups must be your own groups (lhtx fills them in)
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: lhtx-switch-requester
+  labels:
+    app.kubernetes.io/name: lhtx-agent
+spec:
+  policyName: lhtx-switch-requester
+  validationActions: [Deny]

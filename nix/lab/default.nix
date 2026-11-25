@@ -112,7 +112,7 @@ in
         env            export KUBECONFIG=… (eval "\$(lhtx-lab env)")
         kubectl …      kubectl against the lab (kubectl2 … for lhtx-lab2)
         lhtx …         lhtx (this checkout) against the lab; --context lhtx-lab2 for the second
-        agent          install/update the lhtx agent (image built from this checkout, no VM restart)
+        agent [ro]     install/update the lhtx agent (image built from this checkout, no VM restart; ro = read-only)
       EOF
       }
 
@@ -145,7 +145,13 @@ in
             running "$n" || continue
             sshn "''${n#lab-}" "k3s ctr images import ${agentImage}" >/dev/null && echo "$n: image imported"
           done
-          lhtx --kubeconfig "$KCFG" --context lhtx-lab agent manifests --tag lab |
+          # read-write by default (freezes, switches); "agent ro" = read-only
+          rw=--rw
+          if [ "''${1:-}" = ro ]; then
+            rw=
+            k delete clusterrolebinding lhtx-agent-rw --ignore-not-found >/dev/null
+          fi
+          lhtx --kubeconfig "$KCFG" --context lhtx-lab agent manifests --tag lab $rw |
             sed 's/imagePullPolicy: .*//; s#image: ghcr.io/nxckdx/lhtx:lab#image: ghcr.io/nxckdx/lhtx:lab\n          imagePullPolicy: Never#' |
             k apply -f -
           k -n longhorn-system rollout restart deploy/lhtx-agent

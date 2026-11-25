@@ -302,7 +302,7 @@ func targetsCmd(g *globals) *cobra.Command {
 				msg := ""
 				for _, cnd := range t.Status.Conditions {
 					if cnd.Type == "Unavailable" && cnd.Status == "True" {
-						msg = cnd.Message
+						msg = oneLine(cnd.Message, 100) // the full text: -o json
 					}
 				}
 				fmt.Fprintf(w, "%s\t%s\t%v\t%s\t%s\t%s\n", t.Name, dash(t.Spec.BackupTargetURL), t.Status.Available,
@@ -625,4 +625,16 @@ func deletedBackupVolume(cmd *cobra.Command, c *longhorn.Client, arg string) str
 		return v
 	}
 	return ""
+}
+
+// oneLine shortens a (multi-line) message for a table cell.
+func oneLine(s string, n int) string {
+	s, rest, more := strings.Cut(strings.TrimSpace(s), "\n")
+	if r := []rune(s); len(r) > n {
+		return string(r[:n-1]) + "…"
+	}
+	if more && strings.TrimSpace(rest) != "" {
+		return s + " …"
+	}
+	return s
 }

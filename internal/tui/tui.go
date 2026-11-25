@@ -934,7 +934,7 @@ func (m *model) handleKey(k tea.KeyPressMsg) tea.Cmd {
 			m.store.RefreshNow()
 			m.setFlash("reloading volumes …", false)
 		} else {
-			m.setFlash("volumes are live (watch mode)", false)
+			m.setFlash("volumes are live (watch mode, or digests from the lhtx agent)", false)
 		}
 		return nil
 	}

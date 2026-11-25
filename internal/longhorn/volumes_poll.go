@@ -8,6 +8,10 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/tools/cache"
 )
 
@@ -27,6 +31,9 @@ import (
 const (
 	RefreshAuto  time.Duration = -1 // decide by volume count and update rate
 	RefreshWatch time.Duration = 0
+	// RefreshAgent: watch the VolumeDigests the lhtx agent keeps instead
+	// of the volumes (auto picks it when an agent keeps them).
+	RefreshAgent time.Duration = -2
 	// AutoPollThreshold: from this many volumes on, auto mode polls.
 	AutoPollThreshold = 150
 	// DefaultPollInterval is used by auto mode.
@@ -48,10 +55,12 @@ func ParseRefresh(s string) (time.Duration, error) {
 		return RefreshAuto, nil
 	case "watch", "live", "0":
 		return RefreshWatch, nil
+	case "agent", "digest", "digests":
+		return RefreshAgent, nil
 	}
 	d, err := time.ParseDuration(s)
 	if err != nil || d < 5*time.Second {
-		return 0, fmt.Errorf("invalid refresh %q: auto, watch or a duration ≥ 5s (e.g. 30s, 2m)", s)
+		return 0, fmt.Errorf("invalid refresh %q: auto, watch, agent or a duration ≥ 5s (e.g. 30s, 2m)", s)
 	}
 	return d, nil
 }
@@ -59,7 +68,14 @@ func ParseRefresh(s string) (time.Duration, error) {
 // decideRefresh resolves RefreshAuto with a cheap LIST limit=1, whose
 // metadata.remainingItemCount tells the collection size.
 func (s *Store) decideRefresh(ctx context.Context) time.Duration {
-	if s.Refresh != RefreshAuto {
+	if s.Refresh == RefreshAuto || s.Refresh == RefreshAgent {
+		if s.digestsUsable(ctx) {
+			return RefreshAgent
+		}
+		if s.Refresh == RefreshAgent {
+			s.setErr(fmt.Errorf("--refresh agent: no lhtx agent keeps volume digests here – falling back to auto"))
+		}
+	} else {
 		return s.Refresh
 	}
 	ul, err := s.c.res(GVRVolume).List(ctx, metav1.ListOptions{Limit: 1})
@@ -236,7 +252,7 @@ func (s *Store) queueVolumeGet(vol string) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.refresh == RefreshWatch || s.ctx == nil {
+	if s.refresh == RefreshWatch || s.refresh == RefreshAgent || s.ctx == nil {
 		return
 	}
 	if s.pendingGets == nil {
@@ -287,4 +303,51 @@ func (s *Store) startSingleVolumeWatch(ctx context.Context, volume string) {
 		UpdateFunc: func(_, n any) { upd(n) },
 	})
 	go inf.RunWithContext(ctx)
+}
+
+// digestsUsable: an lhtx agent is alive (its lease renewed within a
+// minute) and keeps VolumeDigests. Two small GETs.
+func (s *Store) digestsUsable(ctx context.Context) bool {
+	l, err := s.c.dyn.Resource(gvrLease).Namespace(s.c.Namespace).Get(ctx, "lhtx-agent", metav1.GetOptions{})
+	if err != nil {
+		return false
+	}
+	renew, _, _ := unstructured.NestedString(l.Object, "spec", "renewTime")
+	t, err := time.Parse(time.RFC3339Nano, renew)
+	if err != nil || time.Since(t) > time.Minute {
+		return false
+	}
+	dl, err := s.c.dyn.Resource(GVRVolumeDigest).Namespace(s.c.Namespace).List(ctx, metav1.ListOptions{Limit: 1})
+	return err == nil && len(dl.Items) > 0
+}
+
+var gvrLease = schema.GroupVersionResource{Group: "coordination.k8s.io", Version: "v1", Resource: "leases"}
+
+// newDigestInformer watches the VolumeDigests and caches the volumes in them.
+func (s *Store) newDigestInformer() cache.SharedIndexInformer {
+	res := s.c.dyn.Resource(GVRVolumeDigest).Namespace(s.c.Namespace)
+	lw := &cache.ListWatch{
+		ListWithContextFunc: func(ctx context.Context, o metav1.ListOptions) (runtime.Object, error) {
+			return res.List(ctx, o)
+		},
+		WatchFuncWithContext: func(ctx context.Context, o metav1.ListOptions) (watch.Interface, error) {
+			return res.Watch(ctx, o)
+		},
+	}
+	inf := cache.NewSharedIndexInformer(&plainListWatch{lw}, &unstructured.Unstructured{}, 0, cache.Indexers{})
+	_ = inf.SetTransform(func(obj any) (any, error) {
+		if u, ok := obj.(*unstructured.Unstructured); ok {
+			return VolumeFromDigest(u)
+		}
+		return obj, nil
+	})
+	_ = inf.SetWatchErrorHandler(func(_ *cache.Reflector, err error) {
+		s.setErr(fmt.Errorf("watch volumedigests: %w", err))
+	})
+	_, _ = inf.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc:    func(any) { s.notify() },
+		UpdateFunc: func(_, _ any) { s.volUpdates.Add(1); s.notify() },
+		DeleteFunc: func(any) { s.notify() },
+	})
+	return inf
 }

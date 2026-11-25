@@ -31,6 +31,7 @@ type Store struct {
 	c *Client
 
 	volumes, replicas, nodes cache.SharedIndexInformer
+	digests                  cache.SharedIndexInformer // agent mode
 	orphans                  cache.SharedIndexInformer // started after the initial sync
 
 	mu      sync.Mutex
@@ -185,6 +186,11 @@ func (s *Store) Start(ctx context.Context) {
 			s.autoWatchMonitor(vctx)
 		} else if r == RefreshWatch {
 			run(ResVolumes, s.volumes, nil, volumesDone)
+		} else if r == RefreshAgent {
+			s.mu.Lock()
+			s.digests = s.newDigestInformer()
+			s.mu.Unlock()
+			run(ResVolumes, s.digests, nil, volumesDone)
 		} else {
 			s.runVolumePoll(r, volumesDone)
 		}
@@ -199,6 +205,9 @@ func (s *Store) volumeStore() cache.Store {
 	defer s.mu.Unlock()
 	if s.decided && s.refresh == RefreshWatch {
 		return s.volumes.GetStore()
+	}
+	if s.decided && s.refresh == RefreshAgent && s.digests != nil {
+		return s.digests.GetStore()
 	}
 	return s.volStore
 }
@@ -365,7 +374,7 @@ func (s *Store) AutoEnginesSkipped() int {
 // State returns the current cache contents.
 func (s *Store) State() State {
 	snap := State{
-		Volumes:  listCache[Volume](s.volumeStore()),
+		Volumes:  s.volumesNow(),
 		Replicas: listStore[Replica](s.replicas),
 		Nodes:    listStore[Node](s.nodes),
 	}
@@ -375,6 +384,35 @@ func (s *Store) State() State {
 	}
 	s.mu.Unlock()
 	return snap
+}
+
+// volumesNow: the cached volumes; in agent mode a volume open in the detail
+// view (its own watch, exact values) replaces its digest.
+func (s *Store) volumesNow() []*Volume {
+	vols := listCache[Volume](s.volumeStore())
+	s.mu.Lock()
+	agentMode := s.decided && s.refresh == RefreshAgent
+	var live []string
+	if agentMode {
+		for name, w := range s.engines {
+			if w.volCancel != nil {
+				live = append(live, name)
+			}
+		}
+	}
+	s.mu.Unlock()
+	for _, name := range live {
+		o, ok, _ := s.volStore.GetByKey(s.c.Namespace + "/" + name)
+		if !ok {
+			continue
+		}
+		for i, v := range vols {
+			if v.Name == name {
+				vols[i] = o.(*Volume)
+			}
+		}
+	}
+	return vols
 }
 
 func listStore[T any](inf cache.SharedIndexInformer) []*T { return listCache[T](inf.GetStore()) }

@@ -30,9 +30,16 @@ func TestDigestChanged(t *testing.T) {
 	small := *v
 	small.Status.ActualSize = Quantity(100 << 20)
 	s2 := small
-	s2.Status.ActualSize = Quantity(102 << 20) // 2 % of a small volume
-	if !DigestChanged(&small, &s2) {
-		t.Error("2 % must rewrite")
+	s2.Status.ActualSize = Quantity(150 << 20) // 50 %, but below 64 MiB
+	if DigestChanged(&small, &s2) {
+		t.Error("below 64 MiB must not rewrite")
+	}
+	big := *v
+	big.Status.ActualSize = Quantity(1 << 40) // 1 TiB: 1 % ≈ 10 GiB
+	b2 := big
+	b2.Status.ActualSize += 5 << 30
+	if DigestChanged(&big, &b2) {
+		t.Error("5 GiB on 1 TiB (0.5 %) must not rewrite")
 	}
 	if !DigestChanged(nil, v) {
 		t.Error("no digest yet")

@@ -22,7 +22,7 @@ import (
 // cluster and keeps one small VolumeDigest per volume: the fields lhtx
 // models, as one JSON string (so managedFields stay tiny), rewritten only
 // when something lhtx shows changes – state, robustness, replicas, node, … –
-// or the actual size moved by more than 1 % / 64 MiB. lhtx then watches the
+// or the actual size moved by more than 64 MiB and 1 %. lhtx then watches the
 // digests instead of the volumes. Access is plain RBAC on the digests; there
 // is no endpoint of the agent involved.
 
@@ -30,8 +30,8 @@ import (
 // named like the volume.
 var GVRVolumeDigest = schema.GroupVersionResource{Group: "lhtx.io", Version: "v1alpha1", Resource: "volumedigests"}
 
-// DigestSizeStep: actual size changes below this (and below 1 %) are not
-// written to the digest.
+// DigestSizeStep: actual size changes below this (or below 1 % of the
+// size) are not written to the digest.
 const DigestSizeStep = 64 << 20
 
 const digestGzipPrefix = "gz:"
@@ -61,8 +61,10 @@ func DigestChanged(old, new *Volume) bool {
 	if string(ja) != string(jb) {
 		return true
 	}
+	// the larger of 64 MiB and 1 %: small volumes by 64 MiB, a 1 TB one
+	// by 10 GB – enough for a size shown with three digits
 	d := math.Abs(float64(sb) - float64(sa))
-	return d >= DigestSizeStep || (sa > 0 && d/float64(sa) >= 0.01)
+	return d >= math.Max(DigestSizeStep, 0.01*float64(sa))
 }
 
 // DigestObject builds the VolumeDigest for a volume (owned by it, so it

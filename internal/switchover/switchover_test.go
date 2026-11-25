@@ -726,3 +726,47 @@ func TestSwitchKeyGuard(t *testing.T) {
 		t.Fatalf("unfreeze with the old key back: %v", err)
 	}
 }
+
+// An interrupted switch is continued from what the cluster shows.
+func TestSwitchContinue(t *testing.T) {
+	ctx := context.Background()
+	o := Options{Poll: 10 * time.Millisecond, Wait: 3 * time.Second, FreezeName: freezePrefix + "sw", Request: "sw"}
+
+	// before the point of no return: start over
+	k := world()
+	p, err := Build(ctx, k.c, "app", "data", "pvc-new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Continue(ctx, k.c, p, o); !errors.Is(err, ErrStartOver) {
+		t.Fatalf("want ErrStartOver, got %v", err)
+	}
+
+	// the agent dies while creating the new PV (after the old PVC is gone)
+	k = world()
+	p, _ = Build(ctx, k.c, "app", "data", "pvc-new")
+	first := true
+	k.dyn.PrependReactor("create", "persistentvolumes", func(k8stesting.Action) (bool, runtime.Object, error) {
+		if first {
+			first = false
+			return true, nil, fmt.Errorf("connection lost")
+		}
+		return false, nil, nil
+	})
+	if err := Run(ctx, k.c, p, o); err == nil || !strings.Contains(err.Error(), "connection lost") {
+		t.Fatalf("interrupted run: %v", err)
+	}
+	if err := Continue(ctx, k.c, p, o); err != nil {
+		t.Fatalf("continue: %v", err)
+	}
+	if v := field(get(t, k.dyn, gvrPVC, "app", "data"), "spec", "volumeName"); v != "pvc-new" {
+		t.Errorf("PVC on %q", v)
+	}
+	if fs, _ := ActiveFreezes(ctx, k.dyn); len(fs) != 0 {
+		t.Error("still frozen")
+	}
+	// continuing again is harmless
+	if err := Continue(ctx, k.c, p, o); err != nil {
+		t.Errorf("second continue: %v", err)
+	}
+}

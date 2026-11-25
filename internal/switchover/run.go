@@ -35,6 +35,11 @@ type Options struct {
 	// KeySettle: how long after the PVC is re-created the key Secret of an
 	// encrypted volume is watched before the pods may start (default 20 s).
 	KeySettle time.Duration
+	// FreezeName names the freeze policy (default lhtx-freeze-<time>); with
+	// a name an interrupted switch can be continued (see Continue).
+	FreezeName string
+	// Request: the agent's Switch resource, stored on the freeze policy.
+	Request string
 }
 
 // journal is what the journal file holds.
@@ -124,7 +129,7 @@ func (r *runner) run() error {
 	}
 
 	// --- reversible part ---------------------------------------------
-	fo := FreezeOptions{Log: r.o.Log, Wait: r.o.Wait, Poll: r.o.Poll}
+	fo := FreezeOptions{Log: r.o.Log, Wait: r.o.Wait, Poll: r.o.Poll, Name: r.o.FreezeName, Request: r.o.Request}
 	f, err := ApplyFreeze(r.ctx, r.c, p.Freeze, fo)
 	r.freeze = f
 	if err != nil {
@@ -273,6 +278,80 @@ func (r *runner) backupKey() (string, error) {
 		r.o.Log("⚠ the old key is kept in Secret %s/%s", k.Namespace, name)
 	}
 	return name, err
+}
+
+// ErrStartOver: Continue found the switch before its point of no return
+// (the old PVC is still there) – run it again from the start (Build + Run
+// with the same FreezeName takes the freeze over).
+var ErrStartOver = errors.New("the old PVC is still there: start the switch over")
+
+// Continue picks a switch up after an interruption (the agent restarted)
+// from what the cluster shows: the old PVC still there → ErrStartOver; the
+// PVC gone → bind the new one, check the key, unfreeze; the PVC already on
+// the target → unfreeze. p is the plan of the interrupted run.
+func Continue(ctx context.Context, c *longhorn.Client, p *Plan, o Options) error {
+	if o.Log == nil {
+		o.Log = func(string, ...any) {}
+	}
+	if o.Wait == 0 {
+		o.Wait = 10 * time.Minute
+	}
+	if o.Poll == 0 {
+		o.Poll = 3 * time.Second
+	}
+	if o.KeySettle == 0 {
+		o.KeySettle = 20 * time.Second
+	}
+	r := &runner{ctx: ctx, c: c, dyn: c.Dynamic(), p: p, o: o, j: journal{Plan: p, Context: c.Cluster.Context}}
+	if o.FreezeName != "" {
+		f, err := GetFreeze(ctx, r.dyn, o.FreezeName)
+		if err != nil {
+			return err
+		}
+		r.freeze = f
+	}
+	cur, err := r.dyn.Resource(gvrPVC).Namespace(p.Namespace).Get(ctx, p.PVC, metav1.GetOptions{})
+	switch {
+	case apierrors.IsNotFound(err):
+		o.Log("continuing: the old PVC is gone – binding the new one")
+		if err := r.readKey(); err != nil {
+			return r.stuck(err)
+		}
+		if r.key != nil {
+			o.Log("⚠ the key Secret was read now, after the interruption – a key replaced before that cannot be noticed")
+		}
+		if err := r.bindNew(); err != nil {
+			return r.stuck(err)
+		}
+		if err := r.guardKey(); err != nil {
+			var ke keyError
+			if errors.As(err, &ke) {
+				return err
+			}
+			return r.stuck(err)
+		}
+	case err != nil:
+		return err
+	default:
+		vn, _, _ := unstructured.NestedString(cur.Object, "spec", "volumeName")
+		switch {
+		case vn == p.OldPV && cur.GetDeletionTimestamp() == nil:
+			return ErrStartOver
+		case vn != p.NewVolume && vn != p.ReusePV:
+			return fmt.Errorf("the PVC is bound to %s now – neither the old nor the target volume; check it by hand", vn)
+		}
+		o.Log("continuing: the PVC already uses %s", p.NewVolume)
+	}
+	if r.freeze == nil {
+		r.step("finished (no freeze left to end)")
+		return nil
+	}
+	if err := Unfreeze(ctx, c, *r.freeze, FreezeOptions{Log: o.Log, Wait: o.Wait, Poll: o.Poll}); err != nil {
+		return err
+	}
+	r.step("unfrozen, the workload runs on %s", p.NewVolume)
+	r.step("finished")
+	return nil
 }
 
 // rollback ends the freeze (before the old PVC was deleted): the pods
@@ -445,7 +524,15 @@ func (r *runner) bindNew() error {
 				"csi":                           csi,
 			},
 		}}
-		if _, err := r.dyn.Resource(gvrPV).Create(r.ctx, pv, metav1.CreateOptions{FieldManager: "lhtx"}); err != nil {
+		_, err := r.dyn.Resource(gvrPV).Create(r.ctx, pv, metav1.CreateOptions{FieldManager: "lhtx"})
+		if apierrors.IsAlreadyExists(err) { // continued after an interruption
+			if old, gerr := r.dyn.Resource(gvrPV).Get(r.ctx, pvName, metav1.GetOptions{}); gerr == nil {
+				if h, _, _ := unstructured.NestedString(old.Object, "spec", "csi", "volumeHandle"); h == p.NewVolume {
+					err = nil
+				}
+			}
+		}
+		if err != nil {
 			return fmt.Errorf("create PV %s: %w", pvName, err)
 		}
 		r.step("PV %s created for volume %s", pvName, p.NewVolume)

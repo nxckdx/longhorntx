@@ -112,7 +112,7 @@ in
         env            export KUBECONFIG=… (eval "\$(lhtx-lab env)")
         kubectl …      kubectl against the lab (kubectl2 … for lhtx-lab2)
         lhtx …         lhtx (this checkout) against the lab; --context lhtx-lab2 for the second
-        agent          install the lhtx agent (image built from this checkout)
+        agent          install/update the lhtx agent (image built from this checkout, no VM restart)
       EOF
       }
 
@@ -139,9 +139,16 @@ in
           for a in "$@"; do case $a in --context|--context=*) ctx= ;; esac; done
           KUBECONFIG=$BOTH exec lhtx ''${ctx:+--context $ctx} "$@" ;;
         agent)
+          # the image of this checkout, imported into every running node (the
+          # VMs see the host's Nix store) – no VM restart needed
+          for n in $NODES; do
+            running "$n" || continue
+            sshn "''${n#lab-}" "k3s ctr images import ${agentImage}" >/dev/null && echo "$n: image imported"
+          done
           lhtx --kubeconfig "$KCFG" --context lhtx-lab agent manifests --tag lab |
             sed 's/imagePullPolicy: .*//; s#image: ghcr.io/nxckdx/lhtx:lab#image: ghcr.io/nxckdx/lhtx:lab\n          imagePullPolicy: Never#' |
             k apply -f -
+          k -n longhorn-system rollout restart deploy/lhtx-agent
           k -n longhorn-system rollout status deploy/lhtx-agent --timeout=2m
           lhtx --kubeconfig "$KCFG" --context lhtx-lab agent status ;;
         *) usage ;;

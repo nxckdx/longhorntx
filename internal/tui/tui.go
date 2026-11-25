@@ -120,6 +120,7 @@ const (
 	panelBackups
 	panelEvents
 	panelJobs
+	panelHistory
 )
 
 type page struct {

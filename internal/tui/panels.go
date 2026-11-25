@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -24,6 +25,7 @@ type panelData struct {
 	backups   []*longhorn.Backup
 	events    []longhorn.Event
 	jobs      []*longhorn.RecurringJob
+	history   []longhorn.HistoryEvent
 }
 
 type panelMsg struct {
@@ -36,9 +38,10 @@ var panelNames = map[panelKind]string{
 	panelBackups:   "Backups",
 	panelEvents:    "Events",
 	panelJobs:      "Recurring jobs",
+	panelHistory:   "History",
 }
 
-var panelKeys = map[string]panelKind{"s": panelSnapshots, "b": panelBackups, "e": panelEvents, "J": panelJobs}
+var panelKeys = map[string]panelKind{"s": panelSnapshots, "b": panelBackups, "e": panelEvents, "J": panelJobs, "H": panelHistory}
 
 // detailKey handles keys specific to the detail page.
 func (m *model) detailKey(p *page, key string) (tea.Cmd, bool) {
@@ -52,7 +55,7 @@ func (m *model) detailKey(p *page, key string) (tea.Cmd, bool) {
 	}
 	switch key {
 	case "tab":
-		next := p.panel%panelJobs + 1
+		next := p.panel%panelHistory + 1
 		p.panel, p.cursor, p.offset = next, 0, 0
 		return m.loadPanel(p), true
 	case "ctrl+r":
@@ -92,6 +95,9 @@ func (m *model) loadPanel(p *page) tea.Cmd {
 			// all jobs: the panel shows which apply and lets write mode
 			// toggle assignments; the volume labels come from the watch
 			d.jobs, d.err = c.RecurringJobs(ctx)
+		case panelHistory:
+			// kept by the lhtx agent: one small GET
+			d.history, d.err = c.History(ctx, vol)
 		}
 		return panelMsg{vol: vol, data: d}
 	}
@@ -116,6 +122,8 @@ func (m *model) panelCols(p *page) []col {
 		return []col{{"AGE", 9, 0}, {"TYPE", 8, 0}, {"REASON", 22, 0}, {"OBJECT", 0, 1}, {"MESSAGE", 0, 3}}
 	case panelJobs:
 		return []col{{"NAME", 0, 1}, {"ASSIGNED", 0, 1}, {"TASK", 18, 0}, {"CRON", 14, 0}, {"RETAIN", 7, 0}, {"GROUPS / JOBS", 0, 1}, {"RUNS", 6, 0}}
+	case panelHistory:
+		return []col{{"WHEN", 17, 0}, {"AGE", 9, 0}, {"KIND", 15, 0}, {"WHAT", 0, 3}, {"TOOK", 9, 0}}
 	}
 	return nil
 }
@@ -177,6 +185,18 @@ func (m *model) panelRows(p *page) []row {
 			}
 			rows = append(rows, row{cells: []string{age, typ, e.Reason, sDim.Render(e.Object), e.Message}})
 		}
+	case panelHistory:
+		for _, e := range d.history {
+			kind := e.Kind
+			if e.Bad() {
+				kind = fg(cWarn, "✖ "+kind)
+			}
+			took := sDim.Render("-")
+			if e.Took > 0 {
+				took = e.Took.String()
+			}
+			rows = append(rows, row{cells: []string{e.At.Local().Format("2006-01-02 15:04"), format.Age(e.At.Format(time.RFC3339), now), kind, e.Text, took}})
+		}
 	case panelJobs:
 		vv := m.findView(p.vol)
 		if vv == nil {
@@ -206,8 +226,8 @@ func (m *model) panelRows(p *page) []row {
 // panelTitle is the line above the panel list.
 func (m *model) panelTitle(p *page) string {
 	var tabs []string
-	for _, k := range []panelKind{panelSnapshots, panelBackups, panelEvents, panelJobs} {
-		key := map[panelKind]string{panelSnapshots: "s", panelBackups: "b", panelEvents: "e", panelJobs: "J"}[k]
+	for _, k := range []panelKind{panelSnapshots, panelBackups, panelEvents, panelJobs, panelHistory} {
+		key := map[panelKind]string{panelSnapshots: "s", panelBackups: "b", panelEvents: "e", panelJobs: "J", panelHistory: "H"}[k]
 		label := "[" + key + "] " + panelNames[k]
 		if k == p.panel {
 			label = sTabActive.Render(" " + panelNames[k] + " ")
@@ -221,6 +241,8 @@ func (m *model) panelTitle(p *page) string {
 		switch {
 		case d.loading:
 			s += sDim.Render("   loading …")
+		case errors.Is(d.err, longhorn.ErrNoHistory):
+			s += sDim.Render("   nothing recorded – the lhtx agent keeps the history (lhtx agent --help)")
 		case d.err != nil:
 			s += "   " + sErr.Render(d.err.Error())
 		default:

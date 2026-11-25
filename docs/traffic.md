@@ -39,6 +39,9 @@ Findings:
 Strategy:
 
 - **Volumes: `--refresh` (env `LHTX_REFRESH`)**
+  - `agent`: with the [lhtx agent](agent.md) in the cluster, lhtx watches its
+    VolumeDigests instead of the volumes – `auto` picks this whenever an
+    agent keeps them. See below.
   - `auto` (default): live watch below 150 volumes, otherwise poll every 30 s.
     The count comes from one `LIST limit=1` (`remainingItemCount`). The live
     watch is measured: if volumes change more than 120 times a minute (the
@@ -72,6 +75,28 @@ Strategy:
   estimated from the measurement). For comparison, the web UI uses up to ~8 MB/s.
 - The header shows the bytes lhtx has received on the wire (measured at the
   TCP level, after TLS) and the current rate.
+
+## Volume digests (with the agent)
+
+The volume churn is `status.actualSize` changing with every write, and each
+change sends the whole Volume to every watcher. The agent watches the
+volumes inside the cluster, where bandwidth is free, and keeps one small
+`VolumeDigest` per volume: the fields lhtx shows (gzipped JSON, ~1.6 KB
+against ~6 KB for a Volume with managedFields), rewritten only when
+something lhtx shows changes – state, robustness, replicas, node, … – or
+the actual size moves by more than 64 MiB and 1 %. Measured in the test lab
+with three volumes growing by 2 MiB/s each (`lhtx measure`, 3 minutes):
+
+| watch | events | per minute |
+|---|---|---|
+| volumes | 150 | 268.7 KiB |
+| volume digests | 17 | **11.2 KiB** |
+
+That is about 24× less; for the large cluster above (10.3 MiB/min for the
+volume watch) roughly 0.4 MiB/min – less than polling (~0.85 MiB/min), and
+live. The volume open in the detail view still gets its own exact watch.
+Access to the digests is plain RBAC (ClusterRole `lhtx-view`); the agent
+exposes no endpoint for it.
 
 ## Startup
 

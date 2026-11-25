@@ -81,6 +81,11 @@ internal/tui        Bubble Tea v2 (charm.land/*): tui.go model/update/keys,
   150 volumes, else gzip re-list every 30 s), watch, or interval
   (volumes_poll.go). In poll mode a replica change triggers a GET of its
   volume; the volume in the detail view has its own name-selected watch.
+- With the lhtx agent: `--refresh agent` (auto picks it) watches the agent's
+  VolumeDigests (agent/digest.go, longhorn/digest.go: modeled fields, gzipped,
+  rewritten only on notable changes – size by max(64 MiB, 1 %)); lab: ~24× less
+  than the volume watch under write load. Patches tolerate the digests' older
+  resourceVersion (Apply retries a conflict if the changed fields still match).
 - Engines are chatty → watched per volume only (detail view open, or a replica
   looks like it is rebuilding: running without `healthyAt`), max 10 automatic.
 - Informers opt out of WatchList (`plainListWatch`): watch streams are not

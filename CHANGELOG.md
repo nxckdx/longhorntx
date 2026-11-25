@@ -1,5 +1,89 @@
 # Changelog
 
+## [0.6.0](https://github.com/nxckdx/longhorntx/compare/v0.5.0...v0.6.0) (2026-11-25)
+
+
+### Features
+
+* --refresh agent – watch the agent's VolumeDigests instead of the volumes ([ea12229](https://github.com/nxckdx/longhorntx/commit/ea122297a570ff4c6bc23e5ae9410bcbe572e3c9))
+* **agent:** health probes; chart: probes, PodDisruptionBudget and spreading for several replicas ([c677094](https://github.com/nxckdx/longhorntx/commit/c677094501e9073940cc060391e1f2678737fce3))
+* **agent:** Helm chart (oci://ghcr.io/nxckdx/charts/lhtx-agent) ([0339d32](https://github.com/nxckdx/longhorntx/commit/0339d32f2fa1b33ddb07ebe05e2a40ecb1ce7e62))
+* **agent:** history – rebuilds, failures, backups, expansions per volume and cluster-wide ([f5e2542](https://github.com/nxckdx/longhorntx/commit/f5e25422470b12f73b1eb9405e402e1a3accd350))
+* **agent:** history metrics by kind and rebuild durations; dashboard panels for them ([6944aff](https://github.com/nxckdx/longhorntx/commit/6944affbc22cf41c3f22234d145245a50dfd6c5e))
+* **agent:** in-cluster agent that carries out Freeze resources ([a3a987b](https://github.com/nxckdx/longhorntx/commit/a3a987b7d4f68b967a4c0b233366e9df6f5e3b19))
+* **agent:** lease in any namespace, found by label (chart: leaseNamespace) ([b39097f](https://github.com/nxckdx/longhorntx/commit/b39097fc4c84f8842f1bfa514493b9c4aad2df41))
+* **agent:** lhtx agent command, manifests (CRD, RBAC, Deployment), agent status ([c970074](https://github.com/nxckdx/longhorntx/commit/c97007431418f51d54e595c705c373efbef47986))
+* **agent:** LogQuery – volume logs read and filtered in the cluster for lhtx diag ([5bb531e](https://github.com/nxckdx/longhorntx/commit/5bb531e0b860cb91f187f4b9c23620f8170dbd7a))
+* **agent:** LogQuery CRD, requester policy and RBAC for it, ClusterRole lhtx-diag ([ed74b08](https://github.com/nxckdx/longhorntx/commit/ed74b08dce8c9d562cc71a4457b46437bf855971))
+* **agent:** manifests and chart for Switch resources (CRD, requester policy, RBAC) ([081deb3](https://github.com/nxckdx/longhorntx/commit/081deb38d5e4223851ecbb53a2b13bad463ef7f3))
+* **agent:** Prometheus metrics on the health port (/metrics) ([8fbd9f0](https://github.com/nxckdx/longhorntx/commit/8fbd9f0c7f997c6bc3a9e4ba8f27ef14e2d1b0e3))
+* **agent:** Switch resources – restore and switch a PVC in the cluster ([aa5420d](https://github.com/nxckdx/longhorntx/commit/aa5420d54ea83463b0886b25c1fe2ee4201099a8))
+* **agent:** VolumeDigests – the fields lhtx shows, rewritten only on notable changes ([5f56d44](https://github.com/nxckdx/longhorntx/commit/5f56d44a66b03abc5d186dd761e7ed71a2e27ed6))
+* **agent:** VolumeHistory CRD, RBAC (watch replicas and backups), reader role ([e31817b](https://github.com/nxckdx/longhorntx/commit/e31817bcd0f6527e8b044dd07c48c6ab1cd6905e))
+* **chart:** metrics Service, optional ServiceMonitor and Grafana dashboard ([23940ac](https://github.com/nxckdx/longhorntx/commit/23940ac7d3853fa1a4bdaae8930aa40b4d85957a))
+* **diag:** logs through the lhtx agent when it offers LogQueries (--local-logs) ([512764b](https://github.com/nxckdx/longhorntx/commit/512764bb704b4bfaab2d06e30981ef1dbbd86589))
+* **doctor:** encrypted volumes whose key Secret is missing ([88cad94](https://github.com/nxckdx/longhorntx/commit/88cad94bf2d0b3f07349b9f781944f7f77d39b56))
+* **doctor:** kept key copies and keys from another namespace ([999bebb](https://github.com/nxckdx/longhorntx/commit/999bebb1005c093e3c6209831f5f416daf6a97a5))
+* **doctor:** note key Secrets maintained by a controller – it must never rotate the key ([595a439](https://github.com/nxckdx/longhorntx/commit/595a439168e6940836e9f2e6be98a25142449f80))
+* **doctor:** repeated trouble from the agent's history (backups failing ≥2×, replicas ≥3× in 7 days) ([82776dc](https://github.com/nxckdx/longhorntx/commit/82776dccce230edb9c9d81c7e5e4e02e29491835))
+* **freeze:** freeze through the agent without read rights ([f6b11d8](https://github.com/nxckdx/longhorntx/commit/f6b11d8d278d54b022741a6ce83fbf1e767686d6))
+* **freeze:** hand freezes to the lhtx agent when one runs (--auto-unfreeze, --local) ([8b89dec](https://github.com/nxckdx/longhorntx/commit/8b89deca065fc76d92d99aa65f9d3567aca9f173))
+* **freeze:** named freezes that can be resumed (for the agent) ([ce895cf](https://github.com/nxckdx/longhorntx/commit/ce895cfdee02b1b0567c9f27276f35de72b94282))
+* **kube:** in-cluster config for the agent ([d0f276a](https://github.com/nxckdx/longhorntx/commit/d0f276ad64cef1d002e46ccfd46de3be6a361c85))
+* lhtx history [VOLUME] – the agent's history (--since, --kind, --bad) ([fc70a78](https://github.com/nxckdx/longhorntx/commit/fc70a78a67dc144f9a423939ea91e0a086049df5))
+* **measure:** include the agent's volumedigests when it keeps them ([59c3d11](https://github.com/nxckdx/longhorntx/commit/59c3d11d8a012f77b6029c6f4ec8ad6694f0ce5d))
+* **nix:** lab gets CloudNativePG with a two-instance cluster ([bc4cb87](https://github.com/nxckdx/longhorntx/commit/bc4cb87bf03b7fdd9df816f080d81951aca48323))
+* **nix:** lab gets External Secrets and a second one-node cluster (start2) for migrations ([28ef09b](https://github.com/nxckdx/longhorntx/commit/28ef09b359e3d49392c02900b4ddddde5d5c922c))
+* **nix:** lab has an NFS backup target on lab-1 ([202f7e6](https://github.com/nxckdx/longhorntx/commit/202f7e69950b11da201bb34757caf53df4ab7283))
+* **nix:** lhtx-lab – local 3-node k3s + Longhorn cluster in NixOS VMs ([259cbbc](https://github.com/nxckdx/longhorntx/commit/259cbbca379f82446b192b8ff0dbb97fdc79df84))
+* **nix:** lhtx-lab agent imports the image into the running nodes (no VM restart) ([3cd015c](https://github.com/nxckdx/longhorntx/commit/3cd015cccb5e76d6dc92616431a603a36ab950cd))
+* **overview:** AGENT column – is an lhtx agent alive in the cluster ([aa5d9d7](https://github.com/nxckdx/longhorntx/commit/aa5d9d73e189beb67910ab184db264b3ff33a9d1))
+* **restore:** encrypted volumes – restore, clone and switch keep the key ([0e8fd8b](https://github.com/nxckdx/longhorntx/commit/0e8fd8b12eaa6758b7d6ea03b2e86afd27f72a9e))
+* **restore:** key handling for encrypted volumes that works with any secret manager ([384a9dd](https://github.com/nxckdx/longhorntx/commit/384a9dd6428f8b2e86070510aac9841092948446))
+* show encrypted volumes (volume details, volumes -o wide) ([70b3c76](https://github.com/nxckdx/longhorntx/commit/70b3c76be5dd9970c951a0f7d714610d4b9d6161))
+* **switch:** continue an interrupted switch (named freeze, Continue) ([5c29678](https://github.com/nxckdx/longhorntx/commit/5c2967817c81703bf59ff03427f496056212df12))
+* **switch:** guard the key of encrypted volumes while the PVC is re-created ([f2d3acd](https://github.com/nxckdx/longhorntx/commit/f2d3acd6655376f2bc0f12c0d0aa2752f61d821d))
+* **switch:** hand switches to the lhtx agent when it can do them (--local) ([bde3c5d](https://github.com/nxckdx/longhorntx/commit/bde3c5ddcb7e43722deeae2f594259b22061eb6c))
+* **switch:** switch --from-backup; namespace users switch through the agent ([90f6904](https://github.com/nxckdx/longhorntx/commit/90f69043c010c4db7732790bb5c48a872e763407))
+* **tui:** History panel in the volume details (H) ([715e801](https://github.com/nxckdx/longhorntx/commit/715e801bf6ad211a3db3b7366ccd587db7de61ee))
+* **tui:** restore + switch and w hand the switch to the lhtx agent when it can do it ([911cc08](https://github.com/nxckdx/longhorntx/commit/911cc08eca37faecca12e0aff7e4ed910e6b3e3c))
+* **tui:** restore and clone forms choose the key of encrypted sources ([3233e84](https://github.com/nxckdx/longhorntx/commit/3233e84437df3cf38ad0e03a188eb69d6297b9ba))
+* **tui:** with the agent, Z asks whether the freeze should end on its own (1h … 24h) ([a142ba0](https://github.com/nxckdx/longhorntx/commit/a142ba0c29f62a01714257c7006389df48bbeadc))
+* **tui:** Z hands freezes to the lhtx agent when one runs ([b01a641](https://github.com/nxckdx/longhorntx/commit/b01a641c581c3ef2ba57353056305f33c5731f8f))
+
+
+### Bug Fixes
+
+* **actions:** retry a patch with a stale resourceVersion if its fields did not change ([aa3d3dd](https://github.com/nxckdx/longhorntx/commit/aa3d3dd4a781e867caa5417fd87dceb46a93e445))
+* **agent:** a restore volume is reused only if this Switch created it ([923681a](https://github.com/nxckdx/longhorntx/commit/923681af6e6cc1a5f038e3fface3c60f08d7b1fb))
+* **agent:** lhtx_agent_digest_volumes counts the existing digests from the start ([790f52b](https://github.com/nxckdx/longhorntx/commit/790f52b019feb82eda36c40af09655b28a170e84))
+* **agent:** manifests pass the Longhorn namespace to the agent ([2aad64e](https://github.com/nxckdx/longhorntx/commit/2aad64e0fd80d77074cebe6ea9e56545266e7f4a))
+* **agent:** never take an existing volume as the restore unless it is the restore of that backup ([ec539ed](https://github.com/nxckdx/longhorntx/commit/ec539edfb98ec63c51a470386f29a24da6282d95))
+* **agent:** RBAC – watch on Longhorn volumes for the digests ([f851d2a](https://github.com/nxckdx/longhorntx/commit/f851d2a08286e18c8359902409cf27328883847f))
+* **agent:** record a rebuild's start once the replica is scheduled (it has no node when created) ([365f6b1](https://github.com/nxckdx/longhorntx/commit/365f6b16267af5a3c17052a5dc29a184b07b2056))
+* **agent:** write a deleted VolumeDigest again at once ([5f10f28](https://github.com/nxckdx/longhorntx/commit/5f10f282c4f7725da156d593119e8d4a01e2bad3))
+* backup target poll intervals shown compactly (5m, not 5m0s) ([c9a624c](https://github.com/nxckdx/longhorntx/commit/c9a624c98d15637d46f24da2720fcfb2fa1ca7a2))
+* **cli:** targets shows one line of a backup target error (full text with -o json) ([9ab8f3a](https://github.com/nxckdx/longhorntx/commit/9ab8f3a4cfa1dc2a5da6e4c4d0b9aff91182f057))
+* **doctor:** a switch finished by hand is no warning ([75edfb4](https://github.com/nxckdx/longhorntx/commit/75edfb4e349f2e1cccf63022d2f98c2d5875938b))
+* **doctor:** a switch that failed before changing anything is no warning ([2dd2b87](https://github.com/nxckdx/longhorntx/commit/2dd2b87f1dd7ab8738170f044336bd52b985cbed))
+* **freeze:** nudge again only owners that have no pod ([87c0859](https://github.com/nxckdx/longhorntx/commit/87c085941b75c5db0323a96aa4f063a30091738e))
+* **freeze:** nudge owners again while volumes are not back after unfreeze ([6efcef5](https://github.com/nxckdx/longhorntx/commit/6efcef5b7ba09b6318647771bee261e3bd4ca5c2))
+* **freeze:** run pre-freeze hooks only in a ready pod ([74d2cf4](https://github.com/nxckdx/longhorntx/commit/74d2cf47d8f0ae5cd8c0eca6461881b3ef52e5cd))
+* **kube:** do not print API server warnings (klog on stderr, breaks the TUI) ([668af13](https://github.com/nxckdx/longhorntx/commit/668af1321e653248a2f506e19b0e0f090af3c19e))
+* **nix:** lab NFS export allows NATed pod traffic (insecure) ([c3819a6](https://github.com/nxckdx/longhorntx/commit/c3819a6ae4fdbf681b6f1e91e40131cc0fe5f025))
+* **nix:** vendorHash for the agent's client-go packages ([adc44f8](https://github.com/nxckdx/longhorntx/commit/adc44f8c4176bc501c773230eb2df935db239d31))
+* **replicas:** lowering the replica count also deletes the surplus replicas ([f10f664](https://github.com/nxckdx/longhorntx/commit/f10f66432999633cc6d2de74104a04861b29de43))
+* **restore:** name --key-from-context when the source's key is unknown ([ae5fc37](https://github.com/nxckdx/longhorntx/commit/ae5fc3755320bb99c02f248c4a4da00b668f3c02))
+* **restore:** name the new volume after the former PVC when the volume has none now ([142c983](https://github.com/nxckdx/longhorntx/commit/142c9834285edd4e0cf06d2f049a9122006beff3))
+* **restore:** volume names of at most 40 characters, named after the PVC ([e3d4e0a](https://github.com/nxckdx/longhorntx/commit/e3d4e0af344af8a0b8de041818ccbe16ab76b893))
+* **switch:** clear recovery steps when the key changed; unfreeze checks the kept key ([f1229db](https://github.com/nxckdx/longhorntx/commit/f1229dbff688257f6b4d94c4abd2321c89d1c65e))
+
+
+### Performance Improvements
+
+* **agent:** rewrite a digest for size changes above the larger of 64 MiB and 1 % ([72c3f90](https://github.com/nxckdx/longhorntx/commit/72c3f900b9df0f53b28c2e79846558faa8b39078))
+* **agent:** VolumeDigest data gzipped (watch events are not compressed) ([b2f35ad](https://github.com/nxckdx/longhorntx/commit/b2f35adbfd640f48101ad69317f4fde5c50399dd))
+
 ## [0.5.0](https://github.com/nxckdx/longhorntx/compare/v0.4.0...v0.5.0) (2026-11-24)
 
 

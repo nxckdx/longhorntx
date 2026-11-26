@@ -408,3 +408,29 @@ func (c *Client) existsFn(ctx context.Context, spec RestoreSpec) (func(string) b
 		return ok
 	}, &lookupErr
 }
+
+// LabelRestoreProbe marks the lhtx agent's restore probe volumes (value:
+// the source volume). They are deleted after the probe.
+const LabelRestoreProbe = "lhtx.io/restore-probe"
+
+// RestoreProbeVolume: a one-replica volume restored from b to see that the
+// backup can be read back in full. Not encrypted even for an encrypted
+// backup – the blocks are restored as they are, nothing is decrypted.
+func RestoreProbeVolume(b *Backup, name string) (map[string]any, error) {
+	if b.Status.State != "Completed" || b.Status.URL == "" {
+		return nil, fmt.Errorf("backup %s is not completed", b.Name)
+	}
+	size := int64(b.Status.VolumeSize)
+	if size <= 0 {
+		return nil, fmt.Errorf("backup %s does not record the volume size", b.Name)
+	}
+	return lhObject("Volume", name, map[string]string{LabelRestoreProbe: b.Volume()}, map[string]any{
+		"fromBackup":       b.Status.URL,
+		"size":             strconv.FormatInt(size, 10),
+		"numberOfReplicas": int64(1),
+		"accessMode":       "rwo",
+		"dataEngine":       "v1",
+		"frontend":         "blockdev",
+		"backupTargetName": b.Status.BackupTargetName,
+	}), nil
+}

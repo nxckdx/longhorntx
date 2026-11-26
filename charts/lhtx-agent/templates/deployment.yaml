@@ -61,6 +61,13 @@ spec:
             - --no-history
             {{- end }}
             - --capacity-interval={{ .Values.capacity.interval }}
+            {{- if or .Values.notify.url .Values.notify.existingSecret }}
+            - --notify-format={{ .Values.notify.format }}
+            - --notify-every={{ .Values.notify.every }}
+            {{- with .Values.notify.cluster }}
+            - --notify-cluster={{ . }}
+            {{- end }}
+            {{- end }}
             {{- with .Values.extraArgs }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -73,6 +80,13 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+            {{- if or .Values.notify.url .Values.notify.existingSecret }}
+            - name: LHTX_NOTIFY_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.notify.existingSecret | default (printf "%s-notify" (include "lhtx-agent.fullname" .)) }}
+                  key: {{ .Values.notify.secretKey }}
+            {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

@@ -59,6 +59,16 @@ metrics:
     enabled: false # needs the Prometheus operator (monitoring.coreos.com)
     interval: 60s
     labels: {} # e.g. release: kube-prometheus-stack
+  # alerts (needs the Prometheus operator): agent down, volumes faulted or
+  # degraded for long, backups or replicas failing, freezes kept for long or
+  # stuck. Volume alerts need the digests (the agent's volume watch).
+  prometheusRule:
+    enabled: false
+    labels: {} # e.g. release: kube-prometheus-stack
+    degradedFor: 30m
+    backupFailures: 2 # in 24h
+    replicaFailures: 3 # in 1h
+    frozenForSeconds: 21600 # 6h
   dashboard:
     enabled: false
     # a ConfigMap the Grafana sidecar loads

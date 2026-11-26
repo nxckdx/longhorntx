@@ -1,0 +1,70 @@
+{{- if .Values.metrics.prometheusRule.enabled }}
+{{- $r := .Values.metrics.prometheusRule }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "lhtx-agent.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "lhtx-agent.labels" . | nindent 4 }}
+    {{- with $r.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: lhtx-agent
+      rules:
+        - alert: LhtxAgentDown
+          expr: (sum(lhtx_agent_leader) < 1) or absent(lhtx_agent_leader)
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: No lhtx agent is active
+            description: No agent holds the lease – no digests, history, alerts below or freezes through the agent. lhtx keeps working on its own.
+        - alert: LonghornVolumeFaulted
+          expr: sum(lhtx_agent_volumes{robustness="faulted"}) > 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "{{ "{{" }} $value {{ "}}" }} Longhorn volume(s) faulted"
+            description: A faulted volume has no usable replica. lhtx doctor / lhtx history --bad show which.
+        - alert: LonghornVolumeDegraded
+          expr: sum(lhtx_agent_volumes{robustness="degraded"}) > 0
+          for: {{ $r.degradedFor }}
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ "{{" }} $value {{ "}}" }} Longhorn volume(s) degraded for more than {{ $r.degradedFor }}"
+            description: Replicas missing and not rebuilt. lhtx doctor shows why (scheduling, disk space, node down).
+        - alert: LonghornBackupsFailing
+          expr: sum(increase(lhtx_agent_history_events_total{kind="backup-failed"}[24h])) >= {{ $r.backupFailures }}
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ "{{" }} $value | humanize {{ "}}" }} Longhorn backups failed in 24h"
+            description: lhtx history --kind backup-failed --since 24h shows which and why.
+        - alert: LonghornReplicasFailing
+          expr: sum(increase(lhtx_agent_history_events_total{kind="replica-failed"}[1h])) >= {{ $r.replicaFailures }}
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ "{{" }} $value | humanize {{ "}}" }} Longhorn replicas failed in the last hour"
+            description: Many at once usually means a node or disk went away. lhtx history --kind replica-failed --since 1h
+        - alert: LhtxFreezeLong
+          expr: max(lhtx_agent_freeze_oldest_seconds) > {{ $r.frozenForSeconds }}
+          labels:
+            severity: warning
+          annotations:
+            summary: A freeze has kept apps down for {{ "{{" }} $value | humanizeDuration {{ "}}" }}
+            description: Forgotten after an upgrade? lhtx agent status; lhtx --rw unfreeze ends it.
+        - alert: LhtxFreezeOrSwitchStuck
+          expr: (sum(lhtx_agent_freezes{phase=~"Freezing|Failed"}) > 0) or (sum(lhtx_agent_switches{phase=~"Stuck|KeyChanged"}) > 0)
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: A Freeze or Switch of the lhtx agent needs attention
+            description: kubectl get freezes; kubectl get switches -A – the status log says what is wrong.
+{{- end }}

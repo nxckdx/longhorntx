@@ -52,7 +52,10 @@ type Agent struct {
 	// them until the count limit pushes them out).
 	HistoryMaxAge time.Duration
 	// HistoryFlush: how often recorded events are written (default 5 s).
-	HistoryFlush time.Duration
+	// CapacityInterval: how often the disks are sampled for the capacity
+	// forecast (0 = never).
+	CapacityInterval time.Duration
+	HistoryFlush     time.Duration
 
 	digestWrites atomic.Int64
 	metrics      metrics
@@ -134,6 +137,7 @@ func (a *Agent) Run(ctx context.Context) error {
 			}
 		}()
 	}
+	go a.runCapacity(ctx)
 	f := dynamicinformer.NewDynamicSharedInformerFactory(a.c.Dynamic(), 0)
 	inf := f.ForResource(GVRFreeze).Informer()
 	a.metrics.freezes = inf.GetStore()

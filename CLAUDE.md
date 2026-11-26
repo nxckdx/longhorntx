@@ -58,7 +58,8 @@ internal/agent      optional in-cluster agent (`lhtx agent`, image ghcr.io/nxckd
                     resumes via switchover.Continue). digest.go: VolumeDigests; history.go:
                     VolumeHistory (per volume + lhtx-cluster); metrics.go: /metrics; logs.go:
                     LogQuery (diag logs filtered in the cluster); capacity.go: disk
-                    samples → VolumeHistory lhtx-capacity (longhorn/capacity.go: Forecast). Read-only unless
+                    samples → VolumeHistory lhtx-capacity (longhorn/capacity.go: Forecast);
+                    notify.go: webhook notifications (ntfy/slack/discord/json, batched). Read-only unless
                     --rw (chart rw: true; RBAC split rbac.yaml / rbac-rw.yaml; lease
                     label lhtx.io/rw, lhtx hands work only to agent.DetectRW).
 deploy/             agent manifests, embedded (lhtx agent manifests); charts/lhtx-agent

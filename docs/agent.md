@@ -141,6 +141,23 @@ applies when a history is written, so a quiet volume keeps its old events
 until something new happens. The histories stay when the agent is removed
 (`kubectl -n longhorn-system delete volumehistories --all`).
 
+## Capacity forecast
+
+Longhorn shows how full a disk is, not how fast it fills. The agent samples
+every disk every 6 hours (`--capacity-interval`, chart `capacity.interval`,
+`0` = off) and keeps ~60 days in the VolumeHistory `lhtx-capacity`. `lhtx
+capacity` fits a line through the last 14 days:
+
+```
+DISK                          USED      USABLE    USED%  PER DAY    FULL IN
+node-1:/var/lib/longhorn      412 GiB   900 GiB   45%    +6.1 GiB   ~80 days
+node-2:/var/lib/longhorn      801 GiB   900 GiB   89%    +9.8 GiB   ~10 days
+```
+
+"Usable" is the disk's maximum minus what is reserved in Longhorn. `lhtx
+doctor` (and the Health tab) warn when a disk will be full within 14 days
+and note it within 30. It needs 2 days of samples first.
+
 ## Diagnostics: logs filtered in the cluster
 
 `lhtx diag VOLUME` needs the instance-manager and longhorn-manager logs of

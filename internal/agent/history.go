@@ -51,8 +51,12 @@ func replicaEvents(old, new *longhorn.Replica, vol *longhorn.Volume, now time.Ti
 	if new.Spec.DiskPath != "" {
 		where += ":" + new.Spec.DiskPath
 	}
-	// replicas created with the volume are not rebuilds
-	rebuild := vol == nil || new.CreationTimestamp.Sub(vol.CreationTimestamp.Time) > 2*time.Minute
+	// replicas created with the volume are not rebuilds – unless they failed
+	// later and are rebuilt in place (Longhorn reuses a replica after a node
+	// restart: same object, lastFailedAt set)
+	failed, _ := time.Parse(time.RFC3339, new.Spec.LastFailedAt)
+	reused := !failed.IsZero() && failed.After(new.CreationTimestamp.Time)
+	rebuild := vol == nil || reused || new.CreationTimestamp.Sub(vol.CreationTimestamp.Time) > 2*time.Minute
 	var out []longhorn.HistoryEvent
 	// the start: once the new replica is scheduled (it has no node when
 	// it is created)
@@ -63,10 +67,18 @@ func replicaEvents(old, new *longhorn.Replica, vol *longhorn.Volume, now time.Ti
 			out = append(out, longhorn.HistoryEvent{At: now, Kind: longhorn.HistRebuildStart, Text: "rebuilding a replica on " + where})
 		}
 	case old == nil:
+	case old.Spec.FailedAt != "" && new.Spec.FailedAt == "" && new.Spec.HealthyAt == "" && new.Spec.NodeID != "":
+		// a failed replica is being rebuilt in place
+		out = append(out, longhorn.HistoryEvent{At: now, Kind: longhorn.HistRebuildStart, Text: "rebuilding the replica on " + where})
 	case old.Spec.HealthyAt == "" && new.Spec.HealthyAt != "" && rebuild:
 		e := longhorn.HistoryEvent{At: now, Kind: longhorn.HistRebuildDone, Text: "replica on " + where + " rebuilt"}
-		if t, err := time.Parse(time.RFC3339, new.Spec.HealthyAt); err == nil && !new.CreationTimestamp.IsZero() {
-			e.Took = t.Sub(new.CreationTimestamp.Time).Round(time.Second)
+		// from its creation, or – rebuilt in place – from its failure
+		start := new.CreationTimestamp.Time
+		if reused {
+			start = failed
+		}
+		if t, err := time.Parse(time.RFC3339, new.Spec.HealthyAt); err == nil && !start.IsZero() && t.After(start) {
+			e.Took = t.Sub(start).Round(time.Second)
 		}
 		out = append(out, e)
 	}

@@ -99,3 +99,32 @@ func TestTrimHistory(t *testing.T) {
 		t.Error("clamp")
 	}
 }
+
+// After a node restart Longhorn rebuilds the old replica in place: the
+// duration counts from its failure, not from its creation months ago.
+func TestHistoryRebuildInPlace(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	v := &longhorn.Volume{}
+	v.Name, v.CreationTimestamp = "vol", metav1.NewTime(now.Add(-100*24*time.Hour))
+	r := &longhorn.Replica{}
+	r.Spec.NodeID, r.Spec.DiskPath = "n1", "/var/lib/longhorn/"
+	r.CreationTimestamp = metav1.NewTime(v.CreationTimestamp.Add(time.Second)) // created with the volume
+	r.Spec.HealthyAt = now.Add(-time.Hour).UTC().Format(time.RFC3339)
+
+	down := *r
+	down.Spec.HealthyAt, down.Spec.FailedAt = "", now.Add(-5*time.Minute).UTC().Format(time.RFC3339)
+	down.Spec.LastFailedAt = down.Spec.FailedAt
+	if ev := replicaEvents(r, &down, v, now); len(ev) != 1 || ev[0].Kind != longhorn.HistReplicaFailed {
+		t.Errorf("failed: %+v", ev)
+	}
+	rebuilding := down
+	rebuilding.Spec.FailedAt = ""
+	if ev := replicaEvents(&down, &rebuilding, v, now); len(ev) != 1 || ev[0].Kind != longhorn.HistRebuildStart {
+		t.Errorf("rebuild in place started: %+v", ev)
+	}
+	done := rebuilding
+	done.Spec.HealthyAt = now.Add(-time.Minute).UTC().Format(time.RFC3339)
+	if ev := replicaEvents(&rebuilding, &done, v, now); len(ev) != 1 || ev[0].Kind != longhorn.HistRebuildDone || ev[0].Took != 4*time.Minute {
+		t.Errorf("rebuilt in place: %+v", ev)
+	}
+}

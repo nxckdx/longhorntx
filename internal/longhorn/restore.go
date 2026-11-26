@@ -414,8 +414,10 @@ func (c *Client) existsFn(ctx context.Context, spec RestoreSpec) (func(string) b
 const LabelRestoreProbe = "lhtx.io/restore-probe"
 
 // RestoreProbeVolume: a one-replica volume restored from b to see that the
-// backup can be read back in full. Not encrypted even for an encrypted
-// backup – the blocks are restored as they are, nothing is decrypted.
+// backup can be read back in full. For an encrypted backup the test volume
+// is encrypted too (the backup holds the raw device with its LUKS header,
+// for which Longhorn makes room only in encrypted volumes); restoring needs
+// no key – only attaching it to a pod would, which the probe never does.
 func RestoreProbeVolume(b *Backup, name string) (map[string]any, error) {
 	if b.Status.State != "Completed" || b.Status.URL == "" {
 		return nil, fmt.Errorf("backup %s is not completed", b.Name)
@@ -424,7 +426,7 @@ func RestoreProbeVolume(b *Backup, name string) (map[string]any, error) {
 	if size <= 0 {
 		return nil, fmt.Errorf("backup %s does not record the volume size", b.Name)
 	}
-	return lhObject("Volume", name, map[string]string{LabelRestoreProbe: b.Volume()}, map[string]any{
+	spec := map[string]any{
 		"fromBackup":       b.Status.URL,
 		"size":             strconv.FormatInt(size, 10),
 		"numberOfReplicas": int64(1),
@@ -432,5 +434,9 @@ func RestoreProbeVolume(b *Backup, name string) (map[string]any, error) {
 		"dataEngine":       "v1",
 		"frontend":         "blockdev",
 		"backupTargetName": b.Status.BackupTargetName,
-	}), nil
+	}
+	if b.Encrypted() {
+		spec["encrypted"] = true
+	}
+	return lhObject("Volume", name, map[string]string{LabelRestoreProbe: b.Volume()}, spec), nil
 }

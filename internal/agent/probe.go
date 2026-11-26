@@ -154,6 +154,10 @@ func probeName(vol string) string {
 	return "lhtx-probe-" + hex.EncodeToString(h[:])[:12]
 }
 
+// probeStartTimeout: a restore that has not started reading after this
+// is failing (Longhorn reports some restore errors only in its log).
+const probeStartTimeout = 15 * time.Minute
+
 func (a *Agent) probe(ctx context.Context, p RestoreProbe, vol *longhorn.Volume, b *longhorn.Backup) error {
 	start := time.Now()
 	name := probeName(vol.Name)
@@ -207,8 +211,12 @@ func (a *Agent) probe(ctx context.Context, p RestoreProbe, vol *longhorn.Volume,
 		if err != nil {
 			continue
 		}
-		if msg := a.restoreError(pctx, name); msg != "" {
+		msg, started := a.restoreState(pctx, name)
+		if msg != "" {
 			return result(fmt.Errorf("%s", msg))
+		}
+		if !started && time.Since(start) > probeStartTimeout {
+			return result(fmt.Errorf("the restore did not start within %s (longhorn-manager's log says why: lhtx diag %s)", probeStartTimeout, name))
 		}
 		if v.Status.Robustness == "faulted" {
 			return result(fmt.Errorf("test volume faulted"))
@@ -219,20 +227,27 @@ func (a *Agent) probe(ctx context.Context, p RestoreProbe, vol *longhorn.Volume,
 	}
 }
 
-// restoreError: an error the engine reports for the restore.
-func (a *Agent) restoreError(ctx context.Context, vol string) string {
+// restoreState: an error the engine reports for the restore, and whether
+// it has started reading (progress, or a backup restored).
+func (a *Agent) restoreState(ctx context.Context, vol string) (msg string, started bool) {
 	engs, err := a.c.Engines(ctx, vol)
 	if err != nil {
-		return ""
+		return "", true // unknown: do not judge
 	}
 	for _, e := range engs {
+		if e.Status.LastRestoredBackup != "" {
+			started = true
+		}
 		for _, rs := range e.Status.RestoreStatus {
 			if rs.Error != "" {
-				return strings.TrimSpace(rs.Error)
+				return strings.TrimSpace(rs.Error), true
+			}
+			if rs.IsRestoring || rs.Progress > 0 || rs.LastRestored != "" {
+				started = true
 			}
 		}
 	}
-	return ""
+	return "", started
 }
 
 func (a *Agent) deleteProbe(ctx context.Context, name, uid string) {

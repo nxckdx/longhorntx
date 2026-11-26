@@ -2,9 +2,7 @@
 {{- $name := include "lhtx-agent.fullname" . }}
 {{- $sa := include "lhtx-agent.serviceAccountName" . }}
 {{- $leaseNS := .Values.leaseNamespace | default .Values.longhornNamespace }}
-# The agent stops and starts apps: it deletes pods anywhere, execs hook
-# commands in them, creates admission policies and patches the owners of the
-# pods it stopped (any kind, hence "*"). Treat it like cluster-admin.
+# Base rights: read Longhorn, pods and their logs; manage its own resources.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -12,54 +10,38 @@ metadata:
   labels:
     {{- include "lhtx-agent.labels" . | nindent 4 }}
 rules:
+  # its own resources: answer, refuse, record
   - apiGroups: [lhtx.io]
     resources: [freezes, switches, logqueries]
     verbs: [get, list, watch, patch, update, delete]
   - apiGroups: [lhtx.io]
     resources: [freezes/status, freezes/finalizers, switches/status, logqueries/status]
     verbs: [get, patch, update]
-  - apiGroups: [authorization.k8s.io]
-    resources: [subjectaccessreviews]
-    verbs: [create]
   - apiGroups: [lhtx.io]
     resources: [volumedigests, volumehistories]
     verbs: [get, list, watch, create, update, delete]
-  - apiGroups: [admissionregistration.k8s.io]
-    resources: [validatingadmissionpolicies, validatingadmissionpolicybindings]
-    verbs: [get, list, create, patch, delete]
+  - apiGroups: [authorization.k8s.io]
+    resources: [subjectaccessreviews]
+    verbs: [create] # may the person who asked do this themselves?
   - apiGroups: [authentication.k8s.io]
     resources: [selfsubjectreviews]
     verbs: [create]
+  - apiGroups: [admissionregistration.k8s.io]
+    resources: [validatingadmissionpolicies, validatingadmissionpolicybindings]
+    verbs: [get, list] # is the requester policy installed?
+  # read only
   - apiGroups: [""]
-    resources: [pods]
-    verbs: [get, list, create, delete] # create: only the server dry run that checks the policy
-  - apiGroups: [""]
-    resources: [pods/exec]
-    verbs: [get, create]
+    resources: [pods, persistentvolumeclaims, persistentvolumes]
+    verbs: [get, list]
   - apiGroups: [""]
     resources: [pods/log]
     verbs: [get] # LogQueries (lhtx diag): read and filter in the cluster
-  - apiGroups: [""]
-    resources: [persistentvolumeclaims]
-    verbs: [get, list, create, delete]
-  - apiGroups: [""]
-    resources: [persistentvolumes]
-    verbs: [get, list, create, patch]
-  - apiGroups: [""]
-    resources: [secrets]
-    verbs: [get, list, create]
   - apiGroups: [longhorn.io]
-    resources: [volumes]
-    verbs: [get, list, watch, create] # watch: VolumeDigests; create: restore for a Switch
+    resources: [volumes, replicas, backups]
+    verbs: [get, list, watch] # digests, history
   - apiGroups: [longhorn.io]
     resources: [settings, backupvolumes, engines]
     verbs: [get, list]
-  - apiGroups: [longhorn.io]
-    resources: [replicas, backups]
-    verbs: [get, list, watch] # history: rebuilds, failed replicas, backups
-  - apiGroups: ["*"]
-    resources: ["*"]
-    verbs: [get, patch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -75,6 +57,61 @@ subjects:
   - kind: ServiceAccount
     name: {{ $sa }}
     namespace: {{ .Release.Namespace }}
+{{- if .Values.rw }}
+---
+# rw: true – the agent stops and starts apps: it deletes pods anywhere, execs
+# hook commands in them, creates admission policies, patches the owners of
+# the pods it stopped (any kind, hence "*"), swaps PVCs and guards keys.
+# Treat it like cluster-admin.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}-rw
+  labels:
+    {{- include "lhtx-agent.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [admissionregistration.k8s.io]
+    resources: [validatingadmissionpolicies, validatingadmissionpolicybindings]
+    verbs: [create, patch, delete] # the freeze policy
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [create, delete] # create: only the server dry run that checks the policy
+  - apiGroups: [""]
+    resources: [pods/exec]
+    verbs: [get, create] # hooks
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims]
+    verbs: [create, delete] # switches
+  - apiGroups: [""]
+    resources: [persistentvolumes]
+    verbs: [create, patch] # switches: PV of the target, Retain on the old one
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get, list, create] # switches of encrypted volumes: guard the key, keep a copy if it is replaced
+  - apiGroups: [longhorn.io]
+    resources: [volumes]
+    verbs: [create] # restore for a Switch
+  # owners of the stopped pods: read the chain, nudge on unfreeze,
+  # CloudNativePG hibernation annotation
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $name }}-rw
+  labels:
+    {{- include "lhtx-agent.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $name }}-rw
+subjects:
+  - kind: ServiceAccount
+    name: {{ $sa }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
 ---
 # the hooks ConfigMap in the Longhorn namespace
 apiVersion: rbac.authorization.k8s.io/v1

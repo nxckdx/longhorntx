@@ -91,7 +91,7 @@ right to create Freeze resources then. --local skips the agent.`,
 			if apierrors.IsForbidden(err) && !local {
 				// may create Freezes but not read pods/volumes: the agent
 				// plans it and logs every step
-				if ag := agent.Detect(ctx, c); ag != nil {
+				if ag := agent.DetectRW(ctx, c); ag != nil {
 					return requestBlind(cmd, g, c, ag, pvcs, reason, wait, autoUnfreeze, err)
 				}
 			}
@@ -113,7 +113,7 @@ right to create Freeze resources then. --local skips the agent.`,
 			}
 			ag := (*agent.Info)(nil)
 			if !local {
-				ag = agent.Detect(ctx, c)
+				ag = agent.DetectRW(ctx, c)
 			}
 			if ag != nil {
 				fmt.Printf("  policy: deny pods mounting them, deny PVC create/delete except by the agent\n")

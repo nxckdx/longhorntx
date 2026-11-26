@@ -1,0 +1,61 @@
+# Only with --rw (lhtx agent manifests --rw): the agent stops and starts
+# apps – it deletes pods anywhere, execs hook commands in them, creates
+# admission policies, patches the owners of the pods it stopped (any kind,
+# hence "*"), swaps PVCs and guards encryption keys. Treat it like
+# cluster-admin; a local lhtx freeze needs these rights too.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: lhtx-agent-rw
+rules:
+  - apiGroups: [admissionregistration.k8s.io]
+    resources: [validatingadmissionpolicies, validatingadmissionpolicybindings]
+    verbs: [create, patch, delete] # the freeze policy
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [create, delete] # create: only the server dry run that checks the policy
+  - apiGroups: [""]
+    resources: [pods/exec]
+    verbs: [get, create] # hooks
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims]
+    verbs: [create, delete] # switches
+  - apiGroups: [""]
+    resources: [persistentvolumes]
+    verbs: [create, patch] # switches: PV of the target, Retain on the old one
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get, list, create] # switches of encrypted volumes: guard the key, keep a copy if it is replaced
+  - apiGroups: [longhorn.io]
+    resources: [volumes]
+    verbs: [create] # restore for a Switch
+  # owners of the stopped pods: read the chain, nudge on unfreeze,
+  # CloudNativePG hibernation annotation
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: lhtx-agent-rw
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: lhtx-agent-rw
+subjects:
+  - kind: ServiceAccount
+    name: lhtx-agent
+    namespace: longhorn-system
+---
+# For people who may freeze through the agent (bind it yourself). Creating a
+# Freeze stops every pod that uses the listed PVCs – grant it like the right
+# to delete those pods.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: lhtx-freeze
+rules:
+  - apiGroups: [lhtx.io]
+    resources: [freezes]
+    verbs: [get, list, watch, create, delete]

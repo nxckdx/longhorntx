@@ -45,8 +45,20 @@ spec:
           args:
             - agent
             - --namespace={{ .Values.longhornNamespace }}
+            {{- if .Values.rw }}
+            - --rw
+            {{- end }}
             {{- with .Values.leaseNamespace }}
             - --lease-namespace={{ . }}
+            {{- end }}
+            {{- if .Values.history.enabled }}
+            - --history-per-volume={{ .Values.history.perVolume }}
+            - --history-cluster={{ .Values.history.cluster }}
+            {{- with .Values.history.maxAge }}
+            - --history-max-age={{ . }}
+            {{- end }}
+            {{- else }}
+            - --no-history
             {{- end }}
             {{- with .Values.extraArgs }}
             {{- toYaml . | nindent 12 }}

@@ -9,7 +9,14 @@ import (
 )
 
 func TestManifests(t *testing.T) {
-	out := Manifests("1.2.3", "storage")
+	ro := Manifests("1.2.3", "storage", false)
+	if strings.Contains(ro, "args: [agent, --rw") || strings.Contains(ro, "name: lhtx-agent-rw") || strings.Contains(ro, "pods/exec") || strings.Contains(ro, "secrets") {
+		t.Error("the read-only manifests carry write rights")
+	}
+	out := Manifests("1.2.3", "storage", true)
+	if !strings.Contains(out, "args: [agent, --rw, --namespace=storage]") {
+		t.Error("--rw missing")
+	}
 	kinds := map[string]int{}
 	for _, doc := range strings.Split(out, "\n---\n") {
 		var o struct {
@@ -30,8 +37,8 @@ func TestManifests(t *testing.T) {
 		}
 		kinds[o.Kind]++
 	}
-	for k, n := range map[string]int{"CustomResourceDefinition": 5, "ServiceAccount": 1, "ClusterRole": 5, "ValidatingAdmissionPolicy": 1, "ValidatingAdmissionPolicyBinding": 1,
-		"ClusterRoleBinding": 1, "Role": 2, "RoleBinding": 2, "Deployment": 1, "Service": 1} {
+	for k, n := range map[string]int{"CustomResourceDefinition": 5, "ServiceAccount": 1, "ClusterRole": 6, "ValidatingAdmissionPolicy": 1, "ValidatingAdmissionPolicyBinding": 1,
+		"ClusterRoleBinding": 2, "Role": 2, "RoleBinding": 2, "Deployment": 1, "Service": 1} {
 		if kinds[k] != n {
 			t.Errorf("%d %s, want %d", kinds[k], k, n)
 		}

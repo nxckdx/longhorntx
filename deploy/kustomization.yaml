@@ -1,4 +1,6 @@
 # kubectl apply -k deploy/   (or: lhtx agent manifests | kubectl apply -f -)
+# Read-only agent. For freezes and switches through the agent add
+# rbac-rw.yaml and --rw to the args (or: lhtx agent manifests --rw).
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:

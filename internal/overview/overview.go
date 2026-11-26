@@ -80,6 +80,9 @@ func Summarize(ctx context.Context, c *longhorn.Client) (s Summary) {
 	s.Version, _ = c.LonghornVersion(ctx)
 	if a := agent.Detect(ctx, c); a != nil { // one small GET
 		s.Agent = a.Holder
+		if !a.RW {
+			s.Agent += " (read-only)"
+		}
 	}
 	s.Volumes, s.Nodes = len(in.Volumes), len(in.Nodes)
 	for _, v := range in.Volumes {

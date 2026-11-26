@@ -87,7 +87,7 @@ func (m *model) startSwitch(p *switchover.Plan, restore *longhorn.Action, src sw
 		"x cancel (rolls back until the old PVC is deleted; with the agent: stops following)",
 		func(ctx context.Context, log func(string, ...any)) error {
 			// an lhtx agent that can do switches carries it out
-			if ag := agent.Detect(ctx, c); ag != nil && agent.SwitchesAvailable(ctx, c, p.Namespace) {
+			if ag := agent.DetectRW(ctx, c); ag != nil && agent.SwitchesAvailable(ctx, c, p.Namespace) {
 				spec := agent.SwitchSpec{PVC: p.PVC}
 				if restore != nil {
 					spec.FromBackup, spec.VolumeName, spec.Replicas = src.backup, p.NewVolume, src.replicas

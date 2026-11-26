@@ -4,6 +4,26 @@
 
 ![The lhtx agent: a freeze of all volumes carried out in the cluster with a 4h auto-unfreeze, then the history of a volume – a rebuild and how long it took](agent.gif)
 
+## Read-only or read-write
+
+Like lhtx itself, the agent only reads unless told otherwise:
+
+| | read-only (default) | `--rw` (chart: `rw: true`) |
+|---|---|---|
+| volume digests, history, metrics, diag logs | ✔ | ✔ |
+| Freezes and Switches | refused with a reason in their status – lhtx does them itself with your rights | carried out |
+| rights | read Longhorn, pods, PVCs, PVs, pod logs; its own `lhtx.io` resources; its lease | also: delete pods anywhere, exec (hooks), admission policies, patch owners (`*`), create/delete PVCs, create PVs, encryption key Secrets, create Longhorn volumes – like cluster-admin |
+
+The write rights are a separate ClusterRole (`lhtx-agent-rw`, chart
+`<release>-rw`), only installed with `rw: true` (`lhtx agent manifests
+--rw`, kustomize: add `rbac-rw.yaml` and `--rw`). The lease carries the
+label `lhtx.io/rw`, so lhtx only hands freezes and switches to an agent that
+does them; `lhtx agent status` and `lhtx overview` show the mode. Starting
+read-only and switching to read-write later is a safe way to introduce the
+agent in a cluster.
+
+## Freezes through the agent
+
 A freeze run from a laptop stops when the laptop
 sleeps or the LTE link drops – possibly halfway through. The agent is a small
 operator in the cluster (same binary, `lhtx agent`, image
@@ -27,8 +47,8 @@ kubectl get freezes                # the same with kubectl (delete = unfreeze)
 - requests go only through the Kubernetes API – the agent has no HTTP
   endpoint. Who may create `Freeze` resources may freeze: bind the ClusterRole
   `lhtx-freeze` (chart: `<release>-freeze`) – no cluster-admin needed then.
-  The agent itself needs rights like cluster-admin (delete pods anywhere,
-  exec for hooks, admission policies, patch owners)
+  The agent itself needs `--rw` and rights like cluster-admin (delete pods
+  anywhere, exec for hooks, admission policies, patch owners)
 - one active agent (leader election); a restart while unfreezing goes on
   where it stopped
 
@@ -108,6 +128,18 @@ lhtx history shop/db-data          # everything about one volume
 ```
 
 In the TUI: `H` in the volume details. `lhtx agent --no-history` turns it off.
+
+### How much history is kept
+
+By count, not by time: the last **50** events per volume and the last
+**300** notable ones cluster-wide (older ones fall out when new ones are
+written). A volume's history is deleted with the volume (owner reference).
+Configurable: `lhtx agent --history-per-volume N --history-cluster N
+--history-max-age 2160h` (chart: `history.perVolume`, `history.cluster`,
+`history.maxAge`; `history.enabled: false` = `--no-history`). The age limit
+applies when a history is written, so a quiet volume keeps its old events
+until something new happens. The histories stay when the agent is removed
+(`kubectl -n longhorn-system delete volumehistories --all`).
 
 ## Diagnostics: logs filtered in the cluster
 

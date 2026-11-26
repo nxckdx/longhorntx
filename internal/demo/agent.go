@@ -67,6 +67,7 @@ func startAgent(ctx context.Context, c *longhorn.Client) {
 		return
 	}
 	a := agent.New(c, "lhtx-agent-7c9f6d5b8-x2k4q")
+	a.RW = true
 	a.Logf = func(string, ...any) {}
 	a.Poll = time.Second
 	a.HistoryFlush = time.Second

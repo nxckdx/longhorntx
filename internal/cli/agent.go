@@ -18,6 +18,9 @@ func agentCmd(g *globals) *cobra.Command {
 	var noLeader bool
 	var leaseNS, healthAddr string
 	var noDigests, noHistory bool
+	var rw, manifestsRW bool
+	var histVol, histCluster int
+	var histAge time.Duration
 	cmd := &cobra.Command{
 		Use:   "agent",
 		Short: "Optional in-cluster agent: carries out freezes so they do not depend on your laptop",
@@ -57,7 +60,8 @@ lhtx-freeze to them. The agent itself needs rights like cluster-admin
 				return err
 			}
 			a := agent.New(c, os.Getenv("POD_NAME"))
-			a.NoDigests, a.NoHistory = noDigests, noHistory
+			a.NoDigests, a.NoHistory, a.RW = noDigests, noHistory, rw
+			a.HistoryVolumeMax, a.HistoryClusterMax, a.HistoryMaxAge = histVol, histCluster, histAge
 			a.SetVersion(Version)
 			if healthAddr != "" {
 				go func() {
@@ -78,7 +82,11 @@ lhtx-freeze to them. The agent itself needs rights like cluster-admin
 			return a.RunWithLeaderElection(cmd.Context(), leaseNS)
 		},
 	}
+	cmd.Flags().BoolVar(&rw, "rw", false, "carry out Freezes and Switches (needs the write RBAC); without it the agent only reads and refuses them")
 	cmd.Flags().BoolVar(&noHistory, "no-history", false, "do not record VolumeHistories (lhtx history)")
+	cmd.Flags().IntVar(&histVol, "history-per-volume", longhorn.MaxVolumeHistory, "events kept per volume (at most 1000)")
+	cmd.Flags().IntVar(&histCluster, "history-cluster", longhorn.MaxClusterHistory, "notable events kept in the cluster-wide history (at most 5000)")
+	cmd.Flags().DurationVar(&histAge, "history-max-age", 0, "drop events older than this when a history is written, e.g. 2160h (0 = only the count limits)")
 	cmd.Flags().BoolVar(&noDigests, "no-digests", false, "do not keep VolumeDigests (lhtx --refresh agent then has nothing to watch)")
 	cmd.Flags().StringVar(&healthAddr, "health-addr", ":8081", "address for the probes /healthz, /readyz and the Prometheus /metrics (read-only; empty = off)")
 	cmd.Flags().StringVar(&leaseNS, "lease-namespace", "", "namespace of the lease (default: the Longhorn namespace, where lhtx looks first; elsewhere lhtx finds it by label if users may list leases)")
@@ -96,11 +104,12 @@ lhtx-freeze to them. The agent itself needs rights like cluster-admin
 					tag = strings.TrimPrefix(Version, "v")
 				}
 			}
-			fmt.Print(deploy.Manifests(tag, g.namespace))
+			fmt.Print(deploy.Manifests(tag, g.namespace, manifestsRW))
 			return nil
 		},
 	}
 	manifests.Flags().StringVar(&tag, "tag", "", "image tag (default: this lhtx's version)")
+	manifests.Flags().BoolVar(&manifestsRW, "rw", false, "an agent that carries out freezes and switches (adds the write RBAC and --rw)")
 
 	status := &cobra.Command{
 		Use:   "status",
@@ -113,7 +122,11 @@ lhtx-freeze to them. The agent itself needs rights like cluster-admin
 			}
 			ctx := cmd.Context()
 			if info := agent.Detect(ctx, c); info != nil {
-				fmt.Printf("agent: %s (lease in %s, heartbeat %s ago)\n", info.Holder, info.Namespace, time.Since(info.Renewed).Round(time.Second))
+				mode := "read-write: carries out freezes and switches"
+				if !info.RW {
+					mode = "read-only: digests, history, metrics, diag logs – lhtx does freezes and switches itself"
+				}
+				fmt.Printf("agent: %s (lease in %s, heartbeat %s ago)\nmode:  %s\n", info.Holder, info.Namespace, time.Since(info.Renewed).Round(time.Second), mode)
 			} else {
 				fmt.Println("agent: none found (no fresh lease " + c.Namespace + "/" + agent.LeaseName + ", none labelled " + agent.LeaseLabel + " that you may list) – lhtx freezes on its own")
 			}

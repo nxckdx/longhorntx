@@ -17,10 +17,15 @@ import (
 )
 
 func setup(t *testing.T) (context.Context, *longhorn.Client, []string) {
+	return setupMode(t, true)
+}
+
+func setupMode(t *testing.T, rw bool) (context.Context, *longhorn.Client, []string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	c := demo.NewClient(ctx)
 	a := agent.New(c, "agent-0")
+	a.RW = rw
 	a.Poll, a.Resync, a.Logf = 50*time.Millisecond, 200*time.Millisecond, t.Logf
 	go func() { _ = a.Run(ctx) }()
 	vols, _ := c.Volumes(ctx)
@@ -400,5 +405,21 @@ func TestAgentLogQuery(t *testing.T) {
 	l, _ := c.Dynamic().Resource(agent.GVRLogQuery).Namespace(c.Namespace).List(ctx, metav1.ListOptions{})
 	if len(l.Items) != 0 {
 		t.Error("query not removed")
+	}
+}
+
+// Without --rw the agent refuses Freezes (and changes nothing).
+func TestAgentReadOnlyRefusesFreeze(t *testing.T) {
+	ctx, c, pvcs := setupMode(t, false)
+	name, err := agent.Request(ctx, c, agent.Spec{PVCs: pvcs, Reason: "upgrade", Wait: "20s"}, "me")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, _ := follow(t, ctx, c, name, agent.Settled)
+	if f.Status.Phase != agent.PhaseFailed || !strings.Contains(f.Status.Message, "read-only") {
+		t.Fatalf("phase %q message %q", f.Status.Phase, f.Status.Message)
+	}
+	if _, err := c.Dynamic().Resource(gvrVAPt).Get(ctx, agent.PolicyName(name), metav1.GetOptions{}); err == nil {
+		t.Error("a read-only agent created a freeze policy")
 	}
 }

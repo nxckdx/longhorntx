@@ -18,14 +18,21 @@ var (
 	logQueryRes string
 	//go:embed rbac.yaml
 	rbac string
+	//go:embed rbac-rw.yaml
+	rbacRW string
 	//go:embed agent.yaml
 	agent string
 )
 
 // Manifests returns all objects as one YAML stream, with the image tag and
 // the namespace (where the agent runs: the Longhorn namespace) filled in.
-func Manifests(tag, namespace string) string {
-	out := strings.Join([]string{crd, switchRes, digestRes, logQueryRes, rbac, agent}, "---\n")
+// rw adds the write rights and starts the agent with --rw.
+func Manifests(tag, namespace string, rw bool) string {
+	parts := []string{crd, switchRes, digestRes, logQueryRes, rbac, agent}
+	if rw {
+		parts = []string{crd, switchRes, digestRes, logQueryRes, rbac, rbacRW, strings.Replace(agent, "args: [agent, ", "args: [agent, --rw, ", 1)}
+	}
+	out := strings.Join(parts, "---\n")
 	if tag != "" {
 		out = strings.ReplaceAll(out, "ghcr.io/nxckdx/lhtx:latest", "ghcr.io/nxckdx/lhtx:"+tag)
 	}

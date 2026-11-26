@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -21,6 +22,7 @@ func agentCmd(g *globals) *cobra.Command {
 	var rw, manifestsRW bool
 	var histVol, histCluster int
 	var histAge, capacityEvery time.Duration
+	var notify agent.Notify
 	cmd := &cobra.Command{
 		Use:   "agent",
 		Short: "Optional in-cluster agent: carries out freezes so they do not depend on your laptop",
@@ -63,6 +65,13 @@ lhtx-freeze to them. The agent itself needs rights like cluster-admin
 			a.NoDigests, a.NoHistory, a.RW = noDigests, noHistory, rw
 			a.HistoryVolumeMax, a.HistoryClusterMax, a.HistoryMaxAge = histVol, histCluster, histAge
 			a.CapacityInterval = capacityEvery
+			if notify.URL == "" {
+				notify.URL = os.Getenv("LHTX_NOTIFY_URL")
+			}
+			if notify.URL != "" && !slices.Contains(agent.NotifyFormats, notify.Format) {
+				return fmt.Errorf("--notify-format %q: one of %s", notify.Format, strings.Join(agent.NotifyFormats, ", "))
+			}
+			a.Notify = notify
 			a.SetVersion(Version)
 			if healthAddr != "" {
 				go func() {
@@ -85,6 +94,10 @@ lhtx-freeze to them. The agent itself needs rights like cluster-admin
 	}
 	cmd.Flags().BoolVar(&rw, "rw", false, "carry out Freezes and Switches (needs the write RBAC); without it the agent only reads and refuses them")
 	cmd.Flags().DurationVar(&capacityEvery, "capacity-interval", 6*time.Hour, "sample the disks for the capacity forecast (lhtx capacity) this often; 0 = off")
+	cmd.Flags().StringVar(&notify.URL, "notify-url", "", "send failures and recoveries to this webhook (better: env LHTX_NOTIFY_URL – it may hold a token)")
+	cmd.Flags().StringVar(&notify.Format, "notify-format", "json", "webhook format: "+strings.Join(agent.NotifyFormats, ", ")+" (slack also fits Mattermost and Rocket.Chat)")
+	cmd.Flags().StringVar(&notify.Cluster, "notify-cluster", "", "cluster name shown in notifications")
+	cmd.Flags().DurationVar(&notify.Every, "notify-every", time.Minute, "at most one notification per this interval (events in between are sent together)")
 	cmd.Flags().BoolVar(&noHistory, "no-history", false, "do not record VolumeHistories (lhtx history)")
 	cmd.Flags().IntVar(&histVol, "history-per-volume", longhorn.MaxVolumeHistory, "events kept per volume (at most 1000)")
 	cmd.Flags().IntVar(&histCluster, "history-cluster", longhorn.MaxClusterHistory, "notable events kept in the cluster-wide history (at most 5000)")

@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.7.0](https://github.com/nxckdx/longhorntx/compare/v0.6.0...v0.7.0) (2026-11-26)
+
+
+### ⚠ BREAKING CHANGES
+
+* **agent:** the chart installs the write rights (ClusterRole <release>-rw) and starts the agent with --rw only with rw: true.
+* **agent:** the agent carries out freezes and switches only when started with --rw (Helm value rw: true).
+
+### Features
+
+* **agent:** configurable history size and age (--history-per-volume, --history-cluster, --history-max-age) ([7b07020](https://github.com/nxckdx/longhorntx/commit/7b07020375d38819cf876ef6d6a6580c343817fa))
+* **agent:** read-only unless started with --rw ([62626ac](https://github.com/nxckdx/longhorntx/commit/62626ac36cebdd86864ae58e72b67fcb00de2722))
+* **agent:** write RBAC only with rw (chart rw: true, lhtx agent manifests --rw) ([5eec656](https://github.com/nxckdx/longhorntx/commit/5eec656ac3bf0da83d3ef018727116314c8fd5f9))
+* **chart:** history.perVolume, history.cluster, history.maxAge, history.enabled ([c047301](https://github.com/nxckdx/longhorntx/commit/c04730110c3b9dfab67d29686ae764eee763b355))
+* hand freezes and switches only to an agent started with --rw; agent status and overview show the mode ([e9c663e](https://github.com/nxckdx/longhorntx/commit/e9c663e9ecca75832ed0203407a2de200b47c500))
+* **nix:** lhtx-lab agent ro installs a read-only agent ([d235e92](https://github.com/nxckdx/longhorntx/commit/d235e922a2348d073344558208981c99ab1ce261))
+
+
+### Bug Fixes
+
+* **agent:** rebuild duration of a replica rebuilt in place counts from its failure ([3c3d77f](https://github.com/nxckdx/longhorntx/commit/3c3d77ff019ad50e9fc1769e56835b875d00782a))
+* **chart:** honour fullnameOverride ([94f7368](https://github.com/nxckdx/longhorntx/commit/94f73688a0f43694fcc672c55eba880cb0e4607f))
+* **history:** shorten long PVC names in the cluster table (full in -o json) ([f641920](https://github.com/nxckdx/longhorntx/commit/f641920aeaa7197b4eefe594d8fa06c347d54478))
+
 ## [0.6.0](https://github.com/nxckdx/longhorntx/compare/v0.5.0...v0.6.0) (2026-11-25)
 
 

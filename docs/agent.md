@@ -168,6 +168,31 @@ Without the chart: env `LHTX_NOTIFY_URL` (the URL often holds a token) and
 `--notify-format`, `--notify-cluster`. Volume events come from the history,
 so `--no-history` turns them off too.
 
+## Restore probe
+
+"We have backups" is not "we can restore them". With `--restore-probe-interval`
+(chart `restoreProbe.enabled`, default every 24h; needs `rw: true`) the agent
+takes one volume per run – the one probed longest ago –, restores its latest
+backup into a one-replica test volume `lhtx-probe-…`, waits until Longhorn
+has read every block back from the backup target, and deletes the test
+volume. Encrypted backups are restored into an encrypted test volume; no
+key is needed, as nothing is ever attached to a pod.
+
+```
+lhtx history --kind restore-probe,restore-probe-failed
+WHEN               PVC / VOLUME   KIND            WHAT                                                      TOOK
+2026-11-26 21:14   shop/db        restore-probe   backup backup-1a2b… (74 MiB) restored into a test volume   20s
+```
+
+A failure (an error, a restore that does not start within 15 minutes, or
+one not done within `restoreProbe.timeout`) is a bad history event: `lhtx
+history --bad`, `lhtx doctor`, notifications, and the alert
+`LonghornRestoreProbeFailed`. `lhtx_agent_restore_probe_last_success_timestamp_seconds`
+says when one last worked. Each probe reads a whole backup from the target –
+mind traffic and space (`restoreProbe.maxSize`, default 100Gi, skips larger
+volumes). Test volumes left behind by an agent restart are removed when it
+starts again.
+
 ## Capacity forecast
 
 Longhorn shows how full a disk is, not how fast it fills. The agent samples

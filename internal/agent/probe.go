@@ -47,18 +47,17 @@ func (a *Agent) runRestoreProbe(ctx context.Context) {
 	}
 	a.Logf("restore probe every %s", p.Interval)
 	a.cleanupProbes(ctx)
+	var ranAt time.Time // the history is written a few seconds later
 	for {
-		wait := p.Interval
-		if last := a.lastProbes(ctx); len(last) > 0 {
-			newest := time.Time{}
-			for _, t := range last {
-				if t.After(newest) {
-					newest = t
-				}
+		newest := ranAt
+		for _, t := range a.lastProbes(ctx) {
+			if t.After(newest) {
+				newest = t
 			}
+		}
+		wait := 5 * time.Minute // first one soon after the start
+		if !newest.IsZero() {
 			wait = max(p.Interval-time.Since(newest), time.Minute)
-		} else {
-			wait = 5 * time.Minute // first one soon after the start
 		}
 		select {
 		case <-ctx.Done():
@@ -68,6 +67,7 @@ func (a *Agent) runRestoreProbe(ctx context.Context) {
 		if err := a.probeOne(ctx, p); err != nil && ctx.Err() == nil {
 			a.Logf("restore probe: %v", err)
 		}
+		ranAt = time.Now()
 	}
 }
 

@@ -93,7 +93,7 @@ rebuilds) cluster-wide. Needs the agent (lhtx agent --help).
 					kind = "✖ " + kind
 				}
 				if cluster {
-					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", when, dash(firstNonEmpty(e.PVC, e.Volume)), kind, e.Text, took)
+					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", when, oneLine(dash(firstNonEmpty(e.PVC, e.Volume)), 48), kind, e.Text, took) // full name: -o json
 				} else {
 					fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", when, kind, e.Text, took)
 				}

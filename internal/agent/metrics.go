@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/tools/cache"
@@ -34,6 +35,7 @@ type metrics struct {
 	rebuilds      atomic.Int64
 
 	freezes, switches cache.Store // set by Run (leader)
+	volumes           cache.Store // set by runDigests (leader, digests on)
 	version           string
 }
 
@@ -69,6 +71,7 @@ func (a *Agent) writeMetrics(w io.Writer) {
 
 	if m.freezes != nil {
 		phases, pvcs := map[string]int{}, 0
+		var oldest time.Duration
 		for _, o := range m.freezes.List() {
 			if f, err := fromU(o.(*unstructured.Unstructured)); err == nil {
 				ph := f.Status.Phase
@@ -79,12 +82,25 @@ func (a *Agent) writeMetrics(w io.Writer) {
 				if ph == PhaseFrozen || ph == PhaseFreezing {
 					pvcs += len(f.Spec.PVCs)
 				}
+				if ph == PhaseFrozen && f.Status.FrozenAt != nil {
+					oldest = max(oldest, time.Since(f.Status.FrozenAt.Time))
+				}
 			}
 		}
 		p("lhtx_agent_freezes", "gauge", "Freeze resources by phase.")
 		writeByLabel(w, "lhtx_agent_freezes", "phase", phases)
 		p("lhtx_agent_frozen_pvcs", "gauge", "PVCs frozen or being frozen by the agent.")
 		fmt.Fprintf(w, "lhtx_agent_frozen_pvcs %d\n", pvcs)
+	}
+	if m.volumes != nil {
+		rob := map[string]int{}
+		for _, o := range m.volumes.List() {
+			u := o.(*unstructured.Unstructured)
+			r, _, _ := unstructured.NestedString(u.Object, "status", "robustness")
+			rob[orDash(r)]++
+		}
+		p("lhtx_agent_volumes", "gauge", "Longhorn volumes by robustness (healthy, degraded, faulted, unknown = detached).")
+		writeByLabel(w, "lhtx_agent_volumes", "robustness", rob)
 	}
 	if m.switches != nil {
 		phases := map[string]int{}

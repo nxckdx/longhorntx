@@ -48,6 +48,7 @@ func (a *Agent) runDigests(ctx context.Context) error {
 	a.metrics.digestVolumes.Store(int64(len(written)))
 	f := dynamicinformer.NewFilteredDynamicSharedInformerFactory(dyn, 0, a.c.Namespace, nil)
 	inf := f.ForResource(longhorn.GVRVolume).Informer()
+	a.metrics.volumes = inf.GetStore()
 	q := workqueue.NewTypedRateLimitingQueue(workqueue.NewTypedMaxOfRateLimiter(
 		workqueue.NewTypedItemExponentialFailureRateLimiter[string](time.Second, 5*time.Minute),
 		&workqueue.TypedBucketRateLimiter[string]{Limiter: newLimiter(a.DigestQPS)},

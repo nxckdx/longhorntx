@@ -1,9 +1,13 @@
 package agent
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
+
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/client-go/tools/cache"
 )
 
 func TestHealth(t *testing.T) {
@@ -34,12 +38,19 @@ func TestMetrics(t *testing.T) {
 	a.op("switch", "failed")
 	a.digestWrites.Add(3)
 	a.metrics.volumeEvents.Add(40)
+	vols := cache.NewStore(cache.MetaNamespaceKeyFunc)
+	for i, r := range []string{"healthy", "healthy", "degraded"} {
+		_ = vols.Add(&unstructured.Unstructured{Object: map[string]any{"metadata": map[string]any{"name": fmt.Sprint("v", i), "namespace": "lh"},
+			"status": map[string]any{"robustness": r}}})
+	}
+	a.metrics.volumes = vols
 	var b strings.Builder
 	a.writeMetrics(&b)
 	out := b.String()
 	for _, want := range []string{`lhtx_agent_build_info{version="1.2.3"} 1`, "lhtx_agent_leader 0",
 		`lhtx_agent_operations_total{kind="freeze",result="done"} 2`, `lhtx_agent_operations_total{kind="switch",result="failed"} 1`,
-		"lhtx_agent_digest_writes_total 3", "lhtx_agent_volume_events_total 40"} {
+		"lhtx_agent_digest_writes_total 3", "lhtx_agent_volume_events_total 40",
+		`lhtx_agent_volumes{robustness="healthy"} 2`, `lhtx_agent_volumes{robustness="degraded"} 1`} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in\n%s", want, out)
 		}

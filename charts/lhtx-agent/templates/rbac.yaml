@@ -90,7 +90,7 @@ rules:
     verbs: [get, list, create] # switches of encrypted volumes: guard the key, keep a copy if it is replaced
   - apiGroups: [longhorn.io]
     resources: [volumes]
-    verbs: [create] # restore for a Switch
+    verbs: [create, delete] # restore for a Switch; restore probe test volumes (only those, with a UID precondition)
   # owners of the stopped pods: read the chain, nudge on unfreeze,
   # CloudNativePG hibernation annotation
   - apiGroups: ["*"]

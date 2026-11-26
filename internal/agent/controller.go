@@ -52,6 +52,9 @@ type Agent struct {
 	// them until the count limit pushes them out).
 	HistoryMaxAge time.Duration
 	// HistoryFlush: how often recorded events are written (default 5 s).
+	// Notify: send failures and recoveries to a webhook (URL "" = off).
+	Notify   Notify
+	notifier *notifier
 	// CapacityInterval: how often the disks are sampled for the capacity
 	// forecast (0 = never).
 	CapacityInterval time.Duration
@@ -138,6 +141,10 @@ func (a *Agent) Run(ctx context.Context) error {
 		}()
 	}
 	go a.runCapacity(ctx)
+	if a.Notify.URL != "" {
+		a.notifier = newNotifier(a, a.Notify)
+		go a.notifier.run(ctx)
+	}
 	f := dynamicinformer.NewDynamicSharedInformerFactory(a.c.Dynamic(), 0)
 	inf := f.ForResource(GVRFreeze).Informer()
 	a.metrics.freezes = inf.GetStore()

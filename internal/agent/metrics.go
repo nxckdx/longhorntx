@@ -48,6 +48,13 @@ func (a *Agent) op(kind, result string) {
 		a.metrics.ops = map[[2]string]int64{}
 	}
 	a.metrics.ops[[2]string{kind, result}]++
+	switch result {
+	case "failed", "stuck", "key-changed":
+		if kind == "freeze" || kind == "unfreeze" || kind == "auto-unfreeze" || kind == "switch" {
+			a.notifier.add(notice{At: time.Now(), Kind: kind, Bad: true,
+				Text: fmt.Sprintf("%s %s – kubectl get freezes / kubectl get switches -A", kind, result)})
+		}
+	}
 }
 
 // SetVersion labels lhtx_agent_build_info.

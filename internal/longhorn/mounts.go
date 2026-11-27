@@ -244,7 +244,7 @@ func AnalyzeMounts(in MountInput, now time.Time, minWait time.Duration) MountRep
 		if nm := nodes[n]; nm != nil {
 			return nm
 		}
-		nm := &NodeMounts{Node: n, CSI: "unknown", csiUnknown: !in.CSIPodsRead}
+		nm := &NodeMounts{Node: n, CSI: "unknown", csiUnknown: !in.CSIPodsRead || len(in.CSIPods) == 0}
 		if in.CSINodes != nil {
 			nm.CSI = "not registered"
 			if in.CSINodes[n] {
@@ -648,6 +648,15 @@ func (c *Client) Mounts(ctx context.Context, vols []*Volume, lhNodes []string, o
 		}
 	}
 	return &rep, nil
+}
+
+// NodeNames: the names of Longhorn nodes.
+func NodeNames(nodes []*Node) []string {
+	out := make([]string, 0, len(nodes))
+	for _, n := range nodes {
+		out = append(out, n.Name)
+	}
+	return out
 }
 
 // MountChecks (lhtx doctor, Health): stuck mounts and CSI problems.

@@ -38,6 +38,7 @@ func (m *model) loadHealth() tea.Cmd {
 	c, ctx := m.client, m.ctx
 	rebuilding := longhorn.RebuildingVolumes(m.state.Replicas)
 	vols := m.state.Volumes
+	nodes := longhorn.NodeNames(m.state.Nodes)
 	m.healthLoading = true
 	return func() tea.Msg {
 		x := &healthExtra{loadedAt: time.Now()}
@@ -52,6 +53,7 @@ func (m *model) loadHealth() tea.Cmd {
 		x.extra = append(switchover.Checks(ctx, c, switchover.JournalDir()), c.EncryptionChecks(ctx, vols)...)
 		x.extra = append(x.extra, c.HistoryChecks(ctx)...)
 		x.extra = append(x.extra, c.CapacityChecks(ctx)...)
+		x.extra = append(x.extra, c.MountChecks(ctx, vols, nodes)...)
 		for _, v := range rebuilding {
 			if s, err := c.Snapshots(ctx, v); err == nil {
 				x.snapshots = append(x.snapshots, s...)

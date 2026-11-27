@@ -316,7 +316,8 @@ func (a *Agent) finishSwitch(ctx context.Context, lg *switchLog, s *Switch, err 
 	switch {
 	case strings.Contains(err.Error(), "ANOTHER key"):
 		phase = SwitchKeyStop
-	case errors.Is(err, switchover.ErrBlocked) || strings.Contains(err.Error(), "rolled back") || strings.Contains(err.Error(), "nothing changed"):
+	case errors.Is(err, switchover.ErrBlocked) || strings.Contains(err.Error(), "rolled back") || strings.Contains(err.Error(), "nothing changed") ||
+		strings.Contains(err.Error(), "nothing was stopped") || strings.Contains(err.Error(), "would be rejected"):
 		phase = SwitchFailed
 	}
 	lg.flush(ctx, map[string]any{"phase": phase, "message": err.Error()})

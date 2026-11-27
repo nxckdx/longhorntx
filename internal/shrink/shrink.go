@@ -186,6 +186,9 @@ func Build(ctx context.Context, c *longhorn.Client, namespace, pvc string, size 
 		}
 	} else if ov.Status.CurrentNodeID != "" {
 		p.Node, p.NodeWhy = ov.Status.CurrentNodeID, "where the app runs now"
+		if p.RWX {
+			p.NodeWhy = "where its share manager runs now"
+		}
 	}
 	podNode := ""
 	if sw.Freeze != nil && len(sw.Freeze.Pods) > 0 {
@@ -880,7 +883,10 @@ func (r *runner) followCopy(ctx context.Context, name string) (*copyReport, erro
 		po, err := r.c.Dynamic().Resource(gvrPod).Namespace(sw.Namespace).Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
 			// the copy goes on in the cluster: a blip must not roll it back
-			if errs++; errs > transientErrors || apierrors.IsNotFound(err) {
+			if apierrors.IsNotFound(err) {
+				return nil, fmt.Errorf("the copy pod %s was deleted (not by lhtx) before it finished", name)
+			}
+			if errs++; errs > transientErrors {
 				return nil, fmt.Errorf("copy pod: %w", err)
 			}
 			if errs == 1 {

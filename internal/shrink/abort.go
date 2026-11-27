@@ -298,6 +298,9 @@ func LeftoverChecks(vols []*longhorn.Volume) []longhorn.Finding {
 		if of == "" || (pvc != "" && !strings.HasPrefix(claim, "lhtx-shrink-")) {
 			continue // not made by a shrink, or in use by its PVC: done
 		}
+		if ks := v.Status.KubernetesStatus; pvc == "" && ks.PVCName != "" && !strings.HasPrefix(ks.PVCName, "lhtx-shrink-") {
+			continue // was the app's volume once: kept by a later shrink/switch for a way back
+		}
 		hint := "lhtx --rw shrink --abort NAMESPACE/PVC (or delete the volume)"
 		if old := byName[of]; old != nil && old.BoundPVC() != "" {
 			hint = "lhtx --rw shrink --abort " + old.BoundPVC()

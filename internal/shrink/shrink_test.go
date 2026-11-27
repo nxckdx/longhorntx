@@ -40,12 +40,15 @@ func TestLeftoverChecks(t *testing.T) {
 		v.Status.KubernetesStatus = longhorn.KubernetesStatus{Namespace: ns, PVCName: pvc}
 		return v
 	}
+	kept := vol("kept", "older", "shop", "data")
+	kept.Status.KubernetesStatus.LastPVCRefAt = "2026-11-27T10:00:00Z"
 	f := LeftoverChecks([]*longhorn.Volume{
 		vol("old", "", "shop", "data"),                    // the app's volume
 		vol("done", "old-before", "shop", "other"),        // a finished shrink: in use
 		vol("orphan", "old", "", ""),                      // nobody uses it
 		vol("copying", "old", "shop", "lhtx-shrink-data"), // still on the temporary PVC
 		vol("plain", "", "", ""),                          // not made by a shrink
+		kept,                                              // a shrink's volume, replaced by a later one
 	})
 	if len(f) != 2 || f[0].Object != "volume/orphan" || !strings.Contains(f[0].Hint, "--abort shop/data") || f[1].Object != "volume/copying" {
 		t.Errorf("findings = %+v", f)

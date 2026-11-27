@@ -42,7 +42,8 @@ func TestCopyTree(t *testing.T) {
 	old := time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)
 	_ = os.Chtimes(filepath.Join(src, "a/b"), old, old)
 
-	st, err := Copy(src, dst, Options{Skip: []string{"lost+found"}, NoOwner: true})
+	hashes := map[string][32]byte{}
+	st, err := Copy(src, dst, Options{Skip: []string{"lost+found"}, NoOwner: true, Hashes: hashes})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,14 +70,52 @@ func TestCopyTree(t *testing.T) {
 	if sp.Size != 2<<20 || sp.Blocks*512 >= 1<<20 {
 		t.Errorf("sparse: size %d, allocated %d", sp.Size, sp.Blocks*512)
 	}
-	diff, err := Verify(src, dst, []string{"lost+found"}, true, 10)
+	vo := VerifyOptions{Skip: []string{"lost+found"}, NoOwner: true, Hashes: hashes}
+	diff, err := Verify(src, dst, vo)
 	if err != nil || len(diff) != 0 {
 		t.Errorf("verify: %v %v", diff, err)
 	}
-	// a change is found
-	_ = os.WriteFile(filepath.Join(dst, "exec.sh"), []byte("changed!!!"), 0o755)
-	diff, _ = Verify(src, dst, []string{"lost+found"}, true, 10)
-	if len(diff) != 1 || !strings.Contains(diff[0], "exec.sh") {
+	if len(hashes) != 3 {
+		t.Errorf("hashes: %d", len(hashes))
+	}
+	// same size and times, other content: only the hash finds it
+	p := filepath.Join(dst, "exec.sh")
+	fi, _ := os.Stat(p)
+	_ = os.WriteFile(p, []byte("#!/bin/XX\n"), 0o755)
+	_ = os.Chtimes(p, fi.ModTime(), fi.ModTime())
+	diff, _ = Verify(src, dst, vo)
+	if len(diff) != 1 || !strings.Contains(diff[0], "content differs: exec.sh") {
 		t.Errorf("verify after change: %v", diff)
+	}
+	// an extra entry in the target
+	_ = os.WriteFile(filepath.Join(dst, "extra"), nil, 0o600)
+	diff, _ = Verify(src, dst, VerifyOptions{Skip: []string{"lost+found"}, NoOwner: true})
+	if len(diff) != 1 || !strings.Contains(diff[0], "entries") {
+		t.Errorf("extra entry: %v", diff)
+	}
+}
+
+// A large sparse file is not read where it has holes, and its content
+// hash covers the holes.
+func TestCopySparseHash(t *testing.T) {
+	src, dst := t.TempDir(), t.TempDir()
+	f, _ := os.Create(filepath.Join(src, "img"))
+	_, _ = f.WriteAt([]byte("start"), 0)
+	_, _ = f.WriteAt([]byte("end"), 4<<30) // 4 GiB apart
+	f.Close()
+	hashes := map[string][32]byte{}
+	start := time.Now()
+	st, err := Copy(src, dst, Options{NoOwner: true, Hashes: hashes})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Bytes > 8<<20 {
+		t.Errorf("read %d bytes of a mostly empty file", st.Bytes)
+	}
+	if time.Since(start) > 30*time.Second {
+		t.Errorf("took %s", time.Since(start))
+	}
+	if diff, err := Verify(src, dst, VerifyOptions{NoOwner: true, Hashes: hashes}); err != nil || len(diff) != 0 {
+		t.Errorf("verify: %v %v", diff, err)
 	}
 }

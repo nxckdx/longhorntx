@@ -66,6 +66,11 @@ type SwitchSpec struct {
 	Replicas   int    `json:"replicas,omitempty"`   // of the restored volume (default: like the PVC's volume)
 	VolumeName string `json:"volumeName,omitempty"` // of the restored volume (default <pvc>-restore-<MMDD>)
 	Wait       string `json:"wait,omitempty"`       // waits for pods/PVCs (default 10m)
+	// ShrinkTo: instead of switching to an existing or restored volume,
+	// shrink the PVC to this size (lhtx shrink): new smaller volume, copy,
+	// switch. The copy pod uses the agent's own image.
+	ShrinkTo         string   `json:"shrinkTo,omitempty"`
+	ImagePullSecrets []string `json:"imagePullSecrets,omitempty"` // in the PVC's namespace, for the copy pod
 
 	RequestedBy     string   `json:"requestedBy"`
 	RequestedGroups []string `json:"requestedGroups,omitempty"`
@@ -241,6 +246,10 @@ func (a *Agent) runSwitch(ctx context.Context, s *Switch) {
 	admin, err := a.authorize(ctx, s)
 	if err != nil {
 		fail(SwitchFailed, err)
+		return
+	}
+	if s.Spec.ShrinkTo != "" {
+		a.runShrink(ctx, lg, s)
 		return
 	}
 	o := switchover.Options{Log: lg.add, Wait: durationOr(s.Spec.Wait, 10*time.Minute), Poll: a.Poll,
@@ -439,11 +448,15 @@ func (a *Agent) authorize(ctx context.Context, s *Switch) (admin bool, err error
 	if _, err := a.c.Dynamic().Resource(gvrVAP).Get(ctx, RequesterPolicy, metav1.GetOptions{}); err != nil {
 		return false, fmt.Errorf("the admission policy %s is missing (it vouches for requestedBy) – install the agent's manifests completely: %v", RequesterPolicy, err)
 	}
-	for _, c := range []struct{ verb, group, resource, ns string }{
+	checks := []struct{ verb, group, resource, ns string }{
 		{"delete", "", "persistentvolumeclaims", s.Namespace},
 		{"create", "", "persistentvolumeclaims", s.Namespace},
 		{"delete", "", "pods", s.Namespace},
-	} {
+	}
+	if s.Spec.ShrinkTo != "" { // the copy pod runs in the namespace
+		checks = append(checks, struct{ verb, group, resource, ns string }{"create", "", "pods", s.Namespace})
+	}
+	for _, c := range checks {
 		ok, err := a.can(ctx, s, c.verb, c.group, c.resource, c.ns)
 		if err != nil {
 			return false, err

@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"k8s.io/apimachinery/pkg/api/resource"
 
+	"github.com/nxckdx/longhorntx/internal/agent"
 	"github.com/nxckdx/longhorntx/internal/longhorn"
 	"github.com/nxckdx/longhorntx/internal/shrink"
 	"github.com/nxckdx/longhorntx/internal/switchover"
@@ -21,9 +22,10 @@ import (
 // back until the old PVC is deleted.
 
 type shrinkPlanMsg struct {
-	client *longhorn.Client
-	plan   *shrink.Plan
-	err    error
+	client   *longhorn.Client
+	plan     *shrink.Plan
+	err      error
+	imageErr error // no image for a local run (development build)
 }
 
 // ShrinkImage: the copy pod's image – env LHTX_SHRINK_IMAGE, else the image
@@ -50,11 +52,7 @@ func (m *model) shrinkKey(vol string) tea.Cmd {
 		m.setFlash("this volume has no PVC – shrink works on a PVC", true)
 		return nil
 	}
-	image, err := ShrinkImage(m.opts.Version)
-	if err != nil {
-		m.setFlash(err.Error(), true)
-		return nil
-	}
+	image, imageErr := ShrinkImage(m.opts.Version) // only needed without an agent
 	ns, pvc, _ := strings.Cut(vv.PVC, "/")
 	m.prompt(fmt.Sprintf("Shrink %s (now %s) to which size? e.g. 5Gi – its app is down while the data is copied", vv.PVC, humanQ(vv.Size)), "", func(in string) error {
 		q, err := resource.ParseQuantity(strings.TrimSpace(in))
@@ -65,7 +63,7 @@ func (m *model) shrinkKey(vol string) tea.Cmd {
 		m.modal = &modal{kind: modalBusy, busyText: "planning the shrink (PVC, pods, used space) …"}
 		m.afterSubmit = func() tea.Msg {
 			p, err := shrink.Build(ctx, c, ns, pvc, q.Value(), shrink.BuildOptions{Image: image}, time.Now())
-			return shrinkPlanMsg{client: c, plan: p, err: err}
+			return shrinkPlanMsg{client: c, plan: p, err: err, imageErr: imageErr}
 		}
 		return nil
 	})
@@ -112,6 +110,25 @@ func (m *model) onShrinkPlan(msg shrinkPlanMsg) {
 			fmt.Sprintf("%s now uses %s (%s); the old volume %s is kept", sw.PVCRef(), sw.NewVolume, humanQ(p.NewSize), sw.OldVolume),
 			"x cancel (rolls back until the old PVC is deleted)",
 			func(ctx context.Context, log func(string, ...any)) error {
+				// an lhtx agent that can do switches carries it out (with its own image)
+				if ag := agent.DetectRW(ctx, c); ag != nil && agent.SwitchesAvailable(ctx, c, sw.Namespace) {
+					name, err := agent.RequestSwitch(ctx, c, sw.Namespace, agent.SwitchSpec{PVC: sw.PVC, ShrinkTo: humanQ(p.NewSize)})
+					if err != nil {
+						return err
+					}
+					log("handed to the lhtx agent %s as Switch %s/%s", ag.Holder, sw.Namespace, name)
+					res, err := agent.FollowSwitch(ctx, c, sw.Namespace, name, log)
+					if err != nil {
+						return err
+					}
+					if res.Status.Phase != agent.SwitchDone {
+						return fmt.Errorf("shrink %s: %s", res.Status.Phase, res.Status.Message)
+					}
+					return nil
+				}
+				if msg.imageErr != nil {
+					return msg.imageErr
+				}
 				return shrink.Run(ctx, c, p, shrink.Options{Journal: switchover.NewJournalPath(sw), Log: log})
 			})
 	}}

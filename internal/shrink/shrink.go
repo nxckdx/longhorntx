@@ -284,6 +284,10 @@ type Options struct {
 	Journal string
 	Wait    time.Duration
 	Poll    time.Duration
+	// FreezeName / Request: as in switchover.Options (the agent names the
+	// freeze after its Switch, so it can take it over after a restart).
+	FreezeName string
+	Request    string
 }
 
 // Run carries out the plan.
@@ -296,6 +300,9 @@ func Run(ctx context.Context, c *longhorn.Client, p *Plan, o Options) error {
 	}
 	if o.Poll <= 0 {
 		o.Poll = 3 * time.Second
+	}
+	if o.Log == nil {
+		o.Log = func(string, ...any) {}
 	}
 	r := &runner{c: c, p: p, o: o, ctx: ctx}
 	// everything that can fail without the app being down, first
@@ -312,6 +319,7 @@ func Run(ctx context.Context, c *longhorn.Client, p *Plan, o Options) error {
 	}
 	err := switchover.Run(ctx, c, p.Switch, switchover.Options{
 		Log: o.Log, Journal: o.Journal, Wait: o.Wait, Poll: o.Poll,
+		FreezeName: o.FreezeName, Request: o.Request,
 		AfterFreeze: r.copy,
 	})
 	if err != nil && !r.swapped(ctx) {

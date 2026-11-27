@@ -2,6 +2,8 @@ package cli
 
 import (
 	"fmt"
+
+	"github.com/nxckdx/longhorntx/internal/agent"
 	"os"
 	"strings"
 	"time"
@@ -19,7 +21,7 @@ func shrinkCmd(g *globals) *cobra.Command {
 	var image string
 	var pullSecrets []string
 	var wait time.Duration
-	var abort bool
+	var abort, local bool
 	cmd := &cobra.Command{
 		Use:   "shrink NAMESPACE/PVC SIZE",
 		Short: "Make a volume smaller: new volume, copy the files, swap the PVC (needs --rw; the app is down while copying)",
@@ -62,9 +64,10 @@ lhtx must keep running until the end (Ctrl+C before the swap rolls back).`,
 			if err != nil {
 				return fmt.Errorf("size %q: %w", args[1], err)
 			}
+			var imageErr error // only needed when lhtx copies itself (no agent)
 			if image == "" {
-				if image, err = tui.ShrinkImage(Version); err != nil {
-					return fmt.Errorf("%w (or give --image)", err)
+				if image, imageErr = tui.ShrinkImage(Version); imageErr != nil {
+					imageErr = fmt.Errorf("%w (or give --image)", imageErr)
 				}
 			}
 			c, err := g.client()
@@ -105,9 +108,37 @@ lhtx must keep running until the end (Ctrl+C before the swap rolls back).`,
 				fmt.Println("\n(dry run: nothing changed; the steps depend on each other, there is no server dry run)")
 				return nil
 			}
+			byAgent := false
+			if !local && !cmd.Flags().Changed("image") {
+				if ag := agent.DetectRW(ctx, c); ag != nil && agent.SwitchesAvailable(ctx, c, ns) {
+					byAgent = true
+					fmt.Printf("\ncarried out by the lhtx agent %s with its own image – lhtx only follows (Ctrl+C stops following, not the shrink; --local runs it here)\n", ag.Holder)
+				}
+			}
 			fmt.Println("\nThe apps using the PVC are down from the freeze until the unfreeze at the end (while copying).")
 			if err := g.confirm(true, sw.PVCRef()); err != nil {
 				return err
+			}
+			if byAgent {
+				name, err := agent.RequestSwitch(ctx, c, ns, agent.SwitchSpec{PVC: pvc, ShrinkTo: args[1], Wait: wait.String(), ImagePullSecrets: pullSecrets})
+				if err != nil {
+					return err
+				}
+				fmt.Printf("requested Switch %s/%s (shrink) from the agent\n", ns, name)
+				res, err := agent.FollowSwitch(ctx, c, ns, name, plainLog)
+				switch {
+				case ctx.Err() != nil:
+					fmt.Printf("\nstopped following – the agent goes on (kubectl -n %s get switch %s)\n", ns, name)
+					return nil
+				case err != nil:
+					return err
+				case res.Status.Phase != agent.SwitchDone:
+					return fmt.Errorf("shrink %s: %s", res.Status.Phase, res.Status.Message)
+				}
+				return nil
+			}
+			if imageErr != nil {
+				return imageErr
 			}
 			start := time.Now()
 			journal := switchover.NewJournalPath(sw)
@@ -128,6 +159,7 @@ lhtx must keep running until the end (Ctrl+C before the swap rolls back).`,
 	}
 	cmd.Flags().StringVar(&image, "image", "", "image of the copy pod (default: env LHTX_SHRINK_IMAGE, else ghcr.io/nxckdx/lhtx:<this version>)")
 	cmd.Flags().StringSliceVar(&pullSecrets, "image-pull-secret", nil, "pull secret(s) in the PVC's namespace for the copy pod's image")
+	cmd.Flags().BoolVar(&local, "local", false, "do not hand the shrink to the lhtx agent, even if one runs (lhtx must then run until the end)")
 	cmd.Flags().BoolVar(&abort, "abort", false, "clean up an interrupted shrink of the PVC (copy pod, temporary PVC/PV, new volume) and unfreeze it")
 	cmd.Flags().DurationVar(&wait, "wait", 10*time.Minute, "how long to wait for pods to stop / start and volumes to detach")
 	return cmd

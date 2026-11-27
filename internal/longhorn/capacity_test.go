@@ -54,3 +54,19 @@ func TestSampleCapacityRoundTrip(t *testing.T) {
 		t.Fatalf("round trip: %+v %v", back, err)
 	}
 }
+
+func TestRestoreProbeVolumeEncrypted(t *testing.T) {
+	b := &Backup{}
+	b.Name, b.Status.State, b.Status.URL, b.Status.VolumeSize = "b1", "Completed", "nfs://x?backup=b1", Quantity(1<<30)
+	obj, err := RestoreProbeVolume(b, "lhtx-probe-x")
+	if err != nil || obj["spec"].(map[string]any)["encrypted"] != nil {
+		t.Fatalf("plain: %v %v", obj["spec"], err)
+	}
+	// an encrypted backup needs an encrypted test volume (room for the LUKS
+	// header; Longhorn sets the size of a restore itself)
+	b.Status.Labels = map[string]string{"volume-encrypted": "enabled"}
+	obj, _ = RestoreProbeVolume(b, "lhtx-probe-x")
+	if obj["spec"].(map[string]any)["encrypted"] != true || obj["spec"].(map[string]any)["size"] != "1073741824" {
+		t.Errorf("encrypted: %v", obj["spec"])
+	}
+}

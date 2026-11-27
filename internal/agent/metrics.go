@@ -33,6 +33,7 @@ type metrics struct {
 	historyKinds  sync.Map     // kind → *atomic.Int64
 	rebuildSecs   atomic.Int64 // summed durations of finished rebuilds
 	rebuilds      atomic.Int64
+	probeOK       atomic.Int64 // unix time of the last successful restore probe
 
 	freezes, switches cache.Store // set by Run (leader)
 	volumes           cache.Store // set by runDigests (leader, digests on)
@@ -145,6 +146,10 @@ func (a *Agent) writeMetrics(w io.Writer) {
 	for _, k := range kinds {
 		v, _ := m.historyKinds.Load(k)
 		fmt.Fprintf(w, "lhtx_agent_history_events_total{kind=%q} %d\n", k, v.(*atomic.Int64).Load())
+	}
+	if t := m.probeOK.Load(); t > 0 {
+		p("lhtx_agent_restore_probe_last_success_timestamp_seconds", "gauge", "When a restore probe last restored a backup completely.")
+		fmt.Fprintf(w, "lhtx_agent_restore_probe_last_success_timestamp_seconds %d\n", t)
 	}
 	p("lhtx_agent_rebuild_seconds", "summary", "Durations of finished rebuilds.")
 	fmt.Fprintf(w, "lhtx_agent_rebuild_seconds_sum %d\nlhtx_agent_rebuild_seconds_count %d\n", m.rebuildSecs.Load(), m.rebuilds.Load())

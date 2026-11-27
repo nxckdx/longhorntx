@@ -61,6 +61,11 @@ spec:
             - --no-history
             {{- end }}
             - --capacity-interval={{ .Values.capacity.interval }}
+            {{- if .Values.restoreProbe.enabled }}
+            - --restore-probe-interval={{ .Values.restoreProbe.interval }}
+            - --restore-probe-timeout={{ .Values.restoreProbe.timeout }}
+            - --restore-probe-max-size={{ .Values.restoreProbe.maxSize }}
+            {{- end }}
             {{- if or .Values.notify.url .Values.notify.existingSecret }}
             - --notify-format={{ .Values.notify.format }}
             - --notify-every={{ .Values.notify.every }}

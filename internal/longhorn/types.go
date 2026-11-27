@@ -202,6 +202,7 @@ type EngineStatus struct {
 	RestoreStatus            map[string]RestoreStatus       `json:"restoreStatus"`
 	CloneStatus              map[string]CloneStatus         `json:"cloneStatus"`
 	Snapshots                map[string]EngineSnapshotEntry `json:"snapshots"`
+	LastRestoredBackup       string                         `json:"lastRestoredBackup"`
 }
 
 type RebuildStatus struct {
@@ -226,6 +227,7 @@ type RestoreStatus struct {
 	State                  string `json:"state"`
 	Error                  string `json:"error"`
 	CurrentRestoringBackup string `json:"currentRestoringBackup"`
+	LastRestored           string `json:"lastRestored"`
 }
 
 type CloneStatus struct {

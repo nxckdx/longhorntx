@@ -52,6 +52,9 @@ type Agent struct {
 	// them until the count limit pushes them out).
 	HistoryMaxAge time.Duration
 	// HistoryFlush: how often recorded events are written (default 5 s).
+	// Probe: restore a backup into a test volume now and then (needs RW).
+	Probe   RestoreProbe
+	history atomic.Pointer[recorder] // set while the history runs
 	// Notify: send failures and recoveries to a webhook (URL "" = off).
 	Notify   Notify
 	notifier *notifier
@@ -141,6 +144,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		}()
 	}
 	go a.runCapacity(ctx)
+	go a.runRestoreProbe(ctx)
 	if a.Notify.URL != "" {
 		a.notifier = newNotifier(a, a.Notify)
 		go a.notifier.run(ctx)

@@ -104,6 +104,17 @@ notify:
   cluster: "" # name shown in the messages
   every: 1m
 
+# Restore probe (needs rw: true): now and then the agent restores a
+# volume's latest backup into a one-replica test volume, waits until every
+# block is read back, and deletes it – round robin over the volumes with
+# backups. Failures land in the history, notifications and alerts. Each
+# probe reads the whole backup from the target (traffic, disk space).
+restoreProbe:
+  enabled: false
+  interval: 24h
+  timeout: 2h
+  maxSize: 100Gi # skip larger volumes
+
 podDisruptionBudget:
   # created when replicaCount > 1
   minAvailable: 1

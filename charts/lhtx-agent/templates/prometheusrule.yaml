@@ -52,6 +52,13 @@ spec:
           annotations:
             summary: "{{ "{{" }} $value | humanize {{ "}}" }} Longhorn replicas failed in the last hour"
             description: Many at once usually means a node or disk went away. lhtx history --kind replica-failed --since 1h
+        - alert: LonghornRestoreProbeFailed
+          expr: sum(increase(lhtx_agent_history_events_total{kind="restore-probe-failed"}[2d])) > 0
+          labels:
+            severity: warning
+          annotations:
+            summary: A backup could not be restored by the restore probe
+            description: lhtx history --kind restore-probe-failed says which and why – that backup may not be usable.
         - alert: LhtxFreezeLong
           expr: max(lhtx_agent_freeze_oldest_seconds) > {{ $r.frozenForSeconds }}
           labels:

@@ -145,8 +145,8 @@ type histEntry struct {
 }
 
 func (r *recorder) record(vol *longhorn.Volume, evs []longhorn.HistoryEvent) {
-	if len(evs) == 0 || vol == nil {
-		return
+	if len(evs) == 0 || vol == nil || vol.Labels[longhorn.LabelRestoreProbe] != "" {
+		return // the restore probe's test volumes have no history
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -246,6 +246,8 @@ func (a *Agent) runHistory(ctx context.Context) error {
 		return nil
 	}
 	r := &recorder{a: a, pending: map[string][]longhorn.HistoryEvent{}, known: map[string]histEntry{}, vols: map[string]*longhorn.Volume{}}
+	a.history.Store(r)
+	defer a.history.Store(nil)
 	for i := range l.Items {
 		if ev, err := longhorn.DecodeHistory(&l.Items[i]); err == nil {
 			r.known[l.Items[i].GetName()] = histEntry{events: ev, rv: l.Items[i].GetResourceVersion()}

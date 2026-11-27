@@ -408,3 +408,35 @@ func (c *Client) existsFn(ctx context.Context, spec RestoreSpec) (func(string) b
 		return ok
 	}, &lookupErr
 }
+
+// LabelRestoreProbe marks the lhtx agent's restore probe volumes (value:
+// the source volume). They are deleted after the probe.
+const LabelRestoreProbe = "lhtx.io/restore-probe"
+
+// RestoreProbeVolume: a one-replica volume restored from b to see that the
+// backup can be read back in full. For an encrypted backup the test volume
+// is encrypted too (the backup holds the raw device with its LUKS header,
+// for which Longhorn makes room only in encrypted volumes); restoring needs
+// no key – only attaching it to a pod would, which the probe never does.
+func RestoreProbeVolume(b *Backup, name string) (map[string]any, error) {
+	if b.Status.State != "Completed" || b.Status.URL == "" {
+		return nil, fmt.Errorf("backup %s is not completed", b.Name)
+	}
+	size := int64(b.Status.VolumeSize)
+	if size <= 0 {
+		return nil, fmt.Errorf("backup %s does not record the volume size", b.Name)
+	}
+	spec := map[string]any{
+		"fromBackup":       b.Status.URL,
+		"size":             strconv.FormatInt(size, 10),
+		"numberOfReplicas": int64(1),
+		"accessMode":       "rwo",
+		"dataEngine":       "v1",
+		"frontend":         "blockdev",
+		"backupTargetName": b.Status.BackupTargetName,
+	}
+	if b.Encrypted() {
+		spec["encrypted"] = true
+	}
+	return lhObject("Volume", name, map[string]string{LabelRestoreProbe: b.Volume()}, spec), nil
+}

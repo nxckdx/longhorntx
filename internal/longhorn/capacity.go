@@ -181,7 +181,7 @@ func Forecast(samples []CapacitySample, now time.Time) []DiskForecast {
 	}
 	var out []DiskForecast
 	for k, pts := range series {
-		f := DiskForecast{Disk: k, Used: last[k].Used, Usable: last[k].Usable, Span: now.Sub(first[k]).Round(time.Hour)}
+		f := DiskForecast{Disk: k, Used: last[k].Used, Usable: last[k].Usable, Span: now.Sub(first[k]).Round(time.Minute)}
 		if len(pts) < 4 || f.Span < 48*time.Hour {
 			f.TooLittle = true
 			out = append(out, f)

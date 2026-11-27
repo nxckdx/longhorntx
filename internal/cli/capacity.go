@@ -52,7 +52,7 @@ Needs the agent and at least 2 days of samples.`,
 				per, full := "-", "-"
 				switch {
 				case f.TooLittle:
-					full = "(" + f.Span.String() + " of samples – needs 2 days)"
+					full = "(" + format.Duration(f.Span) + " of samples – needs 2 days)"
 				case f.FullIn > 0:
 					per = "+" + format.Bytes(f.PerDay)
 					full = fmt.Sprintf("~%d days", int(f.FullIn.Hours()/24))

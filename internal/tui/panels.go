@@ -26,6 +26,7 @@ type panelData struct {
 	events    []longhorn.Event
 	jobs      []*longhorn.RecurringJob
 	history   []longhorn.HistoryEvent
+	placement *longhorn.Placement
 }
 
 type panelMsg struct {
@@ -39,9 +40,10 @@ var panelNames = map[panelKind]string{
 	panelEvents:    "Events",
 	panelJobs:      "Recurring jobs",
 	panelHistory:   "History",
+	panelPlacement: "Placement",
 }
 
-var panelKeys = map[string]panelKind{"s": panelSnapshots, "b": panelBackups, "e": panelEvents, "J": panelJobs, "H": panelHistory}
+var panelKeys = map[string]panelKind{"s": panelSnapshots, "b": panelBackups, "e": panelEvents, "J": panelJobs, "H": panelHistory, "P": panelPlacement}
 
 // detailKey handles keys specific to the detail page.
 func (m *model) detailKey(p *page, key string) (tea.Cmd, bool) {
@@ -55,7 +57,7 @@ func (m *model) detailKey(p *page, key string) (tea.Cmd, bool) {
 	}
 	switch key {
 	case "tab":
-		next := p.panel%panelHistory + 1
+		next := p.panel%panelPlacement + 1
 		p.panel, p.cursor, p.offset = next, 0, 0
 		return m.loadPanel(p), true
 	case "ctrl+r":
@@ -76,6 +78,13 @@ func (m *model) loadPanel(p *page) tea.Cmd {
 	c := m.client
 	ctx := m.ctx
 	var refs []longhorn.ObjectRef
+	var reps []*longhorn.Replica
+	for _, r := range m.state.Replicas {
+		if r.Spec.VolumeName == vol {
+			reps = append(reps, r)
+		}
+	}
+	nodes := m.state.Nodes
 	if vv := m.findView(vol); vv != nil {
 		refs = longhorn.VolumeEventRefs(c.Namespace, vv, m.state.Engines)
 	}
@@ -98,6 +107,13 @@ func (m *model) loadPanel(p *page) tea.Cmd {
 		case panelHistory:
 			// kept by the lhtx agent: one small GET
 			d.history, d.err = c.History(ctx, vol)
+		case panelPlacement:
+			// the volume itself (selectors and overrides are not in every
+			// view source), seven settings; nodes and replicas are watched
+			var v *longhorn.Volume
+			if v, d.err = c.Volume(ctx, vol); d.err == nil {
+				d.placement = longhorn.AnalyzePlacement(v, reps, nodes, c.PlacementSettings(ctx))
+			}
 		}
 		return panelMsg{vol: vol, data: d}
 	}
@@ -124,6 +140,8 @@ func (m *model) panelCols(p *page) []col {
 		return []col{{"NAME", 0, 1}, {"ASSIGNED", 0, 1}, {"TASK", 18, 0}, {"CRON", 14, 0}, {"RETAIN", 7, 0}, {"GROUPS / JOBS", 0, 1}, {"RUNS", 6, 0}}
 	case panelHistory:
 		return []col{{"WHEN", 17, 0}, {"AGE", 9, 0}, {"KIND", 15, 0}, {"WHAT", 0, 3}, {"TOOK", 9, 0}}
+	case panelPlacement:
+		return []col{{"NODE", 0, 1}, {"VERDICT", 10, 0}, {"DISK", 0, 1}, {"AVAILABLE", 10, 0}, {"SCHED / LIMIT", 22, 0}, {"WHY", 0, 4}}
 	}
 	return nil
 }
@@ -197,6 +215,41 @@ func (m *model) panelRows(p *page) []row {
 			}
 			rows = append(rows, row{cells: []string{e.At.Local().Format("2006-01-02 15:04"), format.Age(e.At.Format(time.RFC3339), now), kind, e.Text, took}})
 		}
+	case panelPlacement:
+		if d.placement == nil {
+			break
+		}
+		for _, n := range d.placement.Nodes {
+			verdict := fg(cOK, "ok")
+			switch {
+			case !n.OK:
+				verdict = fg(cWarn, "no")
+			case n.Soft:
+				verdict = fg(cOK, "ok (soft)")
+			}
+			name := n.Node
+			if n.Zone != "" {
+				name += sDim.Render(" " + n.Zone)
+			}
+			if len(n.Disks) == 0 || (n.Replica != "" && !n.OK) { // refused as a whole
+				rows = append(rows, row{cells: []string{name, verdict, sDim.Render("-"), "", "", dash(n.Reason)}})
+				continue
+			}
+			for i, dk := range n.Disks {
+				why := dk.Reason
+				if why == "" && dk.Soft {
+					why = "holds a replica already (soft disk anti-affinity)"
+				} else if why == "" {
+					why = n.Reason
+				}
+				nm, vd := name, verdict
+				if i > 0 {
+					nm, vd = "", ""
+				}
+				rows = append(rows, row{cells: []string{nm, vd, dk.Path, format.Bytes(dk.Available),
+					format.Bytes(dk.Scheduled) + " / " + format.Bytes(dk.Limit), dash(why)}})
+			}
+		}
 	case panelJobs:
 		vv := m.findView(p.vol)
 		if vv == nil {
@@ -226,8 +279,8 @@ func (m *model) panelRows(p *page) []row {
 // panelTitle is the line above the panel list.
 func (m *model) panelTitle(p *page) string {
 	var tabs []string
-	for _, k := range []panelKind{panelSnapshots, panelBackups, panelEvents, panelJobs, panelHistory} {
-		key := map[panelKind]string{panelSnapshots: "s", panelBackups: "b", panelEvents: "e", panelJobs: "J", panelHistory: "H"}[k]
+	for _, k := range []panelKind{panelSnapshots, panelBackups, panelEvents, panelJobs, panelHistory, panelPlacement} {
+		key := map[panelKind]string{panelSnapshots: "s", panelBackups: "b", panelEvents: "e", panelJobs: "J", panelHistory: "H", panelPlacement: "P"}[k]
 		label := "[" + key + "] " + panelNames[k]
 		if k == p.panel {
 			label = sTabActive.Render(" " + panelNames[k] + " ")
@@ -253,6 +306,14 @@ func (m *model) panelTitle(p *page) string {
 			}
 			if p.panel == panelEvents && n == 0 {
 				s += sDim.Render(" · events expire after 1h")
+			}
+			if pl := d.placement; p.panel == panelPlacement && pl != nil {
+				sum := fmt.Sprintf(" · %d of %d replicas placed, room for %d more", pl.Have, pl.Want, pl.Placeable())
+				if pr := pl.Problem(); pr != "" {
+					s += " " + fg(cWarn, sum)
+				} else {
+					s += sDim.Render(sum)
+				}
 			}
 		}
 	}

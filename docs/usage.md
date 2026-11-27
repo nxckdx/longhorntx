@@ -67,7 +67,7 @@ Write commands: [write-actions.md](write-actions.md). Freeze: [freeze.md](freeze
 | `p` | volume list: problems and activity first (toggle) |
 | `i` | nodes view: drain check for the node |
 | `m` | nodes view: replica matrix (volumes × nodes; replicas sharing a node or disk first) |
-| `s` `b` `e` `J` `H`, `tab` | detail panels: snapshots, backups, events, recurring jobs, history (needs the lhtx agent) |
+| `s` `b` `e` `J` `H` `P`, `tab` | detail panels: snapshots, backups, events, recurring jobs, history (needs the lhtx agent), placement (why replicas go where, see [replica placement](#replica-placement)) |
 | `ctrl+r` | reload panel (details) or reload volumes (poll mode); resume after the traffic budget paused updates |
 | `c` | switch kubeconfig context; `o` there checks Longhorn health in all clusters (like `lhtx overview`) |
 | `W` | write mode on/off (red **RW** badge; or start with `lhtx --rw`) |
@@ -232,7 +232,7 @@ node-3  -      NO        -                    -           -                     
 that does not exist yet (before a restore or clone; the space check then
 counts no data yet). `doctor` and the Health tab report volumes Longhorn
 cannot place, with the reasons per node; `lhtx shrink` warns when the new
-volume will not fit. Reads: nodes, the volume and its replicas, seven
+volume will not fit; in the TUI: `P` in the volume details. Reads: nodes, the volume and its replicas, seven
 settings (doctor: only when a volume is not scheduled).
 
 ## Node maintenance

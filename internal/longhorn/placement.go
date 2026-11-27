@@ -328,7 +328,7 @@ func AnalyzePlacement(v *Volume, replicas []*Replica, nodes []*Node, s Placement
 		if nv.OK {
 			switch {
 			case nv.Replica != "" && !(nodeSoft && zoneSoft):
-				nv.OK, nv.Reason = false, "already holds a replica ("+nv.Replica+"; replica-soft-anti-affinity off)"
+				nv.OK, nv.Reason = false, "already holds a replica ("+strings.TrimPrefix(nv.Replica, v.Name+"-")+"; replica-soft-anti-affinity off)"
 			case nv.Replica != "":
 				nv.Soft, nv.Reason = true, "a second replica on this node (soft anti-affinity)"
 			case usedZone[n.Status.Zone] && !zoneSoft:

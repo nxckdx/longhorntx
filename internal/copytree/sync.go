@@ -35,6 +35,9 @@ func fingerprintOf(st *unix.Stat_t) Fingerprint {
 // State: the fingerprints of what the pre-copy took consistently.
 type State struct {
 	Entries map[string]Fingerprint `json:"entries"`
+	// NoXattrs: the pre-copy could not read extended attributes (over
+	// NFS) – Sync sets them on every entry.
+	NoXattrs bool `json:"noXattrs,omitempty"`
 }
 
 // NewState is an empty State.
@@ -132,6 +135,15 @@ func Sync(src, dst string, prev *State, o Options) (Stats, []string, error) {
 		}
 		old, known := prev.Entries[rel]
 		if known && dErr == nil && old == fingerprintOf(&st) && st.Nlink == 1 && dt.Mode&unix.S_IFMT == st.Mode&unix.S_IFMT {
+			if prev.NoXattrs {
+				// the content is there, the attributes are not yet
+				if err := c.xattrs(p, target); err != nil {
+					return fmt.Errorf("%s: %w", rel, err)
+				}
+				if err := copyXattr(p, target, "security.capability"); err != nil && !errors.Is(err, unix.ENODATA) && !errors.Is(err, unix.ENOTSUP) {
+					return fmt.Errorf("%s: %w", rel, err)
+				}
+			}
 			c.add(func(s *Stats) { s.Unchanged++ })
 			return nil
 		}

@@ -312,6 +312,7 @@ func (a *Agent) runHistory(ctx context.Context) error {
 			r.record(volume(nb.Volume()), backupEvents(ob, nb, time.Now()))
 		}
 	}})
+	a.watchShares(ctx, r, volume, ready)
 	f.Start(ctx.Done())
 	if !cache.WaitForCacheSync(ctx.Done(), vinf.HasSynced, rinf.HasSynced, binf.HasSynced) {
 		return nil

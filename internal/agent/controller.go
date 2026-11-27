@@ -55,6 +55,7 @@ type Agent struct {
 	// Probe: restore a backup into a test volume now and then (needs RW).
 	Probe   RestoreProbe
 	Mounts  MountCheck               // the stuck-mount check (mounts.go)
+	NFS     NFSProbe                 // RWX NFS servers (nfsprobe.go)
 	history atomic.Pointer[recorder] // set while the history runs
 	// Notify: send failures and recoveries to a webhook (URL "" = off).
 	Notify   Notify
@@ -147,6 +148,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	go a.runCapacity(ctx)
 	go a.runRestoreProbe(ctx)
 	go a.runMountCheck(ctx)
+	go a.runNFSProbe(ctx)
 	if a.Notify.URL != "" {
 		a.notifier = newNotifier(a, a.Notify)
 		go a.notifier.run(ctx)

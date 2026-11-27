@@ -59,6 +59,22 @@ spec:
           annotations:
             summary: A backup could not be restored by the restore probe
             description: lhtx history --kind restore-probe-failed says which and why – that backup may not be usable.
+        - alert: LonghornMountStuck
+          expr: sum by (node) (lhtx_agent_mounts_waiting{stage="mount"}) > 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pods on {{ "{{" }} $labels.node {{ "}}" }} cannot mount their Longhorn volumes"
+            description: The volumes are attached but kubelet or the Longhorn CSI plugin on the node does not mount them, although the node looks Ready. lhtx mounts names the pods and the restart that fits the node.
+        - alert: LonghornAttachStuck
+          expr: sum by (node) (lhtx_agent_mounts_waiting{stage=~"attach|attach-error"}) > 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pods on {{ "{{" }} $labels.node {{ "}}" }} wait for Longhorn volumes to attach"
+            description: lhtx mounts shows which volumes and why.
         - alert: LhtxFreezeLong
           expr: max(lhtx_agent_freeze_oldest_seconds) > {{ $r.frozenForSeconds }}
           labels:

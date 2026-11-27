@@ -33,7 +33,8 @@ type metrics struct {
 	historyKinds  sync.Map     // kind → *atomic.Int64
 	rebuildSecs   atomic.Int64 // summed durations of finished rebuilds
 	rebuilds      atomic.Int64
-	probeOK       atomic.Int64 // unix time of the last successful restore probe
+	probeOK       atomic.Int64                      // unix time of the last successful restore probe
+	mountsWaiting atomic.Pointer[map[[2]string]int] // node, stage → pods (mount check on)
 
 	freezes, switches cache.Store // set by Run (leader)
 	volumes           cache.Store // set by runDigests (leader, digests on)
@@ -150,6 +151,17 @@ func (a *Agent) writeMetrics(w io.Writer) {
 	if t := m.probeOK.Load(); t > 0 {
 		p("lhtx_agent_restore_probe_last_success_timestamp_seconds", "gauge", "When a restore probe last restored a backup completely.")
 		fmt.Fprintf(w, "lhtx_agent_restore_probe_last_success_timestamp_seconds %d\n", t)
+	}
+	if mw := m.mountsWaiting.Load(); mw != nil {
+		p("lhtx_agent_mounts_waiting", "gauge", "Pods waiting (over the mount check's threshold) for a Longhorn volume, by node and stage (attach, attach-error, mount).")
+		keys := make([][2]string, 0, len(*mw))
+		for k := range *mw {
+			keys = append(keys, k)
+		}
+		sort.Slice(keys, func(i, j int) bool { return keys[i][0]+keys[i][1] < keys[j][0]+keys[j][1] })
+		for _, k := range keys {
+			fmt.Fprintf(w, "lhtx_agent_mounts_waiting{node=%q,stage=%q} %d\n", k[0], k[1], (*mw)[k])
+		}
 	}
 	p("lhtx_agent_rebuild_seconds", "summary", "Durations of finished rebuilds.")
 	fmt.Fprintf(w, "lhtx_agent_rebuild_seconds_sum %d\nlhtx_agent_rebuild_seconds_count %d\n", m.rebuildSecs.Load(), m.rebuilds.Load())

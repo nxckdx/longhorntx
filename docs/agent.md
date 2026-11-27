@@ -193,6 +193,22 @@ mind traffic and space (`restoreProbe.maxSize`, default 100Gi, skips larger
 volumes). Test volumes left behind by an agent restart are removed when it
 starts again.
 
+## Stuck mounts
+
+Every minute (`--mount-check-interval`, chart `mountCheck.interval`, `0` =
+off) the agent runs the check of [`lhtx mounts`](usage.md#stuck-mounts): one
+LIST of pending pods, more only when pods wait for Longhorn volumes. A pod
+waiting longer than `mountCheck.after` (5m) goes into the volume's history
+as `mount-stuck` (a bad event: notifications, `lhtx history --bad`); when it
+no longer waits, `mounted` with the time it waited. The metric
+`lhtx_agent_mounts_waiting{node,stage}` drives the alerts
+`LonghornMountStuck` and `LonghornAttachStuck`. Read-only either way – the
+agent never restarts kubelet or pods.
+
+`mountCheck.kubelet: true` (`--mount-check-kubelet`) also asks kubelet on
+nodes with stuck mounts. It grants the agent `get` on `nodes/proxy`, which
+reaches every kubelet API – a powerful right, hence off by default.
+
 ## Capacity forecast
 
 Longhorn shows how full a disk is, not how fast it fills. The agent samples
@@ -238,6 +254,7 @@ names of volumes, PVCs or people):
 | `lhtx_agent_digest_volumes` | volumes with a digest |
 | `lhtx_agent_history_events_total{kind}` | history events by kind (rebuilt, replica-failed, backup-failed, …) |
 | `lhtx_agent_rebuild_seconds` (sum/count) | durations of finished rebuilds |
+| `lhtx_agent_mounts_waiting{node,stage}` | pods waiting for a Longhorn volume longer than `mountCheck.after` |
 | `lhtx_agent_build_info{version}` | |
 
 Chart values: `metrics.service` (on; a Service with `prometheus.io/scrape`
@@ -258,6 +275,8 @@ operator; kube-prometheus-stack needs its `release` label in
 | `LonghornVolumeDegraded` | a volume is degraded for `degradedFor` (30m) |
 | `LonghornBackupsFailing` | `backupFailures` (2) backups failed in 24 hours |
 | `LonghornReplicasFailing` | `replicaFailures` (3) replicas failed in an hour |
+| `LonghornMountStuck` | pods on a node wait for attached volumes that are not mounted, for 5 minutes (critical) |
+| `LonghornAttachStuck` | pods on a node wait for volumes to attach, for 10 minutes |
 | `LhtxFreezeLong` | a freeze has kept apps down for `frozenForSeconds` (6h) |
 | `LhtxFreezeOrSwitchStuck` | a Freeze freezing or failed, or a Switch stuck, for 30 minutes |
 

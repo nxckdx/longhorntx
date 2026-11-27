@@ -61,6 +61,11 @@ spec:
             - --no-history
             {{- end }}
             - --capacity-interval={{ .Values.capacity.interval }}
+            - --mount-check-interval={{ .Values.mountCheck.interval }}
+            - --mount-check-after={{ .Values.mountCheck.after }}
+            {{- if .Values.mountCheck.kubelet }}
+            - --mount-check-kubelet
+            {{- end }}
             {{- if .Values.restoreProbe.enabled }}
             - --restore-probe-interval={{ .Values.restoreProbe.interval }}
             - --restore-probe-timeout={{ .Values.restoreProbe.timeout }}

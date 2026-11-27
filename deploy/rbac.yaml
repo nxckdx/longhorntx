@@ -45,6 +45,14 @@ rules:
   - apiGroups: [longhorn.io]
     resources: [settings, backupvolumes, engines, nodes] # nodes: capacity samples
     verbs: [get, list]
+  # mount check (lhtx mounts): pods stuck mounting, their events, the
+  # VolumeAttachments, nodes, CSI registration
+  - apiGroups: [""]
+    resources: [events, nodes]
+    verbs: [get, list]
+  - apiGroups: [storage.k8s.io]
+    resources: [volumeattachments, csinodes]
+    verbs: [get, list]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

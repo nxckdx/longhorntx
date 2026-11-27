@@ -35,7 +35,7 @@ func (a *Agent) runShrink(ctx context.Context, lg *switchLog, s *Switch) {
 		return
 	}
 	o := switchover.Options{Log: lg.add, Wait: durationOr(s.Spec.Wait, 10*time.Minute), Poll: a.Poll,
-		FreezeName: switchFreezeName(s), Request: s.Namespace + "/" + s.Name}
+		FreezeName: switchFreezeName(s), Request: s.Namespace + "/" + s.Name, Handover: true}
 	stop := lg.autoFlush(ctx)
 	defer stop()
 
@@ -84,7 +84,7 @@ func (a *Agent) runShrink(ctx context.Context, lg *switchLog, s *Switch) {
 		lg.add("⚠ %s", w)
 	}
 	lg.flush(ctx, map[string]any{"phase": SwitchRunning, "plan": p.Switch, "targetVolume": p.Switch.NewVolume})
-	err = shrink.Run(ctx, a.c, p, shrink.Options{Log: lg.add, Wait: o.Wait, Poll: o.Poll, FreezeName: o.FreezeName, Request: o.Request})
+	err = shrink.Run(ctx, a.c, p, shrink.Options{Log: lg.add, Wait: o.Wait, Poll: o.Poll, FreezeName: o.FreezeName, Request: o.Request, Handover: true})
 	if ctx.Err() != nil {
 		return // agent stopping: the next one continues
 	}

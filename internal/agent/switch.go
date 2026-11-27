@@ -253,7 +253,7 @@ func (a *Agent) runSwitch(ctx context.Context, s *Switch) {
 		return
 	}
 	o := switchover.Options{Log: lg.add, Wait: durationOr(s.Spec.Wait, 10*time.Minute), Poll: a.Poll,
-		FreezeName: switchFreezeName(s), Request: s.Namespace + "/" + s.Name}
+		FreezeName: switchFreezeName(s), Request: s.Namespace + "/" + s.Name, Handover: true}
 	stop := lg.autoFlush(ctx)
 	defer stop()
 

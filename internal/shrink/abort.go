@@ -163,6 +163,38 @@ func Abort(ctx context.Context, c *longhorn.Client, l *Leftovers, log func(strin
 		}
 		log("✔ volume %s deleted", v.Name)
 	}
+	// gone for good before anything with the same names is created again
+	waitGone := func(what string, get func() error) error {
+		for i := 0; i < 100; i++ {
+			if err := get(); apierrors.IsNotFound(err) {
+				return nil
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(3 * time.Second):
+			}
+		}
+		return fmt.Errorf("%s is still there after 5 minutes", what)
+	}
+	if l.TempPVC != "" {
+		if err := waitGone("PVC "+l.TempPVC, func() error {
+			_, err := dyn.Resource(gvrPVC).Namespace(l.Namespace).Get(ctx, l.TempPVC, metav1.GetOptions{})
+			return err
+		}); err != nil {
+			return err
+		}
+	}
+	for _, pv := range l.TempPVs {
+		if err := waitGone("PV "+pv, func() error { _, err := dyn.Resource(gvrPV).Get(ctx, pv, metav1.GetOptions{}); return err }); err != nil {
+			return err
+		}
+	}
+	for _, v := range l.NewVolumes {
+		if err := waitGone("volume "+v.Name, func() error { _, err := c.Volume(ctx, v.Name); return err }); err != nil {
+			return err
+		}
+	}
 	for _, f := range l.Freezes {
 		if err := switchover.Unfreeze(ctx, c, f, switchover.FreezeOptions{Log: log}); err != nil {
 			return fmt.Errorf("unfreeze %s: %w", f.Name, err)

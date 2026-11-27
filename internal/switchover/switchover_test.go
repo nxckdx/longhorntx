@@ -823,3 +823,25 @@ func TestMarkRolledBack(t *testing.T) {
 		}
 	}
 }
+
+// The agent stopping (ctx cancelled, Handover): nothing is rolled back –
+// the freeze stays for the next agent to take over.
+func TestSwitchHandover(t *testing.T) {
+	k := world()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	p, err := Build(ctx, k.c, "app", "data", "pvc-new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := fast
+	o.Handover = true
+	o.AfterFreeze = func(ctx context.Context) error { cancel(); return ctx.Err() }
+	err = Run(ctx, k.c, p, o)
+	if err == nil || !strings.Contains(err.Error(), "handed over") {
+		t.Fatalf("want hand-over, got %v", err)
+	}
+	if fs, _ := ActiveFreezes(context.Background(), k.dyn); len(fs) != 1 {
+		t.Errorf("freeze gone: %+v", fs)
+	}
+}

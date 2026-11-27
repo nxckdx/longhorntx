@@ -288,6 +288,10 @@ type Options struct {
 	// freeze after its Switch, so it can take it over after a restart).
 	FreezeName string
 	Request    string
+	// Handover: when ctx is cancelled, leave everything as it is (no
+	// rollback, no cleanup) – the lhtx agent stopping; the next agent
+	// removes the leftovers and starts over.
+	Handover bool
 }
 
 // Run carries out the plan.
@@ -304,7 +308,7 @@ func Run(ctx context.Context, c *longhorn.Client, p *Plan, o Options) error {
 	if o.Log == nil {
 		o.Log = func(string, ...any) {}
 	}
-	r := &runner{c: c, p: p, o: o, ctx: ctx}
+	r := &runner{c: c, p: p, o: o, ctx: ctx, podUIDs: map[string]string{}}
 	// everything that can fail without the app being down, first
 	if err := r.dryRunCopyPod(); err != nil {
 		return err
@@ -319,7 +323,7 @@ func Run(ctx context.Context, c *longhorn.Client, p *Plan, o Options) error {
 	}
 	err := switchover.Run(ctx, c, p.Switch, switchover.Options{
 		Log: o.Log, Journal: o.Journal, Wait: o.Wait, Poll: o.Poll,
-		FreezeName: o.FreezeName, Request: o.Request,
+		FreezeName: o.FreezeName, Request: o.Request, Handover: o.Handover,
 		AfterFreeze: r.copy,
 	})
 	if err != nil && !r.swapped(ctx) {
@@ -340,6 +344,18 @@ type runner struct {
 	ctx    context.Context
 	volUID string
 	node   string // where the probe ran: the copy pod runs there too
+	// UIDs of what this run created: deletes never hit a same-named object
+	// of another run
+	pvUID, pvcUID string
+	podUIDs       map[string]string
+}
+
+func uidDelete(uid string) metav1.DeleteOptions {
+	if uid == "" {
+		return metav1.DeleteOptions{}
+	}
+	u := types.UID(uid)
+	return metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &u}}
 }
 
 func (r *runner) createTarget() error {
@@ -379,9 +395,11 @@ func (r *runner) createTarget() error {
 			"csi":                           csi,
 		},
 	}}
-	if _, err := dyn.Resource(gvrPV).Create(r.ctx, pv, metav1.CreateOptions{FieldManager: "lhtx"}); err != nil {
+	cpv, err := dyn.Resource(gvrPV).Create(r.ctx, pv, metav1.CreateOptions{FieldManager: "lhtx"})
+	if err != nil {
 		return fmt.Errorf("create PV %s: %w", p.TempPV, err)
 	}
+	r.pvUID = string(cpv.GetUID())
 	pvc := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "v1", "kind": "PersistentVolumeClaim",
 		"metadata": map[string]any{"name": p.TempPVC, "namespace": sw.Namespace, "labels": map[string]any{LabelCopy: "target"}},
@@ -393,9 +411,11 @@ func (r *runner) createTarget() error {
 			"resources":        map[string]any{"requests": map[string]any{"storage": human(p.NewSize)}},
 		},
 	}}
-	if _, err := dyn.Resource(gvrPVC).Namespace(sw.Namespace).Create(r.ctx, pvc, metav1.CreateOptions{FieldManager: "lhtx"}); err != nil {
+	cpvc, err := dyn.Resource(gvrPVC).Namespace(sw.Namespace).Create(r.ctx, pvc, metav1.CreateOptions{FieldManager: "lhtx"})
+	if err != nil {
 		return fmt.Errorf("create PVC %s: %w", p.TempPVC, err)
 	}
+	r.pvcUID = string(cpvc.GetUID())
 	r.o.Log("PV %s and PVC %s/%s created", p.TempPV, sw.Namespace, p.TempPVC)
 	return nil
 }
@@ -480,9 +500,11 @@ func (r *runner) dryRunCopyPod() error {
 func (r *runner) preflight() error {
 	sw, p := r.p.Switch, r.p
 	res := r.c.Dynamic().Resource(gvrPod).Namespace(sw.Namespace)
-	if _, err := res.Create(r.ctx, r.podObject(true), metav1.CreateOptions{FieldManager: "lhtx"}); err != nil {
+	cp, err := res.Create(r.ctx, r.podObject(true), metav1.CreateOptions{FieldManager: "lhtx"})
+	if err != nil {
 		return fmt.Errorf("pre-flight pod: %w", err)
 	}
+	r.podUIDs[p.ProbePod] = string(cp.GetUID())
 	defer r.deleteNamedPod(context.WithoutCancel(r.ctx), p.ProbePod)
 	r.o.Log("pre-flight pod %s: pulls the image, mounts and formats the new volume (the app still runs)", p.ProbePod)
 	start, lastLog, errs := time.Now(), time.Time{}, 0
@@ -556,9 +578,11 @@ func (r *runner) copy(ctx context.Context) error {
 	sw, p := r.p.Switch, r.p
 	dyn := r.c.Dynamic()
 	pod := r.podObject(false)
-	if _, err := dyn.Resource(gvrPod).Namespace(sw.Namespace).Create(ctx, pod, metav1.CreateOptions{FieldManager: "lhtx"}); err != nil {
+	cp, err := dyn.Resource(gvrPod).Namespace(sw.Namespace).Create(ctx, pod, metav1.CreateOptions{FieldManager: "lhtx"})
+	if err != nil {
 		return fmt.Errorf("start copy pod: %w", err)
 	}
+	r.podUIDs[p.CopyPod] = string(cp.GetUID())
 	r.o.Log("copy pod %s started", p.CopyPod)
 	rep, err := r.followCopy(ctx)
 	r.deletePod(context.WithoutCancel(ctx))
@@ -707,8 +731,15 @@ func (r *runner) deletePod(ctx context.Context) { r.deleteNamedPod(ctx, r.p.Copy
 // deleteNamedPod deletes a pod and waits until it is gone (its volumes
 // are released).
 func (r *runner) deleteNamedPod(ctx context.Context, name string) {
+	if r.o.Handover && r.ctx.Err() != nil {
+		return // stopping: the next run cleans up
+	}
+	uid := r.podUIDs[name]
+	if uid == "" {
+		return // not created by this run
+	}
 	res := r.c.Dynamic().Resource(gvrPod).Namespace(r.p.Switch.Namespace)
-	if err := res.Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+	if err := res.Delete(ctx, name, uidDelete(uid)); err != nil && !apierrors.IsNotFound(err) && !apierrors.IsConflict(err) {
 		r.o.Log("delete pod %s: %v", name, err)
 		return
 	}
@@ -725,7 +756,7 @@ func (r *runner) deleteNamedPod(ctx context.Context, name string) {
 func (r *runner) deleteTemp(ctx context.Context) error {
 	sw, p := r.p.Switch, r.p
 	dyn := r.c.Dynamic()
-	if err := dyn.Resource(gvrPVC).Namespace(sw.Namespace).Delete(ctx, p.TempPVC, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+	if err := dyn.Resource(gvrPVC).Namespace(sw.Namespace).Delete(ctx, p.TempPVC, uidDelete(r.pvcUID)); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete PVC %s: %w", p.TempPVC, err)
 	}
 	deadline := time.Now().Add(r.o.Wait)
@@ -739,7 +770,7 @@ func (r *runner) deleteTemp(ctx context.Context) error {
 		}
 		time.Sleep(r.o.Poll)
 	}
-	if err := dyn.Resource(gvrPV).Delete(ctx, p.TempPV, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+	if err := dyn.Resource(gvrPV).Delete(ctx, p.TempPV, uidDelete(r.pvUID)); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete PV %s: %w", p.TempPV, err)
 	}
 	for {
@@ -799,12 +830,19 @@ func (r *runner) swapped(ctx context.Context) bool {
 // cleanup after a failure before the swap: the copy pod, the temporary
 // PVC/PV and the new volume go (the old volume was never changed).
 func (r *runner) cleanup(deleteVolume bool) bool {
+	if r.o.Handover && r.ctx.Err() != nil {
+		return false // the next agent cleans up
+	}
 	ctx := context.WithoutCancel(r.ctx)
 	sw, p := r.p.Switch, r.p
 	r.deletePod(ctx)
 	r.deleteNamedPod(ctx, p.ProbePod)
-	_ = r.c.Dynamic().Resource(gvrPVC).Namespace(sw.Namespace).Delete(ctx, p.TempPVC, metav1.DeleteOptions{})
-	_ = r.c.Dynamic().Resource(gvrPV).Delete(ctx, p.TempPV, metav1.DeleteOptions{})
+	if r.pvcUID != "" {
+		_ = r.c.Dynamic().Resource(gvrPVC).Namespace(sw.Namespace).Delete(ctx, p.TempPVC, uidDelete(r.pvcUID))
+	}
+	if r.pvUID != "" {
+		_ = r.c.Dynamic().Resource(gvrPV).Delete(ctx, p.TempPV, uidDelete(r.pvUID))
+	}
 	if deleteVolume && r.volUID != "" {
 		u := types.UID(r.volUID)
 		err := r.c.Dynamic().Resource(longhorn.GVRVolume).Namespace(r.c.Namespace).Delete(ctx, sw.NewVolume,

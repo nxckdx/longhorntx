@@ -44,6 +44,11 @@ type Options struct {
 	// before the old PVC goes (lhtx shrink copies the data here). An error
 	// rolls back: the workload starts again on the old volume.
 	AfterFreeze func(ctx context.Context) error
+	// Handover: the caller stopping (ctx cancelled) hands the run over
+	// instead of rolling it back – the lhtx agent losing its lease: the
+	// next agent continues from the cluster state, and a rollback of the
+	// old one would race with it.
+	Handover bool
 }
 
 // journal is what the journal file holds.
@@ -366,6 +371,10 @@ func Continue(ctx context.Context, c *longhorn.Client, p *Plan, o Options) error
 // rollback ends the freeze (before the old PVC was deleted): the pods
 // start again on the old volume.
 func (r *runner) rollback(cause error) error {
+	if r.o.Handover && r.ctx.Err() != nil {
+		r.o.Log("stopping – the PVC stays frozen, the next run continues")
+		return fmt.Errorf("%w (handed over: nothing rolled back)", r.ctx.Err())
+	}
 	r.o.Log("✖ %v – rolling back", cause)
 	if r.freeze == nil {
 		r.j.RolledBack = true

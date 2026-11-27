@@ -58,18 +58,30 @@ removes what it created:
    A bad image or an unschedulable pod ends this at once, not after a
    timeout
 
+4. **pre-copy**: a pod next to the app (same node; a ReadWriteOnce PVC may
+   be mounted by several pods there) mounts the PVC read-only and copies
+   everything while the app keeps running, remembers each entry's
+   fingerprint (inode, ctime, mtime, size) and checks the copied content.
+   What changes meanwhile is simply left for the final pass. It reads the
+   whole volume while the app works – `--no-precopy` skips it
+   (ReadWriteOncePod PVCs skip it on their own: nothing may mount them
+   twice)
+
 **App down** (frozen, like `lhtx freeze`):
 
-4. freeze the PVC (its pods stop) and wait until the volume is detached
-5. the copy pod (lhtx's own image, `lhtx copy`, root) mounts the old PVC
+5. freeze the PVC (its pods stop) and wait until the volume is detached
+6. the copy pod (lhtx's own image, `lhtx copy`, root) mounts the old PVC
    read-only – the freeze lets exactly this pod through – and the new
-   volume; checks that the used space **and the number of files** fit;
-   copies all files keeping owners, modes, setuid, hard and symbolic
-   links, devices and FIFOs, xattrs/ACLs/capabilities, timestamps and
-   holes (sparse files are not even read where they are empty); then
-   compares both trees: every entry's type, mode, owner, size, links,
-   times and a SHA-256 of every file's content
-6. delete the copy pod and the temporary PV/PVC, then the switch: old PV
+   volume. After a pre-copy it copies only what is new or changed (the
+   ctime moves with every change and cannot be set back) and removes what
+   is gone; without one it checks that the used space **and the number of
+   files** fit and copies everything. Files keep owners, modes, setuid,
+   hard and symbolic links, devices and FIFOs, xattrs/ACLs/capabilities,
+   timestamps and holes (sparse files are not even read where they are
+   empty). Then both trees are compared: every entry's type, mode, owner,
+   size, links and times, and a SHA-256 of the content of what was copied
+   (the pre-copied rest was checked before the freeze)
+7. delete the copy pod and the temporary PV/PVC, then the switch: old PV
    to `Retain`, PVC re-created on the new volume, key guard, unfreeze
 
 The copy runs on the node of the old volume (for `strict-local` volumes
@@ -77,7 +89,7 @@ the node of their replica – the only one that can attach them), with the
 tolerations of the app's pod. If lhtx loses the API server while copying
 it retries for about two minutes – the copy goes on in the cluster.
 
-Until the old PVC is deleted (step 6) every failure – and Ctrl+C – rolls
+Until the old PVC is deleted (step 7) every failure – and Ctrl+C – rolls
 back: the app starts again on the old volume, the new volume is removed.
 The old volume is kept as the way back (`lhtx switch NS/PVC --to-volume
 OLD`); it keeps its space until you delete it (lhtx prints how).
@@ -107,8 +119,10 @@ starts a new backup chain (first backup full, the old backups stay
 restorable); snapshots stay with the old volume. Databases are better
 shrunk with their own tools (dump/restore, CNPG).
 
-The app is down from step 4 to the end – about as long as reading the used
-data twice (copy, compare) takes, plus stopping and starting the app.
+The app is down from step 5 to the end: stopping it, copying what changed
+since the pre-copy (in the lab: 0.6 s for an app writing five files a
+second, against 33 s for the full 1.4 GiB), starting it again. Without the
+pre-copy, about as long as reading the used data twice (copy, compare).
 `--dry-run` shows the plan; `--image` / `--image-pull-secret` for clusters
 without access to ghcr.io (default: env `LHTX_SHRINK_IMAGE`, else the image
 of this lhtx version). In the TUI: `K` in the volume details.

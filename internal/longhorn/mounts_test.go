@@ -159,3 +159,10 @@ csi_operations_seconds_count{driver_name="driver.longhorn.io",grpc_status_code="
 		t.Errorf("healthy = %q", h)
 	}
 }
+
+func TestShortMountMessage(t *testing.T) {
+	got := shortMountMessage(`MountVolume.MountDevice failed for volume "pvc-939b" : rpc error: code = Unavailable desc = x`)
+	if got != "MountDevice failed: rpc error: code = Unavailable desc = x" {
+		t.Errorf("got %q", got)
+	}
+}

@@ -21,6 +21,8 @@ import (
 	storagev1client "k8s.io/client-go/kubernetes/typed/storage/v1"
 	"k8s.io/client-go/rest"
 
+	"regexp"
+
 	"github.com/nxckdx/longhorntx/internal/format"
 )
 
@@ -206,7 +208,7 @@ func AnalyzeMounts(in MountInput, now time.Time, minWait time.Duration) MountRep
 			if mountEventReasons[e.Reason] {
 				noEvents = false
 				if detail == "" {
-					detail = e.Message
+					detail = shortMountMessage(e.Message)
 				}
 			}
 		}
@@ -307,6 +309,15 @@ func AnalyzeMounts(in MountInput, now time.Time, minWait time.Duration) MountRep
 	}
 	sort.Slice(rep.Nodes, func(i, j int) bool { return rep.Nodes[i].Node < rep.Nodes[j].Node })
 	return rep
+}
+
+var mountMsgPrefix = regexp.MustCompile(`^(?:\w+\.)?(\w+) failed for volume "[^"]*"\s*:\s*`)
+
+// shortMountMessage drops the volume name kubelet puts in front:
+// `MountVolume.MountDevice failed for volume "pvc-…" : rpc error: …` →
+// `MountDevice failed: rpc error: …`.
+func shortMountMessage(m string) string {
+	return mountMsgPrefix.ReplaceAllString(strings.TrimSpace(m), "$1 failed: ")
 }
 
 func orDash(s string) string {
@@ -412,8 +423,12 @@ func MountFindings(rep MountReport) []Finding {
 		if nm.Stuck > 1 || nm.Oldest > 10*time.Minute {
 			sev = SevCritical
 		}
-		msg := fmt.Sprintf("%d pod(s) wait for up to %s for Longhorn volumes that are attached here but not mounted – kubelet or the CSI plugin on this node hangs",
-			nm.Stuck, format.Duration(nm.Oldest))
+		cause := "kubelet or the CSI plugin on this node hangs"
+		if nm.CSIPlugin != "" && !nm.CSIPluginOK {
+			cause = "most likely because the CSI plugin here is not ready"
+		}
+		msg := fmt.Sprintf("%d pod(s) wait for up to %s for Longhorn volumes that are attached here but not mounted – %s",
+			nm.Stuck, format.Duration(nm.Oldest), cause)
 		if nm.NotInUse > 0 {
 			msg += fmt.Sprintf("; kubelet does not even list %d of them as in use (its volume manager is not working on them)", nm.NotInUse)
 		}
@@ -473,7 +488,7 @@ func (k *KubeletProbe) Summary() string {
 		for _, op := range keys {
 			f = append(f, fmt.Sprintf("%s %g", op, k.Failed[op]))
 		}
-		parts = append(parts, "failed: "+strings.Join(f, ", "))
+		parts = append(parts, "failed since kubelet start: "+strings.Join(f, ", "))
 	}
 	return strings.Join(parts, ", ")
 }

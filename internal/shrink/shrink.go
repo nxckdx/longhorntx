@@ -258,6 +258,18 @@ func Build(ctx context.Context, c *longhorn.Client, namespace, pvc string, size 
 	} else {
 		p.warn("how much of the volume is used is not known here (kubelet's stats need nodes/proxy or the volume is not mounted) – the copy pod checks it first and stops (rollback) if it does not fit")
 	}
+	// will Longhorn find room for the new volume's replicas? (the
+	// pre-flight finds out for sure; this says it before anything is made)
+	if nodes, err := c.Nodes(ctx); err == nil {
+		nv := &longhorn.Volume{}
+		nv.Name = name
+		nv.Spec = ov.Spec
+		nv.Spec.Size = longhorn.Quantity(size)
+		if pl := longhorn.AnalyzePlacement(nv, nil, nodes, c.PlacementSettings(ctx)); pl.Placeable() < pl.Want {
+			p.warn("Longhorn will probably not find room for all %d replicas of the new volume (room for %d) – the pre-flight stops before anything is stopped; see lhtx placement --size %s --replicas %d",
+				pl.Want, pl.Placeable(), human(size), pl.Want)
+		}
+	}
 	p.Blockers = append(p.Blockers, sw.Blockers...)
 	for _, w := range without(sw.Warnings, "older than an expansion") {
 		if strings.HasPrefix(w, "encrypted: the new PV uses the same key Secret") {

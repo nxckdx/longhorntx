@@ -33,7 +33,8 @@ internal/longhorn   slim CRD structs (no longhorn-manager import), Client (one-s
                     clone into new volumes (restore.go, clone.go), GitOps owner
                     detection for warnings (gitops.go), secret names via the
                     metadata API only (secrets.go), stuck mounts / CSI / kubelet via the
-                    node proxy (mounts.go; agent/mounts.go records them)
+                    node proxy (mounts.go; agent/mounts.go records them), replica
+                    scheduler checks per node/disk (placement.go)
 internal/fuzzy      fzf-style matching (TUI filter, CLI volume fallback)
 internal/demo       --demo: fake dynamic client with made-up data and a
                     simulated rebuild loop (doc GIFs: docs/*.tape + docs/tapes/,

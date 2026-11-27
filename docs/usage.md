@@ -30,6 +30,8 @@ lhtx overview [--contexts a,b]       # doctor summary for all kubeconfig context
 lhtx drain-check NODE                # what happens if NODE goes away (reboot/drain)
 lhtx mounts [--node N] [--min-wait 2m] # pods stuck mounting Longhorn volumes, per node, kubelet's view
 lhtx rwx [-o wide]                   # RWX volumes: share manager, pod, endpoints, NFS options, clients
+lhtx placement VOLUME                # why Longhorn does (not) place its replicas, per node and disk
+lhtx placement --size 50Gi [--replicas 3] # would a new volume fit?
 lhtx matrix [--problems]             # replica distribution volumes × nodes, shared node/disk first
 lhtx diag VOLUME                     # diagnostics bundle (tar.gz) for a bug report
 lhtx measure [-d 60s] [--backups]    # measure startup + watch traffic per resource
@@ -201,6 +203,37 @@ lhtx --rw restart csi-plugin NODE        # the node's longhorn-csi-plugin pod (s
 Reads only if there are RWX volumes: ShareManagers, the share-manager pods,
 their EndpointSlices, the cluster history, and (`lhtx rwx` only) one PV per
 RWX volume.
+
+## Replica placement
+
+A volume stuck `degraded` with `ReplicaSchedulingFailure: insufficient
+storage` does not say which node lacks what. `lhtx placement VOLUME` (alias
+`why`) goes through Longhorn's replica scheduler checks for every node and
+disk – node ready and schedulable (cordoned), scheduling allowed, node and
+disk tags against the volume's selectors, disk type and condition, free
+space (`storage-minimal-available-percentage` must stay free after the
+volume's actual size), over-provisioning (scheduled sizes plus the volume's
+size within `storage-over-provisioning-percentage` of max − reserved), and
+replica anti-affinity per node, zone and disk:
+
+```
+Volume pvc-7f9a…: 15 GiB (actual 0 B), 1 of 2 replicas placed
+Longhorn: cannot place a replica – ReplicaSchedulingFailure: insufficient storage
+
+NODE    ZONE   VERDICT   DISK                 AVAILABLE   SCHEDULED / LIMIT     WHY
+node-1  -      NO        /var/lib/longhorn/   19.4 GiB    16.3 GiB / 20.6 GiB   over-provisioned: 16.3 GiB scheduled + 15.0 GiB > limit 20.6 GiB (100 % of 20.6 GiB)
+node-2  -      NO        /var/lib/longhorn/   20.1 GiB    17 GiB / 20.6 GiB     over-provisioned: 17.0 GiB scheduled + 15.0 GiB > limit 20.6 GiB (100 % of 20.6 GiB)
+node-3  -      NO        -                    -           -                     already holds a replica (…; replica-soft-anti-affinity off)
+
+✘ 1 replica(s) missing, room for 0 – free space, lower the replica count, or allow soft anti-affinity
+```
+
+`--size 50Gi [--replicas 3] [--node-selector …]` asks the same for a volume
+that does not exist yet (before a restore or clone; the space check then
+counts no data yet). `doctor` and the Health tab report volumes Longhorn
+cannot place, with the reasons per node; `lhtx shrink` warns when the new
+volume will not fit. Reads: nodes, the volume and its replicas, seven
+settings (doctor: only when a volume is not scheduled).
 
 ## Node maintenance
 

@@ -91,6 +91,19 @@ history:
 capacity:
   interval: 6h
 
+# Notifications without Prometheus: failures (backups, replicas, degraded or
+# faulted volumes, failed freezes/switches) and recoveries go to a webhook,
+# collected into one message per minute at most. The URL often holds a
+# token: put it in a Secret (existingSecret) or let the chart create one
+# from url.
+notify:
+  url: ""
+  existingSecret: "" # a Secret with the URL
+  secretKey: url
+  format: json # json | ntfy | slack (also Mattermost, Rocket.Chat) | discord
+  cluster: "" # name shown in the messages
+  every: 1m
+
 podDisruptionBudget:
   # created when replicaCount > 1
   minAvailable: 1

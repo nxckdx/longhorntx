@@ -141,6 +141,33 @@ applies when a history is written, so a quiet volume keeps its old events
 until something new happens. The histories stay when the agent is removed
 (`kubectl -n longhorn-system delete volumehistories --all`).
 
+## Notifications
+
+Without Prometheus, too: the agent sends failures and recoveries to a
+webhook – failed backups and replicas, volumes degraded or faulted (and
+healthy again), failed or stuck freezes and switches. Events are collected
+for a few seconds and sent together, at most one message a minute
+(`--notify-every`): a node restart that degrades every volume is one
+message, not sixty.
+
+| format | for |
+|---|---|
+| `ntfy` | ntfy (title, priority and tags as headers) |
+| `slack` | Slack, Mattermost, Rocket.Chat incoming webhooks (`{"text": …}`) |
+| `discord` | Discord webhooks (`{"content": …}`) |
+| `json` | anything else: `{"title", "cluster", "events": [{at, kind, volume, pvc, text, bad}]}` |
+
+```yaml
+notify:
+  existingSecret: lhtx-notify   # key "url"; or url: … and the chart makes the Secret
+  format: ntfy
+  cluster: prod
+```
+
+Without the chart: env `LHTX_NOTIFY_URL` (the URL often holds a token) and
+`--notify-format`, `--notify-cluster`. Volume events come from the history,
+so `--no-history` turns them off too.
+
 ## Capacity forecast
 
 Longhorn shows how full a disk is, not how fast it fills. The agent samples

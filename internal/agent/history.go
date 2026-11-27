@@ -151,6 +151,9 @@ func (r *recorder) record(vol *longhorn.Volume, evs []longhorn.HistoryEvent) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, e := range evs {
+		if notifiable(e) {
+			r.a.notifier.add(notice{At: e.At, Kind: e.Kind, Volume: vol.Name, PVC: vol.PVC(), Text: e.Text, Bad: e.Bad()})
+		}
 		r.pending[vol.Name] = append(r.pending[vol.Name], e)
 		if e.Notable() {
 			c := e

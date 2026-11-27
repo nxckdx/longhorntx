@@ -804,6 +804,27 @@ func TestSwitchAfterFreeze(t *testing.T) {
 	}
 }
 
+// KeepFrozen: an AfterFreeze that left the volume unusable stops the
+// switch without a rollback – the freeze stays.
+func TestSwitchAfterFreezeKeepFrozen(t *testing.T) {
+	k := world()
+	ctx := context.Background()
+	p, err := Build(ctx, k.c, "app", "data", "pvc-new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := fast
+	o.AfterFreeze = func(context.Context) error { return KeepFrozen(errors.New("access mode not restored")) }
+	err = Run(ctx, k.c, p, o)
+	if err == nil || !strings.Contains(err.Error(), "stays frozen") || strings.Contains(err.Error(), "rolled back:") {
+		t.Fatalf("want the freeze kept, got %v", err)
+	}
+	fs, err := ActiveFreezes(ctx, k.dyn)
+	if err != nil || len(fs) != 1 {
+		t.Errorf("freezes: %v %v", fs, err)
+	}
+}
+
 func TestMarkRolledBack(t *testing.T) {
 	dir := t.TempDir()
 	write := func(name string, j journal) {

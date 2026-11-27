@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -114,8 +115,13 @@ lhtx must keep running until the end (Ctrl+C before the swap rolls back).`,
 				Log: func(f string, a ...any) {
 					fmt.Printf("%6s  %s\n", time.Since(start).Round(time.Second), fmt.Sprintf(f, a...))
 				}})
-			if journal != "" {
+			if _, serr := os.Stat(journal); journal != "" && serr == nil {
 				fmt.Println("journal:", journal)
+			}
+			if err == nil {
+				fmt.Printf("\nThe old volume %s (%s) still takes its space on the disks. When you no longer need the way back:\n"+
+					"  kubectl delete pv %s && kubectl -n %s delete volumes.longhorn.io %s\n",
+					sw.OldVolume, humanSize(p.OldSize), sw.OldPV, c.Namespace, sw.OldVolume)
 			}
 			return err
 		},
@@ -142,14 +148,14 @@ func (g *globals) shrinkAbort(cmd *cobra.Command, ns, pvc string) error {
 	}
 	if l.Empty() {
 		fmt.Printf("Nothing left over from a shrink of %s/%s.\n", ns, pvc)
+		if n := switchover.MarkRolledBack(switchover.JournalDir(), c.Cluster.Context, ns+"/"+pvc, "aborted by lhtx shrink --abort"); n > 0 {
+			fmt.Printf("✔ %d unfinished journal(s) closed as rolled back\n", n)
+		}
 		return nil
 	}
 	fmt.Printf("Clean up the interrupted shrink of %s/%s · %s\n\n", ns, pvc, c.Cluster.Context)
 	for i, s := range l.Lines() {
 		fmt.Printf("  %2d. %s\n", i+1, s)
-	}
-	if l.Swapped {
-		fmt.Println("\n⚠ the PVC already uses the shrunk volume – only leftovers are removed")
 	}
 	if mode, err := g.dryRun(); err != nil || mode != longhorn.DryRunNone {
 		fmt.Println("\n(dry run: nothing changed)")
@@ -158,5 +164,11 @@ func (g *globals) shrinkAbort(cmd *cobra.Command, ns, pvc string) error {
 	if err := g.confirm(true, ns+"/"+pvc); err != nil {
 		return err
 	}
-	return shrink.Abort(ctx, c, l, func(f string, a ...any) { fmt.Printf(f+"\n", a...) })
+	if err := shrink.Abort(ctx, c, l, func(f string, a ...any) { fmt.Printf(f+"\n", a...) }); err != nil {
+		return err
+	}
+	if n := switchover.MarkRolledBack(switchover.JournalDir(), c.Cluster.Context, ns+"/"+pvc, "aborted by lhtx shrink --abort"); n > 0 {
+		fmt.Printf("✔ %d unfinished journal(s) closed as rolled back\n", n)
+	}
+	return nil
 }

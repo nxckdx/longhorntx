@@ -489,7 +489,10 @@ func (r *runner) preflight() error {
 		switch phase {
 		case "Succeeded":
 			r.node, _, _ = unstructured.NestedString(po.Object, "spec", "nodeName")
-			r.o.Log("✔ pre-flight passed on node %s: image, scheduling, attach and the new filesystem work", r.node)
+			if err := r.replicasPlaced(); err != nil {
+				return err
+			}
+			r.o.Log("✔ pre-flight passed on node %s: image, scheduling, attach, all replicas placed, the new filesystem works", r.node)
 			return nil
 		case "Failed":
 			msg := "the pre-flight pod failed"
@@ -497,6 +500,9 @@ func (r *runner) preflight() error {
 				msg += ": " + strings.TrimSpace(line)
 			}
 			return fmt.Errorf("%s", msg)
+		}
+		if why := hopeless(po); why != "" {
+			return fmt.Errorf("the pre-flight pod cannot start – %s", why)
 		}
 		if time.Since(start) > r.o.Wait {
 			return fmt.Errorf("the pre-flight pod did not run within %s (%s) – kubectl -n %s describe pod %s", r.o.Wait, waitingReason(po), sw.Namespace, p.ProbePod)
@@ -506,6 +512,24 @@ func (r *runner) preflight() error {
 			r.o.Log("… pre-flight: %s (%s)", phase, waitingReason(po))
 		}
 	}
+}
+
+// replicasPlaced: Longhorn could place every replica of the new volume
+// (it tries when the volume is attached – the pre-flight did that). A
+// shrink must not quietly leave the app with less redundancy.
+func (r *runner) replicasPlaced() error {
+	sw := r.p.Switch
+	v, err := r.c.Volume(r.ctx, sw.NewVolume)
+	if err != nil {
+		return err
+	}
+	for _, c := range v.Status.Conditions {
+		if c.Type == "Scheduled" && c.Status != "True" {
+			return fmt.Errorf("Longhorn cannot place all %d replicas of the new volume: %s – free space on the disks (old volumes kept by earlier shrinks/switches?) or lower the replica count first",
+				v.Spec.NumberOfReplicas, strings.TrimSpace(c.Reason+" "+c.Message))
+		}
+	}
+	return nil
 }
 
 // transientErrors: polls in a row that may fail (API server restart,
@@ -598,6 +622,9 @@ func (r *runner) followCopy(ctx context.Context) (*copyReport, error) {
 			}
 			return nil, fmt.Errorf("copy: %s", msg)
 		case "Pending":
+			if why := hopeless(po); why != "" {
+				return nil, fmt.Errorf("the copy pod cannot start – %s", why)
+			}
 			if time.Since(start) > r.o.Wait {
 				return nil, fmt.Errorf("the copy pod did not start within %s (%s)", r.o.Wait, waitingReason(po))
 			}
@@ -620,6 +647,32 @@ func (r *runner) followCopy(ctx context.Context) (*copyReport, error) {
 			}
 		}
 	}
+}
+
+// hopeless: the pod will not start by waiting longer – a bad image, a
+// config error, or unschedulable for over two minutes.
+func hopeless(po *unstructured.Unstructured) string {
+	cs, _, _ := unstructured.NestedSlice(po.Object, "status", "containerStatuses")
+	for _, x := range cs {
+		if m, ok := x.(map[string]any); ok {
+			w, _, _ := unstructured.NestedString(m, "state", "waiting", "reason")
+			msg, _, _ := unstructured.NestedString(m, "state", "waiting", "message")
+			switch w {
+			case "ImagePullBackOff", "ErrImageNeverPull", "InvalidImageName", "CreateContainerConfigError", "CreateContainerError":
+				return w + ": " + msg
+			}
+		}
+	}
+	conds, _, _ := unstructured.NestedSlice(po.Object, "status", "conditions")
+	for _, x := range conds {
+		m, _ := x.(map[string]any)
+		if m["type"] == "PodScheduled" && m["status"] == "False" && m["reason"] == "Unschedulable" {
+			if t, err := time.Parse(time.RFC3339, fmt.Sprint(m["lastTransitionTime"])); err == nil && time.Since(t) > 2*time.Minute {
+				return fmt.Sprintf("cannot be scheduled: %v", m["message"])
+			}
+		}
+	}
+	return ""
 }
 
 func waitingReason(po *unstructured.Unstructured) string {

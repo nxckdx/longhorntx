@@ -84,15 +84,8 @@ func FindLeftovers(ctx context.Context, c *longhorn.Client, namespace, pvc strin
 	if err != nil {
 		return nil, err
 	}
-	var current *longhorn.Volume
-	for _, v := range vols {
-		if v.Name == l.OldVolume {
-			current = v
-		}
-	}
-	if current != nil && current.Annotations[AnnShrinkOf] != "" {
-		l.Swapped = true // the PVC runs on a shrunk volume: the swap happened
-	}
+	// volumes made to replace the PVC's current one (after a finished swap
+	// there are none: the current volume is the new one)
 	for _, v := range vols {
 		if of := v.Annotations[AnnShrinkOf]; of != "" && of == l.OldVolume && v.Name != l.OldVolume {
 			l.NewVolumes = append(l.NewVolumes, v)

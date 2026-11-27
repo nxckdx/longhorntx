@@ -2,6 +2,7 @@ package shrink
 
 import (
 	"fmt"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/nxckdx/longhorntx/internal/switchover"
 	"strings"
@@ -70,5 +71,27 @@ func TestPodObject(t *testing.T) {
 	}
 	if args := fmt.Sprint(probe["containers"].([]any)[0].(map[string]any)["args"]); !strings.Contains(args, "--probe") {
 		t.Errorf("probe args %s", args)
+	}
+}
+
+func TestHopeless(t *testing.T) {
+	pod := func(status map[string]any) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{"status": status}}
+	}
+	waiting := func(reason string) map[string]any {
+		return map[string]any{"containerStatuses": []any{map[string]any{"state": map[string]any{"waiting": map[string]any{"reason": reason, "message": "m"}}}}}
+	}
+	if hopeless(pod(waiting("ContainerCreating"))) != "" || hopeless(pod(waiting("ErrImagePull"))) != "" {
+		t.Error("still starting is not hopeless")
+	}
+	if !strings.HasPrefix(hopeless(pod(waiting("ImagePullBackOff"))), "ImagePullBackOff") {
+		t.Error("back-off is hopeless")
+	}
+	unsched := func(ago time.Duration) map[string]any {
+		return map[string]any{"conditions": []any{map[string]any{"type": "PodScheduled", "status": "False", "reason": "Unschedulable",
+			"message": "0/3 nodes", "lastTransitionTime": time.Now().Add(-ago).UTC().Format(time.RFC3339)}}}
+	}
+	if hopeless(pod(unsched(time.Minute))) != "" || !strings.Contains(hopeless(pod(unsched(3*time.Minute))), "0/3 nodes") {
+		t.Error("unschedulable: hopeless only after two minutes")
 	}
 }

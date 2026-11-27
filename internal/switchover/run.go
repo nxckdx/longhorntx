@@ -426,7 +426,11 @@ func (r *runner) waitTargetReady() error {
 			case v.Status.RestoreRequired:
 				state = "restoring"
 			}
-			r.o.Log("… waiting for %s: %s%s", v.Name, state, r.restoreProgress(v.Name))
+			progress := ""
+			if v.Status.RestoreRequired {
+				progress = r.restoreProgress(v.Name)
+			}
+			r.o.Log("… waiting for %s: %s%s", v.Name, state, progress)
 		}
 		if err := r.sleep(); err != nil {
 			return err

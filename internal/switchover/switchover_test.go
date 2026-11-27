@@ -803,3 +803,23 @@ func TestSwitchAfterFreeze(t *testing.T) {
 		t.Errorf("PVC moved to %s", vn)
 	}
 }
+
+func TestMarkRolledBack(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name string, j journal) {
+		b, _ := json.Marshal(j)
+		_ = os.WriteFile(filepath.Join(dir, name), b, 0o600)
+	}
+	p := &Plan{Namespace: "shop", PVC: "data"}
+	write("a.json", journal{Context: "c1", Plan: p, Steps: []string{"frozen"}})
+	write("b.json", journal{Context: "c1", Plan: p, Steps: []string{"finished"}})
+	write("c.json", journal{Context: "c2", Plan: p, Steps: []string{"frozen"}})
+	if n := MarkRolledBack(dir, "c1", "shop/data", "aborted"); n != 1 {
+		t.Fatalf("closed %d", n)
+	}
+	for _, e := range Journals(dir) {
+		if e.Context == "c1" && !e.Finished && !e.RolledBack {
+			t.Errorf("still open: %+v", e)
+		}
+	}
+}

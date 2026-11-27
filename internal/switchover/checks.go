@@ -147,3 +147,33 @@ func dashIf(s string) string {
 	}
 	return s
 }
+
+// MarkRolledBack closes the unfinished journals of a PVC in a context as
+// rolled back (lhtx shrink --abort undid what they left), so doctor stops
+// warning about them. It returns how many it closed.
+func MarkRolledBack(dir, context, pvc, why string) int {
+	n := 0
+	for _, e := range Journals(dir) {
+		if e.Context != context || e.PVC != pvc || e.Finished || e.RolledBack {
+			continue
+		}
+		b, err := os.ReadFile(e.Path)
+		if err != nil {
+			continue
+		}
+		var j journal
+		if json.Unmarshal(b, &j) != nil {
+			continue
+		}
+		j.RolledBack = true
+		j.Steps = append(j.Steps, why)
+		if j.Error == "" {
+			j.Error = why
+		}
+		j.At = time.Now()
+		if out, err := json.MarshalIndent(j, "", "  "); err == nil && os.WriteFile(e.Path, out, 0o600) == nil {
+			n++
+		}
+	}
+	return n
+}

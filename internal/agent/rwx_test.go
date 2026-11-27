@@ -25,6 +25,7 @@ func TestShareEvents(t *testing.T) {
 		{"running", "error", true, true},
 		{"running", "starting", true, true}, // NFS server restarted under its clients
 		{"error", "running", true, false},   // recovered
+		{"error", "starting", false, false}, // on the way back: only the end is recorded
 	} {
 		ev := shareEvents(sm(c.o), sm(c.n), time.Now())
 		if (len(ev) == 1) != c.rec {

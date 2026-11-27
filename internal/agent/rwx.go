@@ -29,7 +29,7 @@ func shareEvents(old, new *longhorn.ShareManager, now time.Time) []longhorn.Hist
 	if o == n {
 		return nil
 	}
-	if n == "error" || o == "error" || (o == "running" && n == "starting") {
+	if n == "error" || (o == "error" && n == "running") || (o == "running" && n == "starting") {
 		return []longhorn.HistoryEvent{{At: now.UTC(), Kind: longhorn.HistShareManager, Text: fmt.Sprintf("share manager %s → %s", o, n)}}
 	}
 	return nil

@@ -63,6 +63,9 @@ pods, their EndpointSlices, and one PV per RWX volume.`,
 				if r.LastRestart != "" {
 					restarts += " (" + r.LastRestart + ")"
 				}
+				if !r.NFSDownSince.IsZero() {
+					pod += ", NFS NOT ANSWERING"
+				}
 				ep := "-"
 				if r.EPKnown {
 					ep = fmt.Sprint(r.Endpoints)

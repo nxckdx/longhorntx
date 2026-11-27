@@ -70,6 +70,9 @@ type RWXVolume struct {
 	EPKnown     bool     `json:"-"`
 	NFSOptions  string   `json:"nfsOptions,omitempty"` // "" = unknown
 	Clients     []string `json:"clients,omitempty"`    // pods using it (name: status)
+	// NFSDownSince: the lhtx agent's NFS probe gets no answer since then
+	// (from the cluster history; zero = answering or no agent).
+	NFSDownSince time.Time `json:"nfsDownSince,omitzero"`
 }
 
 // RWXInput is what AnalyzeRWX looks at.
@@ -79,6 +82,7 @@ type RWXInput struct {
 	Pods       []corev1.Pod      // share-manager pods
 	Endpoints  map[string]int    // service (= volume) → ready endpoints; nil = unknown
 	NFSOptions map[string]string // volume → the PV's nfsOptions ("" = Longhorn's default); nil = not read
+	History    []HistoryEvent    // the cluster history (agent): NFS probe results
 }
 
 // RWXVolumes: the RWX volumes of a list.
@@ -98,6 +102,19 @@ func AnalyzeRWX(in RWXInput, now time.Time) []RWXVolume {
 		p := &in.Pods[i]
 		if v := p.Labels[LabelShareManager]; v != "" {
 			pods[v] = p
+		}
+	}
+	nfsDown := map[string]time.Time{} // the latest share-manager event per volume decides
+	nfsSeen := map[string]time.Time{}
+	for _, e := range in.History {
+		if e.Kind != HistShareManager || !e.At.After(nfsSeen[e.Volume]) {
+			continue
+		}
+		nfsSeen[e.Volume] = e.At
+		if strings.HasPrefix(e.Text, "NFS server does not answer") {
+			nfsDown[e.Volume] = e.At
+		} else {
+			delete(nfsDown, e.Volume)
 		}
 	}
 	var out []RWXVolume
@@ -135,6 +152,9 @@ func AnalyzeRWX(in RWXInput, now time.Time) []RWXVolume {
 			if v.Status.KubernetesStatus.LastPodRefAt == "" && w.PodName != "" {
 				r.Clients = append(r.Clients, w.PodName+": "+w.PodStatus)
 			}
+		}
+		if t, ok := nfsDown[v.Name]; ok && r.Share == "running" {
+			r.NFSDownSince = t
 		}
 		out = append(out, r)
 	}
@@ -180,6 +200,10 @@ func RWXFindings(rs []RWXVolume, now time.Time) []Finding {
 		}
 		if r.Share != "running" {
 			continue
+		}
+		if !r.NFSDownSince.IsZero() {
+			add(SevCritical, r, fmt.Sprintf("the NFS server does not answer (lhtx agent, for %s) although its pod is Ready – client pods hang",
+				format.Duration(now.Sub(r.NFSDownSince))), restart(r))
 		}
 		if r.Endpoint == "" {
 			add(SevWarning, r, "the share manager runs but has no NFS endpoint yet", "lhtx diag "+r.Volume)
@@ -317,6 +341,15 @@ func (c *Client) RWX(ctx context.Context, vols []*Volume, nfsOptions bool) ([]RW
 			}()
 		}
 	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if ev, err := c.History(ctx, ClusterHistory); err == nil {
+			mu.Lock()
+			in.History = ev
+			mu.Unlock()
+		}
+	}()
 	wg.Wait()
 	if firstErr != nil {
 		return nil, firstErr

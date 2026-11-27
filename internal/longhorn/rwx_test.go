@@ -60,6 +60,11 @@ func TestRWXFindings(t *testing.T) {
 		},
 		Endpoints:  map[string]int{"ok": 1, "notready": 0, "restarted": 1},
 		NFSOptions: map[string]string{"ok": "", "noep": "vers=4.0,hard"},
+		History: []HistoryEvent{
+			{At: now.Add(-20 * time.Minute), Kind: HistShareManager, Volume: "ok", Text: "NFS server does not answer (x)"},
+			{At: now.Add(-10 * time.Minute), Kind: HistShareManager, Volume: "ok", Text: "NFS server not answering → running"},
+			{At: now.Add(-5 * time.Minute), Kind: HistShareManager, Volume: "restarted", Text: "NFS server does not answer (x)"},
+		},
 	}
 	rs := AnalyzeRWX(in, now)
 	if len(rs) != 6 {
@@ -76,6 +81,7 @@ func TestRWXFindings(t *testing.T) {
 		"INFO app/noep-pvc with",        // hard
 		"CRITICAL app/notready-pvc pod", // not ready
 		"WARNING app/restarted-pvc share-manager",
+		"CRITICAL app/restarted-pvc NFS", // agent: not answering
 	}
 	sort.Strings(got)
 	sort.Strings(want)

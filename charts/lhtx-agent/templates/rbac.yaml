@@ -42,6 +42,14 @@ rules:
   - apiGroups: [longhorn.io]
     resources: [settings, backupvolumes, engines, nodes] # nodes: capacity samples
     verbs: [get, list]
+  # mount check (lhtx mounts): pods stuck mounting, their events, the
+  # VolumeAttachments, nodes, CSI registration
+  - apiGroups: [""]
+    resources: [events, nodes]
+    verbs: [get, list]
+  - apiGroups: [storage.k8s.io]
+    resources: [volumeattachments, csinodes]
+    verbs: [get, list]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -57,6 +65,37 @@ subjects:
   - kind: ServiceAccount
     name: {{ $sa }}
     namespace: {{ .Release.Namespace }}
+{{- if .Values.mountCheck.kubelet }}
+---
+# mountCheck.kubelet: ask kubelet (/healthz, /metrics) on nodes with stuck
+# mounts through the API server's node proxy. nodes/proxy is a powerful
+# right (it reaches every kubelet API) – only if you accept that.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}-kubelet
+  labels:
+    {{- include "lhtx-agent.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [nodes/proxy]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $name }}-kubelet
+  labels:
+    {{- include "lhtx-agent.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $name }}-kubelet
+subjects:
+  - kind: ServiceAccount
+    name: {{ $sa }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
 {{- if .Values.rw }}
 ---
 # rw: true – the agent stops and starts apps: it deletes pods anywhere, execs

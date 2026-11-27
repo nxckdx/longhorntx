@@ -50,6 +50,10 @@ const (
 	// into a test volume (all data read back); …Failed: it could not.
 	HistRestoreProbe       = "restore-probe"
 	HistRestoreProbeFailed = "restore-probe-failed"
+	// HistMountStuck: a pod waits too long for the volume to be attached
+	// or mounted (lhtx mounts); HistMounted: it no longer waits.
+	HistMountStuck = "mount-stuck"
+	HistMounted    = "mounted"
 )
 
 // HistoryEvent is one entry.
@@ -65,7 +69,8 @@ type HistoryEvent struct {
 // Notable: goes into the cluster history as well.
 func (e HistoryEvent) Notable() bool {
 	switch e.Kind {
-	case HistRobustness, HistReplicaFailed, HistBackupFailed, HistRebuildDone, HistRestoreProbe, HistRestoreProbeFailed:
+	case HistRobustness, HistReplicaFailed, HistBackupFailed, HistRebuildDone, HistRestoreProbe, HistRestoreProbeFailed,
+		HistMountStuck, HistMounted:
 		return true
 	}
 	return false
@@ -74,7 +79,7 @@ func (e HistoryEvent) Notable() bool {
 // Bad: a failure or degradation (shown highlighted).
 func (e HistoryEvent) Bad() bool {
 	switch e.Kind {
-	case HistReplicaFailed, HistBackupFailed, HistRestoreProbeFailed:
+	case HistReplicaFailed, HistBackupFailed, HistRestoreProbeFailed, HistMountStuck:
 		return true
 	case HistRobustness:
 		return strings.HasSuffix(e.Text, "degraded") || strings.HasSuffix(e.Text, "faulted")

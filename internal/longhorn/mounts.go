@@ -161,6 +161,15 @@ func longhornClaims(p *corev1.Pod, byPVC map[string]*Volume) []*Volume {
 	return out
 }
 
+func hasClaims(p *corev1.Pod) bool {
+	for _, v := range p.Spec.Volumes {
+		if v.PersistentVolumeClaim != nil {
+			return true
+		}
+	}
+	return false
+}
+
 func volumesByPVC(vols []*Volume) map[string]*Volume {
 	m := map[string]*Volume{}
 	for _, v := range vols {
@@ -500,15 +509,20 @@ func (c *Client) Mounts(ctx context.Context, vols []*Volume, lhNodes []string, o
 	if err != nil {
 		return nil, err
 	}
-	if vols == nil {
-		if vols, err = c.Volumes(ctx); err != nil {
-			return nil, err
-		}
-	}
 	if opt.MinWait <= 0 {
 		opt.MinWait = 2 * time.Minute
 	}
 	now := time.Now()
+	if vols == nil { // read the volumes only if a pod waits for a PVC
+		for _, p := range pl.Items {
+			if waitingForVolumes(&p) && now.Sub(scheduledAt(&p)) >= opt.MinWait && hasClaims(&p) {
+				if vols, err = c.Volumes(ctx); err != nil {
+					return nil, err
+				}
+				break
+			}
+		}
+	}
 	in := MountInput{Volumes: vols, LHNodes: lhNodes, Attachments: map[string]*storagev1.VolumeAttachment{},
 		Events: map[string][]Event{}, Nodes: map[string]*corev1.Node{}, Kubelet: map[string]*KubeletProbe{}}
 	byPVC := volumesByPVC(vols)

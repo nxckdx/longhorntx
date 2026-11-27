@@ -25,6 +25,7 @@ func agentCmd(g *globals) *cobra.Command {
 	var histAge, capacityEvery time.Duration
 	var notify agent.Notify
 	var probe agent.RestoreProbe
+	var mounts agent.MountCheck
 	var maxSize string
 	cmd := &cobra.Command{
 		Use:   "agent",
@@ -76,6 +77,7 @@ lhtx-freeze to them. The agent itself needs rights like cluster-admin
 			}
 			a.Notify = notify
 			a.Probe = probe
+			a.Mounts = mounts
 			if maxSize != "" {
 				q, err := resource.ParseQuantity(maxSize)
 				if err != nil {
@@ -112,6 +114,9 @@ lhtx-freeze to them. The agent itself needs rights like cluster-admin
 	cmd.Flags().DurationVar(&probe.Interval, "restore-probe-interval", 0, "restore a volume's latest backup into a test volume this often, round robin (needs --rw; 0 = off)")
 	cmd.Flags().DurationVar(&probe.Timeout, "restore-probe-timeout", 2*time.Hour, "a restore probe fails if it takes longer")
 	cmd.Flags().StringVar(&maxSize, "restore-probe-max-size", "100Gi", "skip volumes larger than this (each probe restores the whole backup)")
+	cmd.Flags().DurationVar(&mounts.Interval, "mount-check-interval", time.Minute, "look for pods stuck mounting Longhorn volumes this often (lhtx mounts; 0 = off)")
+	cmd.Flags().DurationVar(&mounts.After, "mount-check-after", 5*time.Minute, "report a pod that waits longer than this for its volume")
+	cmd.Flags().BoolVar(&mounts.Kubelet, "mount-check-kubelet", false, "also ask kubelet on nodes with stuck mounts (needs get on nodes/proxy – a powerful right, see docs/agent.md)")
 	cmd.Flags().BoolVar(&noHistory, "no-history", false, "do not record VolumeHistories (lhtx history)")
 	cmd.Flags().IntVar(&histVol, "history-per-volume", longhorn.MaxVolumeHistory, "events kept per volume (at most 1000)")
 	cmd.Flags().IntVar(&histCluster, "history-cluster", longhorn.MaxClusterHistory, "notable events kept in the cluster-wide history (at most 5000)")

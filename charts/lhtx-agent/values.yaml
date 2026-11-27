@@ -115,6 +115,16 @@ restoreProbe:
   timeout: 2h
   maxSize: 100Gi # skip larger volumes
 
+# Mount check (lhtx mounts): pods that wait for a Longhorn volume longer
+# than "after" go into the volume's history as mount-stuck (notification,
+# alert LonghornMountStuck) – typically a hung kubelet or CSI plugin on a
+# node that still looks Ready. Read-only. kubelet: also ask kubelet itself
+# through the node proxy (grants get on nodes/proxy – a powerful right).
+mountCheck:
+  interval: 1m # "0" = off
+  after: 5m
+  kubelet: false
+
 podDisruptionBudget:
   # created when replicaCount > 1
   minAvailable: 1

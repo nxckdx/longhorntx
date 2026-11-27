@@ -40,6 +40,10 @@ type Options struct {
 	FreezeName string
 	// Request: the agent's Switch resource, stored on the freeze policy.
 	Request string
+	// AfterFreeze runs once the PVC is frozen and its volume detached,
+	// before the old PVC goes (lhtx shrink copies the data here). An error
+	// rolls back: the workload starts again on the old volume.
+	AfterFreeze func(ctx context.Context) error
 }
 
 // journal is what the journal file holds.
@@ -136,6 +140,11 @@ func (r *runner) run() error {
 		return r.rollback(err)
 	}
 	r.step("%s frozen (%s), its pods are gone and volume %s is detached", p.PVCRef(), f.Name, p.OldVolume)
+	if r.o.AfterFreeze != nil {
+		if err := r.o.AfterFreeze(r.ctx); err != nil {
+			return r.rollback(err)
+		}
+	}
 	if p.OldReclaim != "Retain" && p.OldPV != "" {
 		if err := r.patch(gvrPV, "", p.OldPV, `{"spec":{"persistentVolumeReclaimPolicy":"Retain"}}`); err != nil {
 			return r.rollback(fmt.Errorf("set Retain on PV %s: %w", p.OldPV, err))

@@ -770,3 +770,36 @@ func TestSwitchContinue(t *testing.T) {
 		t.Errorf("second continue: %v", err)
 	}
 }
+
+// lhtx shrink: AfterFreeze runs while frozen and detached; its error rolls
+// back. The freeze lets only labelled pods of the freezing user through.
+func TestSwitchAfterFreeze(t *testing.T) {
+	k := world()
+	ctx := context.Background()
+	p, err := Build(ctx, k.c, "app", "data", "pvc-new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Freeze.AllowLabel = "lhtx.io/shrink"
+	pol, _ := policyObjects("x", p.Freeze, time.Now(), "")
+	vals, _, _ := unstructured.NestedSlice(pol.Object, "spec", "validations")
+	if e := vals[0].(map[string]any)["expression"].(string); !strings.Contains(e, "'lhtx.io/shrink' in object.metadata.labels && request.userInfo.username == 'tester'") {
+		t.Errorf("no copy pod exception: %s", e)
+	}
+	o := fast
+	var state string
+	o.AfterFreeze = func(context.Context) error {
+		state = field(get(t, k.dyn, longhorn.GVRVolume, lhNS, "pvc-old"), "status", "state")
+		return errors.New("copy failed")
+	}
+	err = Run(ctx, k.c, p, o)
+	if err == nil || !strings.Contains(err.Error(), "copy failed") || !strings.Contains(err.Error(), "rolled back") {
+		t.Fatalf("want rollback with the copy error, got %v", err)
+	}
+	if state != "detached" {
+		t.Errorf("AfterFreeze ran with the old volume %s", state)
+	}
+	if vn := field(get(t, k.dyn, gvrPVC, "app", "data"), "spec", "volumeName"); vn != "pvc-old" {
+		t.Errorf("PVC moved to %s", vn)
+	}
+}

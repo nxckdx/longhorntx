@@ -117,6 +117,9 @@ type FreezePlan struct {
 	Warnings []string
 	User     string
 	Reason   string
+	// AllowLabel: pods with this label created by User may mount the
+	// frozen PVCs (the copy pod of lhtx shrink); "" = none.
+	AllowLabel string `json:",omitempty"`
 }
 
 // Username asks the API server who we are (SelfSubjectReview).
@@ -390,7 +393,7 @@ func policyObjects(name string, p *FreezePlan, now time.Time, request string) (*
 			"variables": []any{map[string]any{"name": "frozen", "expression": "{" + strings.Join(keys, ", ") + "}"}},
 			"validations": []any{
 				map[string]any{
-					"expression": "request.resource.resource != 'pods' || !has(object.spec.volumes) || " +
+					"expression": "request.resource.resource != 'pods' || !has(object.spec.volumes) || " + allowPod(p) +
 						"!object.spec.volumes.exists(v, has(v.persistentVolumeClaim) && " +
 						"(request.namespace + '/' + v.persistentVolumeClaim.claimName) in variables.frozen)",
 					"message": msg, "reason": "Forbidden",
@@ -409,6 +412,15 @@ func policyObjects(name string, p *FreezePlan, now time.Time, request string) (*
 		"spec":     map[string]any{"policyName": name, "validationActions": []any{"Deny"}},
 	}}
 	return pol, bind
+}
+
+// allowPod: the exception for lhtx's own copy pod – only with the label
+// and only created by the user who froze.
+func allowPod(p *FreezePlan) string {
+	if p.AllowLabel == "" {
+		return ""
+	}
+	return "(has(object.metadata.labels) && '" + p.AllowLabel + "' in object.metadata.labels && request.userInfo.username == '" + p.User + "') || "
 }
 
 // FreezeOptions control Apply/Unfreeze.

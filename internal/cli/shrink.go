@@ -21,7 +21,7 @@ func shrinkCmd(g *globals) *cobra.Command {
 	var image string
 	var pullSecrets []string
 	var wait time.Duration
-	var abort, local bool
+	var abort, local, noPrecopy bool
 	cmd := &cobra.Command{
 		Use:   "shrink NAMESPACE/PVC SIZE",
 		Short: "Make a volume smaller: new volume, copy the files, swap the PVC (needs --rw; the app is down while copying)",
@@ -74,7 +74,7 @@ lhtx must keep running until the end (Ctrl+C before the swap rolls back).`,
 			if err != nil {
 				return err
 			}
-			p, err := shrink.Build(ctx, c, ns, pvc, q.Value(), shrink.BuildOptions{Image: image, PullSecrets: pullSecrets}, time.Now())
+			p, err := shrink.Build(ctx, c, ns, pvc, q.Value(), shrink.BuildOptions{Image: image, PullSecrets: pullSecrets, NoPrecopy: noPrecopy}, time.Now())
 			if err != nil {
 				return err
 			}
@@ -120,7 +120,7 @@ lhtx must keep running until the end (Ctrl+C before the swap rolls back).`,
 				return err
 			}
 			if byAgent {
-				name, err := agent.RequestSwitch(ctx, c, ns, agent.SwitchSpec{PVC: pvc, ShrinkTo: args[1], Wait: wait.String(), ImagePullSecrets: pullSecrets})
+				name, err := agent.RequestSwitch(ctx, c, ns, agent.SwitchSpec{PVC: pvc, ShrinkTo: args[1], Wait: wait.String(), ImagePullSecrets: pullSecrets, NoPrecopy: noPrecopy})
 				if err != nil {
 					return err
 				}
@@ -159,6 +159,7 @@ lhtx must keep running until the end (Ctrl+C before the swap rolls back).`,
 	}
 	cmd.Flags().StringVar(&image, "image", "", "image of the copy pod (default: env LHTX_SHRINK_IMAGE, else ghcr.io/nxckdx/lhtx:<this version>)")
 	cmd.Flags().StringSliceVar(&pullSecrets, "image-pull-secret", nil, "pull secret(s) in the PVC's namespace for the copy pod's image")
+	cmd.Flags().BoolVar(&noPrecopy, "no-precopy", false, "no copy while the app still runs: everything is copied while it is down (longer downtime, no extra reads beforehand)")
 	cmd.Flags().BoolVar(&local, "local", false, "do not hand the shrink to the lhtx agent, even if one runs (lhtx must then run until the end)")
 	cmd.Flags().BoolVar(&abort, "abort", false, "clean up an interrupted shrink of the PVC (copy pod, temporary PVC/PV, new volume) and unfreeze it")
 	cmd.Flags().DurationVar(&wait, "wait", 10*time.Minute, "how long to wait for pods to stop / start and volumes to detach")

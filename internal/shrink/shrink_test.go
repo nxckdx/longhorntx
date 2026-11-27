@@ -56,8 +56,8 @@ func TestPodObject(t *testing.T) {
 	p := &Plan{CopyPod: "c", ProbePod: "p", TempPVC: "tmp", Image: "img", PullSecrets: []string{"reg"},
 		Tolerations: []any{map[string]any{"key": "dedicated", "operator": "Exists"}}}
 	p.Switch = &switchover.Plan{Namespace: "shop", PVC: "data"}
-	r := &runner{p: p, node: "n1"}
-	pod := r.podObject(false).Object
+	r := &runner{p: p, node: "n1", podUIDs: map[string]string{}}
+	pod := r.podObject("copy").Object
 	spec := pod["spec"].(map[string]any)
 	if len(spec["volumes"].([]any)) != 2 || spec["tolerations"] == nil || spec["imagePullSecrets"] == nil {
 		t.Errorf("copy pod: %+v", spec)
@@ -65,7 +65,7 @@ func TestPodObject(t *testing.T) {
 	if !strings.Contains(fmt.Sprint(spec["affinity"]), "n1") {
 		t.Errorf("not pinned: %v", spec["affinity"])
 	}
-	probe := r.podObject(true).Object["spec"].(map[string]any)
+	probe := r.podObject("probe").Object["spec"].(map[string]any)
 	if vs := probe["volumes"].([]any); len(vs) != 1 || !strings.Contains(fmt.Sprint(vs[0]), "tmp") {
 		t.Errorf("probe mounts %v", vs)
 	}
@@ -93,5 +93,24 @@ func TestHopeless(t *testing.T) {
 	}
 	if hopeless(pod(unsched(time.Minute))) != "" || !strings.Contains(hopeless(pod(unsched(3*time.Minute))), "0/3 nodes") {
 		t.Error("unschedulable: hopeless only after two minutes")
+	}
+}
+
+func TestPodObjectPrecopy(t *testing.T) {
+	p := &Plan{CopyPod: "c", PrecopyPod: "pre", ProbePod: "p", TempPVC: "tmp", Image: "img", Precopy: true}
+	p.Switch = &switchover.Plan{Namespace: "shop", PVC: "data"}
+	r := &runner{p: p}
+	args := func(role string) string {
+		return fmt.Sprint(r.podObject(role).Object["spec"].(map[string]any)["containers"].([]any)[0].(map[string]any)["args"])
+	}
+	if a := args("pre"); !strings.Contains(a, "--mode pre") {
+		t.Errorf("pre args %s", a)
+	}
+	if a := args("copy"); !strings.Contains(a, "--mode final") {
+		t.Errorf("copy args %s", a)
+	}
+	p.Precopy = false
+	if a := args("copy"); !strings.Contains(a, "--mode full") {
+		t.Errorf("no pre-copy: %s", a)
 	}
 }

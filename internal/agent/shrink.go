@@ -71,7 +71,7 @@ func (a *Agent) runShrink(ctx context.Context, lg *switchLog, s *Switch) {
 		fail(err)
 		return
 	}
-	p, err := shrink.Build(ctx, a.c, s.Namespace, s.Spec.PVC, q.Value(), shrink.BuildOptions{Image: image, PullSecrets: s.Spec.ImagePullSecrets}, time.Now())
+	p, err := shrink.Build(ctx, a.c, s.Namespace, s.Spec.PVC, q.Value(), shrink.BuildOptions{Image: image, PullSecrets: s.Spec.ImagePullSecrets, NoPrecopy: s.Spec.NoPrecopy}, time.Now())
 	if err != nil {
 		fail(err)
 		return

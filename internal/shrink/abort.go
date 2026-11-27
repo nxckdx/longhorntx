@@ -28,14 +28,19 @@ type Leftovers struct {
 	Freezes        []switchover.Freeze
 	Pods           []string // namespace/name
 	TempPVC        string
-	TempPVs        []string
-	NewVolumes     []*longhorn.Volume
-	Problem        string // why Abort cannot clean up
+	SrcPVC         string   // RWX: the old volume as a block device
+	TempPVs        []string // target and source PVs
+	// AccessMode: the old volume was set to rwo for an RWX copy – set it
+	// back to this
+	AccessMode string
+	NewVolumes []*longhorn.Volume
+	Problem    string // why Abort cannot clean up
 }
 
 // Empty: nothing left over.
 func (l *Leftovers) Empty() bool {
-	return len(l.Freezes) == 0 && len(l.Pods) == 0 && l.TempPVC == "" && len(l.TempPVs) == 0 && len(l.NewVolumes) == 0
+	return len(l.Freezes) == 0 && len(l.Pods) == 0 && l.TempPVC == "" && l.SrcPVC == "" && len(l.TempPVs) == 0 &&
+		len(l.NewVolumes) == 0 && l.AccessMode == ""
 }
 
 // FindLeftovers looks for what a shrink of namespace/pvc left behind.
@@ -54,6 +59,11 @@ func FindLeftovers(ctx context.Context, c *longhorn.Client, namespace, pvc strin
 		if pv, err := dyn.Resource(gvrPV).Get(ctx, pvName, metav1.GetOptions{}); err == nil {
 			l.OldVolume, _, _ = unstructured.NestedString(pv.Object, "spec", "csi", "volumeHandle")
 		}
+		if l.OldVolume != "" {
+			if v, err := c.Volume(ctx, l.OldVolume); err == nil {
+				l.AccessMode = v.Annotations[AnnAccessMode]
+			}
+		}
 	}
 	if fs, err := switchover.ActiveFreezes(ctx, dyn); err == nil {
 		for _, f := range fs {
@@ -67,15 +77,18 @@ func FindLeftovers(ctx context.Context, c *longhorn.Client, namespace, pvc strin
 			l.Pods = append(l.Pods, namespace+"/"+it.GetName())
 		}
 	}
-	tmp := tempPVCName(pvc)
+	tmp, src := tempPVCName(pvc), srcPVCName(pvc)
 	if _, err := dyn.Resource(gvrPVC).Namespace(namespace).Get(ctx, tmp, metav1.GetOptions{}); err == nil {
 		l.TempPVC = tmp
 	}
-	if pvl, err := dyn.Resource(gvrPV).List(ctx, metav1.ListOptions{LabelSelector: LabelCopy + "=target"}); err == nil {
+	if _, err := dyn.Resource(gvrPVC).Namespace(namespace).Get(ctx, src, metav1.GetOptions{}); err == nil {
+		l.SrcPVC = src
+	}
+	if pvl, err := dyn.Resource(gvrPV).List(ctx, metav1.ListOptions{LabelSelector: LabelCopy + " in (target,source)"}); err == nil {
 		for _, it := range pvl.Items {
 			ns, _, _ := unstructured.NestedString(it.Object, "spec", "claimRef", "namespace")
 			n, _, _ := unstructured.NestedString(it.Object, "spec", "claimRef", "name")
-			if ns == namespace && n == tmp {
+			if ns == namespace && (n == tmp || n == src) {
 				l.TempPVs = append(l.TempPVs, it.GetName())
 			}
 		}
@@ -94,6 +107,15 @@ func FindLeftovers(ctx context.Context, c *longhorn.Client, namespace, pvc strin
 	return l, nil
 }
 
+// srcPVCName: the old RWX volume as a block device during the copy.
+func srcPVCName(pvc string) string {
+	n := "lhtx-shrink-src-" + pvc
+	if len(n) > 63 {
+		n = strings.TrimRight(n[:63], "-")
+	}
+	return n
+}
+
 func tempPVCName(pvc string) string {
 	n := "lhtx-shrink-" + pvc
 	if len(n) > 63 {
@@ -108,14 +130,19 @@ func (l *Leftovers) Lines() []string {
 	for _, p := range l.Pods {
 		out = append(out, "delete pod "+p)
 	}
-	if l.TempPVC != "" {
-		out = append(out, "delete PVC "+l.Namespace+"/"+l.TempPVC)
+	for _, c := range []string{l.TempPVC, l.SrcPVC} {
+		if c != "" {
+			out = append(out, "delete PVC "+l.Namespace+"/"+c)
+		}
 	}
 	for _, pv := range l.TempPVs {
 		out = append(out, "delete PV "+pv+" (reclaim Retain: the volume is not touched by this)")
 	}
 	for _, v := range l.NewVolumes {
 		out = append(out, fmt.Sprintf("delete volume %s (the unfinished copy; %s stays as it is)", v.Name, l.OldVolume))
+	}
+	if l.AccessMode != "" {
+		out = append(out, fmt.Sprintf("set volume %s back to %s (a shrink set it to rwo for its copy) once it is detached", l.OldVolume, l.AccessMode))
 	}
 	for _, f := range l.Freezes {
 		out = append(out, fmt.Sprintf("unfreeze %s (%s): the app starts again on %s", f.Name, f.Reason, l.OldVolume))
@@ -143,11 +170,17 @@ func Abort(ctx context.Context, c *longhorn.Client, l *Leftovers, log func(strin
 		}
 		log("✔ pod %s deleted", p)
 	}
-	if l.TempPVC != "" {
-		if err := dyn.Resource(gvrPVC).Namespace(l.Namespace).Delete(ctx, l.TempPVC, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
-			return fmt.Errorf("delete PVC %s: %w", l.TempPVC, err)
+	claims := []string{}
+	for _, c := range []string{l.TempPVC, l.SrcPVC} {
+		if c != "" {
+			claims = append(claims, c)
 		}
-		log("✔ PVC %s/%s deleted", l.Namespace, l.TempPVC)
+	}
+	for _, c := range claims {
+		if err := dyn.Resource(gvrPVC).Namespace(l.Namespace).Delete(ctx, c, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete PVC %s: %w", c, err)
+		}
+		log("✔ PVC %s/%s deleted", l.Namespace, c)
 	}
 	for _, pv := range l.TempPVs {
 		if err := dyn.Resource(gvrPV).Delete(ctx, pv, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
@@ -177,9 +210,9 @@ func Abort(ctx context.Context, c *longhorn.Client, l *Leftovers, log func(strin
 		}
 		return fmt.Errorf("%s is still there after 5 minutes", what)
 	}
-	if l.TempPVC != "" {
-		if err := waitGone("PVC "+l.TempPVC, func() error {
-			_, err := dyn.Resource(gvrPVC).Namespace(l.Namespace).Get(ctx, l.TempPVC, metav1.GetOptions{})
+	for _, c := range claims {
+		if err := waitGone("PVC "+c, func() error {
+			_, err := dyn.Resource(gvrPVC).Namespace(l.Namespace).Get(ctx, c, metav1.GetOptions{})
 			return err
 		}); err != nil {
 			return err
@@ -195,12 +228,50 @@ func Abort(ctx context.Context, c *longhorn.Client, l *Leftovers, log func(strin
 			return err
 		}
 	}
+	if l.AccessMode != "" {
+		// before the app starts: an rwo volume is not shared to its pods
+		if err := restoreAccessMode(ctx, c, l.OldVolume, l.AccessMode, log); err != nil {
+			return err
+		}
+	}
 	for _, f := range l.Freezes {
 		if err := switchover.Unfreeze(ctx, c, f, switchover.FreezeOptions{Log: log}); err != nil {
 			return fmt.Errorf("unfreeze %s: %w", f.Name, err)
 		}
 	}
 	return nil
+}
+
+// restoreAccessMode waits until the volume is detached (up to 5 minutes)
+// and sets its access mode back, removing AnnAccessMode.
+func restoreAccessMode(ctx context.Context, c *longhorn.Client, volume, mode string, log func(string, ...any)) error {
+	res := c.Dynamic().Resource(longhorn.GVRVolume).Namespace(c.Namespace)
+	for i := 0; ; i++ {
+		v, err := res.Get(ctx, volume, metav1.GetOptions{})
+		if err != nil {
+			return fmt.Errorf("volume %s: %w", volume, err)
+		}
+		st, _, _ := unstructured.NestedString(v.Object, "status", "state")
+		if st == "detached" {
+			patch := fmt.Sprintf(`{"metadata":{"resourceVersion":%q,"annotations":{%q:null}},"spec":{"accessMode":%q}}`, v.GetResourceVersion(), AnnAccessMode, mode)
+			_, err := res.Patch(ctx, volume, types.MergePatchType, []byte(patch), metav1.PatchOptions{FieldManager: "lhtx"})
+			if err == nil {
+				log("✔ volume %s set back to %s", volume, mode)
+				return nil
+			}
+			if !apierrors.IsConflict(err) {
+				return fmt.Errorf("set volume %s back to %s: %w", volume, mode, err)
+			}
+		}
+		if i >= 100 {
+			return fmt.Errorf("volume %s is still %s after 5 minutes – it must be detached to set it back to %s", volume, st, mode)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(3 * time.Second):
+		}
+	}
 }
 
 // LeftoverChecks (lhtx doctor): volumes made by a shrink that no PVC uses
@@ -212,6 +283,15 @@ func LeftoverChecks(vols []*longhorn.Volume) []longhorn.Finding {
 		byName[v.Name] = v
 	}
 	for _, v := range vols {
+		if mode := v.Annotations[AnnAccessMode]; mode != "" {
+			hint := "lhtx --rw shrink --abort NAMESPACE/PVC"
+			if pvc := v.BoundPVC(); pvc != "" {
+				hint = "lhtx --rw shrink --abort " + pvc
+			}
+			out = append(out, longhorn.Finding{Severity: longhorn.SevCritical, Check: "shrink", Object: "volume/" + v.Name,
+				Message: fmt.Sprintf("set to %s by a shrink of this RWX volume (normally only while its copy runs) – its pods cannot share it until it is %s again", v.Spec.AccessMode, mode),
+				Hint:    hint})
+		}
 		of := v.Annotations[AnnShrinkOf]
 		pvc := v.BoundPVC()
 		_, claim, _ := strings.Cut(pvc, "/")

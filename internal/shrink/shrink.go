@@ -253,9 +253,16 @@ func (p *Plan) Steps() []string {
 	if p.Volume["encrypted"] == true {
 		enc = ", encrypted with the same key"
 	}
+	where := "the node the scheduler picks"
+	if p.Node != "" {
+		where = "node " + p.Node
+	}
 	out := []string{
+		"server dry run of the copy pod (Pod Security, policies, quotas) – the app still runs",
 		fmt.Sprintf("create volume %s (%s instead of %s, same settings%s) with PV %s and PVC %s/%s",
 			sw.NewVolume, human(p.NewSize), human(p.OldSize), enc, p.TempPV, sw.Namespace, p.TempPVC),
+		fmt.Sprintf("pre-flight pod %s on %s: pulls the image, attaches and formats the new volume, checks that all replicas are placed – the app still runs; a failure removes everything",
+			p.ProbePod, where),
 	}
 	for _, s := range sw.Steps() {
 		if strings.HasPrefix(s, "wait until volume "+sw.NewVolume) {

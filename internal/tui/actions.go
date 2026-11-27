@@ -125,6 +125,9 @@ func (m *model) actionKey(p *page, key string) (tea.Cmd, bool) {
 	if p.kind == pDetail && key == "w" {
 		return m.switchToVolumeKey(p.vol), true
 	}
+	if p.kind == pDetail && key == "K" {
+		return m.shrinkKey(p.vol), true
+	}
 	if p.kind == pHealth && key == "B" {
 		var vols, detached []string
 		for _, n := range m.lateBackupVolumes() {

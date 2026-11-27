@@ -137,7 +137,7 @@ func (m *model) viewFooter() string {
 			keys = append(keys, [2]string{"ctrl+r", "reload"})
 		}
 		if m.rw {
-			keys = append(keys, [2]string{"S", "snapshot"}, [2]string{"B", "backup"}, [2]string{"R", "replicas"}, [2]string{"U", "engine"}, [2]string{"E", "expand"}, [2]string{"A", "attach"}, [2]string{"w", "switch PVC here"}, [2]string{"Z", "freeze"}, [2]string{"[ ]", "select"}, [2]string{"X", "del replica"})
+			keys = append(keys, [2]string{"S", "snapshot"}, [2]string{"B", "backup"}, [2]string{"R", "replicas"}, [2]string{"U", "engine"}, [2]string{"E", "expand"}, [2]string{"A", "attach"}, [2]string{"w", "switch PVC here"}, [2]string{"K", "shrink"}, [2]string{"Z", "freeze"}, [2]string{"[ ]", "select"}, [2]string{"X", "del replica"})
 			if p.panel == panelSnapshots {
 				keys = append(keys, [2]string{"D", "del snapshot"}, [2]string{"C", "clone"})
 			}

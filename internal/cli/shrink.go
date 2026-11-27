@@ -12,6 +12,7 @@ import (
 	"github.com/nxckdx/longhorntx/internal/longhorn"
 	"github.com/nxckdx/longhorntx/internal/shrink"
 	"github.com/nxckdx/longhorntx/internal/switchover"
+	"github.com/nxckdx/longhorntx/internal/tui"
 )
 
 func shrinkCmd(g *globals) *cobra.Command {
@@ -62,10 +63,9 @@ lhtx must keep running until the end (Ctrl+C before the swap rolls back).`,
 				return fmt.Errorf("size %q: %w", args[1], err)
 			}
 			if image == "" {
-				if Version == "dev" {
-					return fmt.Errorf("a development build does not know its image: give --image")
+				if image, err = tui.ShrinkImage(Version); err != nil {
+					return fmt.Errorf("%w (or give --image)", err)
 				}
-				image = "ghcr.io/nxckdx/lhtx:" + strings.TrimPrefix(Version, "v")
 			}
 			c, err := g.client()
 			if err != nil {
@@ -126,7 +126,7 @@ lhtx must keep running until the end (Ctrl+C before the swap rolls back).`,
 			return err
 		},
 	}
-	cmd.Flags().StringVar(&image, "image", "", "image of the copy pod (default: ghcr.io/nxckdx/lhtx:<this version>)")
+	cmd.Flags().StringVar(&image, "image", "", "image of the copy pod (default: env LHTX_SHRINK_IMAGE, else ghcr.io/nxckdx/lhtx:<this version>)")
 	cmd.Flags().StringSliceVar(&pullSecrets, "image-pull-secret", nil, "pull secret(s) in the PVC's namespace for the copy pod's image")
 	cmd.Flags().BoolVar(&abort, "abort", false, "clean up an interrupted shrink of the PVC (copy pod, temporary PVC/PV, new volume) and unfreeze it")
 	cmd.Flags().DurationVar(&wait, "wait", 10*time.Minute, "how long to wait for pods to stop / start and volumes to detach")

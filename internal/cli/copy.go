@@ -197,7 +197,7 @@ func copyCmd() *cobra.Command {
 	cmd.Flags().StringSliceVar(&skip, "skip", []string{"lost+found"}, "entries of the source root to leave out")
 	cmd.Flags().StringVar(&verify, "verify", "content", "compare afterwards: content (metadata + SHA-256 of every file), meta, none")
 	cmd.Flags().StringVar(&mode, "mode", "full", "full: copy and verify; pre: copy a source in use, remember what arrived intact; final: copy only what changed since pre (else full)")
-	cmd.Flags().IntVar(&jobs, "jobs", 8, "files copied and verified at the same time (many small files: each is a few round trips to the disk)")
+	cmd.Flags().IntVar(&jobs, "jobs", 16, "files copied and verified at the same time (many small files: each is a few round trips to the disk)")
 	cmd.Flags().BoolVar(&probe, "probe", false, "only check that DST is mounted and writable (pre-flight)")
 	return cmd
 }

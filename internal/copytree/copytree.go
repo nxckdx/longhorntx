@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -61,17 +62,83 @@ type Options struct {
 	Live bool
 	// State: record each entry's fingerprint for a later Sync.
 	State *State
+	// Workers: entries copied at the same time (default 1). Directories
+	// are always made by the walk itself, in order.
+	Workers int
 }
 
 type inodeKey struct{ dev, ino uint64 }
 
 type copier struct {
 	o     Options
+	mu    sync.Mutex // st, links, o.Hashes, o.State (workers)
 	st    Stats
-	links map[inodeKey]string // first copied path of a multiply linked file
+	links map[inodeKey]*linkTarget // first copy of a multiply linked file
 	last  time.Time
-	dirs  []dirMeta // set after their contents
-	buf   []byte
+	dirs  []dirMeta // set after their contents (walk only)
+	pool  *pool
+}
+
+func newCopier(o Options) *copier {
+	if o.Every <= 0 {
+		o.Every = 5 * time.Second
+	}
+	return &copier{o: o, links: map[inodeKey]*linkTarget{}, last: time.Now(), pool: newPool(o.Workers)}
+}
+
+func (c *copier) add(f func(*Stats)) {
+	c.mu.Lock()
+	f(&c.st)
+	c.mu.Unlock()
+}
+
+// stats: a copy of the counts so far.
+func (c *copier) stats() Stats {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	st := c.st
+	st.Skipped = append([]string(nil), c.st.Skipped...)
+	return st
+}
+
+func (c *copier) setHash(rel string, sum *[32]byte) {
+	if c.o.Hashes == nil {
+		return
+	}
+	c.mu.Lock()
+	if sum == nil {
+		delete(c.o.Hashes, rel)
+	} else {
+		c.o.Hashes[rel] = *sum
+	}
+	c.mu.Unlock()
+}
+
+func (c *copier) progress() {
+	if c.o.Progress == nil || time.Since(c.last) < c.o.Every {
+		return
+	}
+	c.last = time.Now()
+	c.o.Progress(c.stats())
+}
+
+// finish waits for the workers, then sets the directories' metadata (last
+// to first: their times change while filling them) and the root's.
+func (c *copier) finish(src, dst string) error {
+	if err := c.pool.wait(); err != nil {
+		return err
+	}
+	for i := len(c.dirs) - 1; i >= 0; i-- {
+		if err := c.meta(c.dirs[i].path, &c.dirs[i].info, false); err != nil {
+			return err
+		}
+	}
+	var root unix.Stat_t
+	if err := unix.Lstat(src, &root); err == nil {
+		_ = c.xattrs(src, dst)
+		_ = c.meta(dst, &root, false)
+	}
+	return nil
 }
 
 type dirMeta struct {
@@ -81,15 +148,51 @@ type dirMeta struct {
 
 // Copy copies the contents of src into dst (both existing directories).
 func Copy(src, dst string, o Options) (Stats, error) {
-	if o.Every <= 0 {
-		o.Every = 5 * time.Second
-	}
-	c := &copier{o: o, links: map[inodeKey]string{}, last: time.Now(), buf: make([]byte, 1<<20)}
+	c := newCopier(o)
 	skip := skipSet(o.Skip)
+	// one entry; dirty: what a live copy leaves to the final pass
+	one := func(p, rel string, isDir bool, buf []byte) error {
+		target := filepath.Join(dst, rel)
+		dirty := func() error {
+			c.add(func(s *Stats) { s.Dirty++ })
+			if !isDir {
+				_ = os.Remove(target) // a partial copy
+			}
+			c.setHash(rel, nil)
+			return nil
+		}
+		var before unix.Stat_t
+		if o.State != nil {
+			if err := unix.Lstat(p, &before); err != nil {
+				if o.Live {
+					return dirty()
+				}
+				return err
+			}
+		}
+		if err := c.entry(p, target, rel, buf); err != nil {
+			if o.Live {
+				return dirty()
+			}
+			return fmt.Errorf("%s: %w", rel, err)
+		}
+		if o.State != nil {
+			var after unix.Stat_t
+			if err := unix.Lstat(p, &after); err == nil && fingerprintOf(&before) == fingerprintOf(&after) {
+				c.mu.Lock()
+				o.State.Entries[rel] = fingerprintOf(&before)
+				c.mu.Unlock()
+			} else {
+				c.add(func(s *Stats) { s.Dirty++ }) // changed while copying
+				c.setHash(rel, nil)
+			}
+		}
+		return nil
+	}
 	err := filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			if o.Live && p != src {
-				c.st.Dirty++ // vanished while walking
+				c.add(func(s *Stats) { s.Dirty++ }) // vanished while walking
 				return nil
 			}
 			return err
@@ -104,61 +207,19 @@ func Copy(src, dst string, o Options) (Stats, error) {
 			}
 			return nil
 		}
-		var before unix.Stat_t
-		if o.State != nil {
-			if err := unix.Lstat(p, &before); err != nil {
-				if o.Live {
-					c.st.Dirty++
-					return nil
-				}
-				return err
-			}
+		c.progress()
+		if d.IsDir() {
+			// made here, before what is in it
+			return one(p, rel, true, c.pool.buf)
 		}
-		if err := c.entry(p, filepath.Join(dst, rel), rel); err != nil {
-			if o.Live {
-				c.st.Dirty++
-				if !d.IsDir() {
-					_ = os.Remove(filepath.Join(dst, rel)) // a partial copy
-				}
-				if o.Hashes != nil {
-					delete(o.Hashes, rel)
-				}
-				return nil
-			}
-			return fmt.Errorf("%s: %w", rel, err)
-		}
-		if o.State != nil {
-			var after unix.Stat_t
-			if err := unix.Lstat(p, &after); err == nil && fingerprintOf(&before) == fingerprintOf(&after) {
-				o.State.Entries[rel] = fingerprintOf(&before)
-			} else {
-				c.st.Dirty++ // changed while copying
-				if o.Hashes != nil {
-					delete(o.Hashes, rel)
-				}
-			}
-		}
-		if o.Progress != nil && time.Since(c.last) >= o.Every {
-			c.last = time.Now()
-			o.Progress(c.st)
-		}
-		return nil
+		return c.pool.do(func(buf []byte) error { return one(p, rel, false, buf) })
 	})
 	if err != nil {
-		return c.st, err
+		_ = c.pool.wait()
+		return c.stats(), err
 	}
-	// directories last-to-first: their times change while filling them
-	for i := len(c.dirs) - 1; i >= 0; i-- {
-		if err := c.meta(c.dirs[i].path, &c.dirs[i].info, false); err != nil {
-			return c.st, err
-		}
-	}
-	var root unix.Stat_t
-	if err := unix.Lstat(src, &root); err == nil {
-		_ = c.xattrs(src, dst)
-		_ = c.meta(dst, &root, false)
-	}
-	return c.st, nil
+	err = c.finish(src, dst)
+	return c.stats(), err
 }
 
 func skipSet(s []string) map[string]bool {
@@ -169,7 +230,7 @@ func skipSet(s []string) map[string]bool {
 	return m
 }
 
-func (c *copier) entry(src, dst, rel string) error {
+func (c *copier) entry(src, dst, rel string, buf []byte) (err error) {
 	var st unix.Stat_t
 	if err := unix.Lstat(src, &st); err != nil {
 		return err
@@ -182,7 +243,7 @@ func (c *copier) entry(src, dst, rel string) error {
 		if err := c.xattrs(src, dst); err != nil {
 			return err
 		}
-		c.st.Dirs++
+		c.add(func(s *Stats) { s.Dirs++ })
 		c.dirs = append(c.dirs, dirMeta{dst, st})
 		return nil
 	case unix.S_IFLNK:
@@ -193,20 +254,32 @@ func (c *copier) entry(src, dst, rel string) error {
 		if err := os.Symlink(target, dst); err != nil {
 			return err
 		}
-		c.st.Symlinks++
+		c.add(func(s *Stats) { s.Symlinks++ })
 		if err := c.xattrs(src, dst); err != nil {
 			return err
 		}
 		return c.meta(dst, &st, true)
 	}
-	// a file (or special) with more links: link to the first copy
+	// a file (or special) with more links: link to the first copy (that
+	// another worker may still be making)
 	if st.Nlink > 1 {
 		k := inodeKey{uint64(st.Dev), st.Ino}
-		if first, ok := c.links[k]; ok {
-			c.st.Hardlinks++
-			return os.Link(first, dst)
+		c.mu.Lock()
+		first, ok := c.links[k]
+		if !ok {
+			first = &linkTarget{path: dst, done: make(chan struct{})}
+			c.links[k] = first
 		}
-		c.links[k] = dst
+		c.mu.Unlock()
+		if ok {
+			<-first.done
+			if first.err != nil {
+				return fmt.Errorf("its other link %s was not copied: %w", first.path, first.err)
+			}
+			c.add(func(s *Stats) { s.Hardlinks++ })
+			return os.Link(first.path, dst)
+		}
+		defer func() { first.err = err; close(first.done) }()
 	}
 	switch st.Mode & unix.S_IFMT {
 	case unix.S_IFREG:
@@ -214,20 +287,20 @@ func (c *copier) entry(src, dst, rel string) error {
 		if c.o.Hashes != nil {
 			h = sha256.New()
 		}
-		if err := c.file(src, dst, st.Size, h); err != nil {
+		if err := c.file(src, dst, st.Size, h, buf); err != nil {
 			return err
 		}
 		if h != nil {
 			var sum [32]byte
 			copy(sum[:], h.Sum(nil))
-			c.o.Hashes[rel] = sum
+			c.setHash(rel, &sum)
 		}
-		c.st.Files++
+		c.add(func(s *Stats) { s.Files++ })
 	case unix.S_IFCHR, unix.S_IFBLK, unix.S_IFIFO:
 		if err := unix.Mknod(dst, st.Mode, int(st.Rdev)); err != nil {
 			return err
 		}
-		c.st.Special++
+		c.add(func(s *Stats) { s.Special++ })
 	case unix.S_IFSOCK:
 		return nil // sockets are created by their server, not copied
 	default:
@@ -308,7 +381,7 @@ func blockHash(h hash.Hash, off int64, block []byte) {
 
 // file copies the content of src: holes stay holes, all-zero blocks become
 // holes. h, if set, gets the block hash.
-func (c *copier) file(src, dst string, size int64, h hash.Hash) error {
+func (c *copier) file(src, dst string, size int64, h hash.Hash, buf []byte) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
@@ -322,14 +395,14 @@ func (c *copier) file(src, dst string, size int64, h hash.Hash) error {
 	if h != nil {
 		blockHash(h, size, nil)
 	}
-	read, err := scanData(in, size, c.buf, func(off int64, block []byte) error {
+	read, err := scanData(in, size, buf, func(off int64, block []byte) error {
 		if h != nil {
 			blockHash(h, off, block)
 		}
 		_, err := out.WriteAt(block, off)
 		return err
 	})
-	c.st.Bytes += read
+	c.add(func(s *Stats) { s.Bytes += read })
 	if err != nil {
 		return fail(err)
 	}
@@ -370,12 +443,14 @@ func (c *copier) xattrs(src, dst string) error {
 		err := copyXattr(src, dst, n)
 		switch {
 		case err == nil:
-			c.st.Xattrs++
+			c.add(func(s *Stats) { s.Xattrs++ })
 		case strings.HasPrefix(n, "security.") || strings.HasPrefix(n, "trusted."):
-			c.st.XattrsSkipped++
-			if len(c.st.Skipped) < 10 {
-				c.st.Skipped = append(c.st.Skipped, fmt.Sprintf("%s: %s: %v", dst, n, err))
-			}
+			c.add(func(s *Stats) {
+				s.XattrsSkipped++
+				if len(s.Skipped) < 10 {
+					s.Skipped = append(s.Skipped, fmt.Sprintf("%s: %s: %v", dst, n, err))
+				}
+			})
 		default:
 			return err
 		}
@@ -448,6 +523,7 @@ type VerifyOptions struct {
 	Max      int // differences to collect (default 20)
 	Hashes   map[string][32]byte
 	Progress func(checked int64)
+	Workers  int // entries compared at the same time (default 1)
 }
 
 // Verify compares two trees walking the source (call sync first: the
@@ -461,28 +537,18 @@ func Verify(src, dst string, o VerifyOptions) ([]string, error) {
 		o.Max = 20
 	}
 	skip := skipSet(o.Skip)
+	var mu sync.Mutex // diff, n
 	var diff []string
 	add := func(f string, args ...any) {
+		mu.Lock()
 		if len(diff) < o.Max {
 			diff = append(diff, fmt.Sprintf(f, args...))
 		}
+		mu.Unlock()
 	}
 	var n int64
-	buf := make([]byte, 1<<20)
-	err := filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, _ := filepath.Rel(src, p)
-		if rel == "." {
-			return nil
-		}
-		if skip[rel] {
-			if d.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
+	pool := newPool(o.Workers)
+	one := func(p, rel string, buf []byte) error {
 		var a, b unix.Stat_t
 		if err := unix.Lstat(p, &a); err != nil {
 			return err
@@ -490,7 +556,12 @@ func Verify(src, dst string, o VerifyOptions) ([]string, error) {
 		if a.Mode&unix.S_IFMT == unix.S_IFSOCK {
 			return nil
 		}
+		mu.Lock()
 		n++
+		if o.Progress != nil && n%1000 == 0 {
+			o.Progress(n)
+		}
+		mu.Unlock()
 		q := filepath.Join(dst, rel)
 		if err := unix.Lstat(q, &b); err != nil {
 			add("missing: %s", rel)
@@ -513,11 +584,30 @@ func Verify(src, dst string, o VerifyOptions) ([]string, error) {
 				add("content differs: %s", rel)
 			}
 		}
-		if o.Progress != nil && n%1000 == 0 {
-			o.Progress(n)
-		}
 		return nil
+	}
+	err := filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(src, p)
+		if rel == "." {
+			return nil
+		}
+		if skip[rel] {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.IsDir() {
+			return one(p, rel, pool.buf)
+		}
+		return pool.do(func(buf []byte) error { return one(p, rel, buf) })
 	})
+	if werr := pool.wait(); err == nil {
+		err = werr
+	}
 	if err != nil {
 		return diff, err
 	}

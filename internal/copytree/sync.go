@@ -7,7 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"time"
+	"sync"
 
 	"golang.org/x/sys/unix"
 )
@@ -68,39 +68,86 @@ func LoadState(path string) (*State, error) {
 
 // VerifyContent reads every file of hashes in dst and returns those whose
 // content differs (a pre-copy drops them from its state: Sync copies them
-// again).
-func VerifyContent(dst string, hashes map[string][32]byte) ([]string, error) {
-	buf := make([]byte, 1<<20)
+// again). workers: files read at the same time.
+func VerifyContent(dst string, hashes map[string][32]byte, workers int) ([]string, error) {
+	var mu sync.Mutex
 	var bad []string
+	pool := newPool(workers)
 	for rel, want := range hashes {
-		p := filepath.Join(dst, rel)
-		var st unix.Stat_t
-		if err := unix.Lstat(p, &st); err != nil {
-			bad = append(bad, rel)
-			continue
-		}
-		got, err := fileHash(p, st.Size, buf)
+		err := pool.do(func(buf []byte) error {
+			p := filepath.Join(dst, rel)
+			var st unix.Stat_t
+			if err := unix.Lstat(p, &st); err != nil {
+				mu.Lock()
+				bad = append(bad, rel)
+				mu.Unlock()
+				return nil
+			}
+			got, err := fileHash(p, st.Size, buf)
+			if err != nil {
+				return err
+			}
+			if got != want {
+				mu.Lock()
+				bad = append(bad, rel)
+				mu.Unlock()
+			}
+			return nil
+		})
 		if err != nil {
-			return bad, err
-		}
-		if got != want {
-			bad = append(bad, rel)
+			break
 		}
 	}
-	return bad, nil
+	err := pool.wait()
+	return bad, err
 }
 
 // Sync makes dst equal to src, copying only entries whose fingerprint
 // changed since prev (or that are new), and removing what is gone. Hard
 // linked files are always copied again (their link structure may have
 // changed). It returns the copied entries (for a content check of them).
+// It runs while the app is stopped: with Workers, the entries are compared
+// (two lstats each) and copied in parallel.
 func Sync(src, dst string, prev *State, o Options) (Stats, []string, error) {
-	if o.Every <= 0 {
-		o.Every = 5 * time.Second
-	}
-	c := &copier{o: o, links: map[inodeKey]string{}, buf: make([]byte, 1<<20)}
+	c := newCopier(o)
 	skip := skipSet(o.Skip)
 	var changed []string
+	one := func(p, rel string, buf []byte) error {
+		var st, dt unix.Stat_t
+		if err := unix.Lstat(p, &st); err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		dErr := unix.Lstat(target, &dt)
+		if st.Mode&unix.S_IFMT == unix.S_IFDIR {
+			if dErr == nil && dt.Mode&unix.S_IFMT != unix.S_IFDIR {
+				if err := os.RemoveAll(target); err != nil {
+					return err
+				}
+			}
+			if err := c.entry(p, target, rel, buf); err != nil { // mkdir (exists is fine), xattrs, meta later
+				return fmt.Errorf("%s: %w", rel, err)
+			}
+			return nil
+		}
+		old, known := prev.Entries[rel]
+		if known && dErr == nil && old == fingerprintOf(&st) && st.Nlink == 1 && dt.Mode&unix.S_IFMT == st.Mode&unix.S_IFMT {
+			c.add(func(s *Stats) { s.Unchanged++ })
+			return nil
+		}
+		if dErr == nil {
+			if err := os.RemoveAll(target); err != nil {
+				return err
+			}
+		}
+		if err := c.entry(p, target, rel, buf); err != nil {
+			return fmt.Errorf("%s: %w", rel, err)
+		}
+		c.mu.Lock()
+		changed = append(changed, rel)
+		c.mu.Unlock()
+		return nil
+	}
 	err := filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -115,47 +162,21 @@ func Sync(src, dst string, prev *State, o Options) (Stats, []string, error) {
 			}
 			return nil
 		}
-		var st, dt unix.Stat_t
-		if err := unix.Lstat(p, &st); err != nil {
-			return err
+		c.progress()
+		if d.IsDir() {
+			return one(p, rel, c.pool.buf)
 		}
-		target := filepath.Join(dst, rel)
-		dErr := unix.Lstat(target, &dt)
-		isDir := st.Mode&unix.S_IFMT == unix.S_IFDIR
-		if isDir {
-			if dErr == nil && dt.Mode&unix.S_IFMT != unix.S_IFDIR {
-				if err := os.RemoveAll(target); err != nil {
-					return err
-				}
-			}
-			if err := c.entry(p, target, rel); err != nil { // mkdir (exists is fine), xattrs, meta later
-				return fmt.Errorf("%s: %w", rel, err)
-			}
-			return nil
-		}
-		old, known := prev.Entries[rel]
-		if known && dErr == nil && old == fingerprintOf(&st) && st.Nlink == 1 && dt.Mode&unix.S_IFMT == st.Mode&unix.S_IFMT {
-			c.st.Unchanged++
-			return nil
-		}
-		if dErr == nil {
-			if err := os.RemoveAll(target); err != nil {
-				return err
-			}
-		}
-		if err := c.entry(p, target, rel); err != nil {
-			return fmt.Errorf("%s: %w", rel, err)
-		}
-		changed = append(changed, rel)
-		if o.Progress != nil {
-			o.Progress(c.st)
-		}
-		return nil
+		return c.pool.do(func(buf []byte) error { return one(p, rel, buf) })
 	})
+	if err == nil {
+		err = c.pool.wait()
+	}
 	if err != nil {
-		return c.st, changed, err
+		_ = c.pool.wait()
+		return c.stats(), changed, err
 	}
 	// what is gone from the source goes from the target
+	c.pool = newPool(o.Workers)
 	err = filepath.WalkDir(dst, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
@@ -173,32 +194,30 @@ func Sync(src, dst string, prev *State, o Options) (Stats, []string, error) {
 			}
 			return nil
 		}
-		var st unix.Stat_t
-		if err := unix.Lstat(filepath.Join(src, rel), &st); errors.Is(err, unix.ENOENT) {
-			c.st.Removed++
-			if err := os.RemoveAll(p); err != nil {
-				return err
+		gone := func() (bool, error) {
+			var st unix.Stat_t
+			err := unix.Lstat(filepath.Join(src, rel), &st)
+			if errors.Is(err, unix.ENOENT) {
+				c.add(func(s *Stats) { s.Removed++ })
+				return true, os.RemoveAll(p)
 			}
-			if d.IsDir() {
+			return false, nil
+		}
+		if d.IsDir() {
+			g, err := gone()
+			if g && err == nil {
 				return filepath.SkipDir
 			}
+			return err
 		}
-		return nil
+		return c.pool.do(func([]byte) error { _, err := gone(); return err })
 	})
 	if err != nil {
-		return c.st, changed, err
+		_ = c.pool.wait()
+		return c.stats(), changed, err
 	}
-	for i := len(c.dirs) - 1; i >= 0; i-- {
-		if err := c.meta(c.dirs[i].path, &c.dirs[i].info, false); err != nil {
-			return c.st, changed, err
-		}
-	}
-	var root unix.Stat_t
-	if err := unix.Lstat(src, &root); err == nil {
-		_ = c.xattrs(src, dst)
-		_ = c.meta(dst, &root, false)
-	}
-	return c.st, changed, nil
+	err = c.finish(src, dst)
+	return c.stats(), changed, err
 }
 
 // Clear removes everything in dir except skip (a full copy after a failed

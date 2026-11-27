@@ -1,6 +1,7 @@
 package copytree
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,12 @@ import (
 )
 
 func TestCopyTree(t *testing.T) {
+	for _, w := range []int{1, 8} {
+		t.Run(fmt.Sprintf("workers=%d", w), func(t *testing.T) { testCopyTree(t, w) })
+	}
+}
+
+func testCopyTree(t *testing.T, workers int) {
 	src, dst := t.TempDir(), t.TempDir()
 	w := func(name, content string, mode os.FileMode) {
 		p := filepath.Join(src, name)
@@ -43,7 +50,7 @@ func TestCopyTree(t *testing.T) {
 	_ = os.Chtimes(filepath.Join(src, "a/b"), old, old)
 
 	hashes := map[string][32]byte{}
-	st, err := Copy(src, dst, Options{Skip: []string{"lost+found"}, NoOwner: true, Hashes: hashes})
+	st, err := Copy(src, dst, Options{Skip: []string{"lost+found"}, NoOwner: true, Hashes: hashes, Workers: workers})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +77,7 @@ func TestCopyTree(t *testing.T) {
 	if sp.Size != 2<<20 || sp.Blocks*512 >= 1<<20 {
 		t.Errorf("sparse: size %d, allocated %d", sp.Size, sp.Blocks*512)
 	}
-	vo := VerifyOptions{Skip: []string{"lost+found"}, NoOwner: true, Hashes: hashes}
+	vo := VerifyOptions{Skip: []string{"lost+found"}, NoOwner: true, Hashes: hashes, Workers: workers}
 	diff, err := Verify(src, dst, vo)
 	if err != nil || len(diff) != 0 {
 		t.Errorf("verify: %v %v", diff, err)
@@ -117,5 +124,54 @@ func TestCopySparseHash(t *testing.T) {
 	}
 	if diff, err := Verify(src, dst, VerifyOptions{NoOwner: true, Hashes: hashes}); err != nil || len(diff) != 0 {
 		t.Errorf("verify: %v %v", diff, err)
+	}
+}
+
+// Many files, many hard links between them, in parallel: every link ends
+// up on its first copy, the trees are equal.
+func TestCopyParallelManyFiles(t *testing.T) {
+	src, dst := t.TempDir(), t.TempDir()
+	for d := range 20 {
+		dir := filepath.Join(src, fmt.Sprintf("d%02d", d))
+		_ = os.Mkdir(dir, 0o755)
+		for f := range 50 {
+			p := filepath.Join(dir, fmt.Sprintf("f%02d", f))
+			if err := os.WriteFile(p, []byte(strings.Repeat("x", d*f)), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if f%5 == 0 { // linked from the next directory too, and from the root
+				_ = os.Link(p, filepath.Join(src, fmt.Sprintf("l%02d-%02d", d, f)))
+			}
+		}
+	}
+	hashes := map[string][32]byte{}
+	st, err := Copy(src, dst, Options{NoOwner: true, Hashes: hashes, Workers: 16})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Files != 1000 || st.Hardlinks != 200 || st.Dirs != 20 {
+		t.Errorf("stats %+v", st)
+	}
+	if diff, err := Verify(src, dst, VerifyOptions{NoOwner: true, Hashes: hashes, Workers: 16}); err != nil || len(diff) != 0 {
+		t.Errorf("verify: %v %v", diff, err)
+	}
+	// and the final pass after a pre-copy, in parallel
+	state := NewState()
+	dst2 := t.TempDir()
+	if _, err := Copy(src, dst2, Options{NoOwner: true, Live: true, State: state, Workers: 16}); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(src, "d03", "f07"), []byte("changed"), 0o644)
+	_ = os.Remove(filepath.Join(src, "d04", "f01"))
+	h2 := map[string][32]byte{}
+	s2, changed, err := Sync(src, dst2, state, Options{NoOwner: true, Hashes: h2, Workers: 16})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s2.Removed != 1 || len(changed) != 1+400 { // the changed file + all hard linked ones
+		t.Errorf("sync: %+v, %d changed", s2, len(changed))
+	}
+	if diff, err := Verify(src, dst2, VerifyOptions{NoOwner: true, Hashes: h2, Workers: 16}); err != nil || len(diff) != 0 {
+		t.Errorf("verify after sync: %v %v", diff, err)
 	}
 }

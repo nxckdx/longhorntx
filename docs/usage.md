@@ -139,7 +139,7 @@ NODE     READY   CSI DRIVER   CSI PLUGIN   STUCK            KUBELET
 node-2   true    ok           ready        1 (up to 14 min) healthz ok, 3/4 Longhorn volumes mounted, failed: NodeStageVolume DeadlineExceeded 6
 
 CRITICAL node/node-2: 1 pod(s) wait for up to 14 min for Longhorn volumes that are attached here but not mounted – kubelet or the CSI plugin on this node hangs
-  → first delete longhorn-csi-plugin-x7k2p (…); if that does not help, restart kubelet: systemctl restart rke2-agent (on the node)
+  → first restart the CSI plugin (lhtx --rw restart csi-plugin node-2); if that does not help, restart kubelet: systemctl restart rke2-agent (on the node)
 ```
 
 Per node it checks that Longhorn's CSI driver is registered with kubelet

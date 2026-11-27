@@ -59,6 +59,9 @@ type StuckMount struct {
 	// NoEvents: kubelet reported nothing for the pod – typical for a hung
 	// kubelet (a failing mount at least produces FailedMount events).
 	NoEvents bool `json:"noEvents,omitempty"`
+	// RWX: the volume is served over NFS by a share manager – a stuck
+	// mount points there first (lhtx rwx), not to the node.
+	RWX bool `json:"rwx,omitempty"`
 }
 
 // NodeMounts is what lhtx knows about mounting on one node.
@@ -214,7 +217,7 @@ func AnalyzeMounts(in MountInput, now time.Time, minWait time.Duration) MountRep
 		}
 		for _, vol := range longhornClaims(p, byPVC) {
 			s := StuckMount{Pod: key, Node: p.Spec.NodeName, PVC: vol.PVC(), Volume: vol.Name,
-				Waiting: wait.Round(time.Second), Detail: detail, NoEvents: noEvents}
+				Waiting: wait.Round(time.Second), Detail: detail, NoEvents: noEvents, RWX: vol.Spec.AccessMode == "rwx"}
 			va, known := in.Attachments[AttachmentName(vol.Name, CSIDriver, p.Spec.NodeName)]
 			switch {
 			case !known:
@@ -292,7 +295,7 @@ func AnalyzeMounts(in MountInput, now time.Time, minWait time.Duration) MountRep
 	}
 	for _, s := range rep.Stuck {
 		nm := get(s.Node)
-		if s.Stage != StageMount {
+		if s.Stage != StageMount || s.RWX {
 			continue
 		}
 		nm.Stuck++
@@ -414,7 +417,7 @@ func MountFindings(rep MountReport) []Finding {
 		} else if nm.CSIPlugin != "" && !nm.CSIPluginOK {
 			out = append(out, Finding{Severity: SevWarning, Check: "mount", Object: obj,
 				Message: fmt.Sprintf("longhorn-csi-plugin pod %s is not ready (%d restarts)", nm.CSIPlugin, nm.CSIRestarts),
-				Hint:    "lhtx diag – or delete the pod, the DaemonSet recreates it"})
+				Hint:    "lhtx --rw restart csi-plugin " + nm.Node})
 		}
 		if nm.Stuck == 0 {
 			continue
@@ -438,6 +441,15 @@ func MountFindings(rep MountReport) []Finding {
 		out = append(out, Finding{Severity: sev, Check: "mount", Object: obj, Message: msg, Hint: csiHint(nm)})
 	}
 	for _, s := range rep.Stuck {
+		if s.RWX && s.Stage == StageMount {
+			msg := fmt.Sprintf("pod %s waits %s on %s for the RWX volume to be mounted over NFS", s.Pod, format.Duration(s.Waiting), s.Node)
+			if s.Detail != "" {
+				msg += ": " + oneLine(s.Detail, 160)
+			}
+			out = append(out, Finding{Severity: SevWarning, Check: "mount", Object: "volume/" + s.Volume, Message: msg,
+				Hint: "lhtx rwx (share manager, endpoints); if it hangs: lhtx --rw restart share-manager " + s.Volume})
+			continue
+		}
 		if s.Stage == StageMount {
 			continue // counted on the node
 		}
@@ -458,7 +470,7 @@ func MountFindings(rep MountReport) []Finding {
 func csiHint(nm NodeMounts) string {
 	h := "restart kubelet: " + nm.KubeletRestart()
 	if nm.CSIPlugin != "" {
-		h = "first delete " + nm.CSIPlugin + " (kubectl -n longhorn-system delete pod " + nm.CSIPlugin + "); if that does not help, " + h
+		h = "first restart the CSI plugin (lhtx --rw restart csi-plugin " + nm.Node + "); if that does not help, " + h
 	}
 	return h
 }

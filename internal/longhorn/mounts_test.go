@@ -104,7 +104,7 @@ func TestAnalyzeMountsNodeHang(t *testing.T) {
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Errorf("findings = %v", got)
 	}
-	if !strings.Contains(f[0].Hint, "rke2-agent") || !strings.Contains(f[0].Hint, "longhorn-csi-plugin-x") {
+	if !strings.Contains(f[0].Hint, "rke2-agent") || !strings.Contains(f[0].Hint, "restart csi-plugin n1") {
 		t.Errorf("hint = %s", f[0].Hint)
 	}
 }
@@ -164,5 +164,26 @@ func TestShortMountMessage(t *testing.T) {
 	got := shortMountMessage(`MountVolume.MountDevice failed for volume "pvc-939b" : rpc error: code = Unavailable desc = x`)
 	if got != "MountDevice failed: rpc error: code = Unavailable desc = x" {
 		t.Errorf("got %q", got)
+	}
+}
+
+func TestAnalyzeMountsRWX(t *testing.T) {
+	now := time.Now()
+	v := mountVol("pvc-r", "app", "shared", "n2", "attached")
+	v.Spec.AccessMode = "rwx"
+	in := MountInput{
+		Pods:        []corev1.Pod{waitingPod("app", "w-0", "n1", "shared", now.Add(-5*time.Minute))},
+		Volumes:     []*Volume{v},
+		Attachments: map[string]*storagev1.VolumeAttachment{AttachmentName("pvc-r", CSIDriver, "n1"): {Status: storagev1.VolumeAttachmentStatus{Attached: true}}},
+	}
+	rep := AnalyzeMounts(in, now, 0)
+	for _, nm := range rep.Nodes {
+		if nm.Stuck != 0 {
+			t.Errorf("RWX counted on the node: %+v", nm)
+		}
+	}
+	f := MountFindings(rep)
+	if len(f) != 1 || !strings.Contains(f[0].Hint, "restart share-manager pvc-r") {
+		t.Errorf("findings = %+v", f)
 	}
 }

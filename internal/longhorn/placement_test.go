@@ -137,12 +137,41 @@ func TestPlacementFindings(t *testing.T) {
 	ok.Name = "fine"
 	read := 0
 	nodes := []*Node{pNode("a", "", 2*gi, 0)}
-	f := PlacementFindings([]*Volume{v, ok}, []*Replica{pRep("a")}, nodes, func() PlacementSettings { read++; return PlacementSettingsFrom(nil) })
+	fineRep := pRep("a")
+	fineRep.Name, fineRep.Spec.VolumeName = "fine-r", "fine"
+	f := PlacementFindings([]*Volume{v, ok}, []*Replica{pRep("a"), fineRep}, nodes, func() PlacementSettings { read++; return PlacementSettingsFrom(nil) })
 	if len(f) != 1 || f[0].Object != "volume/vol" || !strings.Contains(f[0].Message, "room for 0") || read != 1 {
 		t.Errorf("findings %+v (settings read %d)", f, read)
 	}
 	read = 0
-	if f := PlacementFindings([]*Volume{ok}, nil, nodes, func() PlacementSettings { read++; return PlacementSettings{} }); len(f) != 0 || read != 0 {
+	if f := PlacementFindings([]*Volume{ok}, []*Replica{fineRep}, nodes, func() PlacementSettings { read++; return PlacementSettings{} }); len(f) != 0 || read != 0 {
 		t.Errorf("healthy: %+v, settings read %d", f, read)
+	}
+}
+
+// Longhorn may say "scheduled" while a replica has no node (volume created
+// with degraded availability) – doctor reports it, with hints.
+func TestPlacementFindingsNodelessReplica(t *testing.T) {
+	v := pVol(gi, 3)
+	v.Status.Conditions = []Condition{{Type: "Scheduled", Status: "True"}}
+	cordoned := pNode("c", "", 20*gi, 0)
+	cordoned.Status.Conditions[1] = Condition{Type: "Schedulable", Status: "False", Reason: "KubernetesNodeCordoned", Message: "Node c is cordoned"}
+	nodes := []*Node{pNode("a", "", 20*gi, 0), pNode("b", "", 20*gi, 0), cordoned}
+	unplaced := pRep("x")
+	unplaced.Spec.NodeID = ""
+	reps := []*Replica{pRep("a"), pRep("b"), unplaced}
+	f := PlacementFindings([]*Volume{v}, reps, nodes, func() PlacementSettings { return PlacementSettingsFrom(nil) })
+	if len(f) != 1 || !strings.Contains(f[0].Message, "not schedulable: c") {
+		t.Fatalf("findings %+v", f)
+	}
+	p := AnalyzePlacement(v, reps, nodes, PlacementSettingsFrom(nil))
+	h := strings.Join(p.Hints(), "\n")
+	if !strings.Contains(h, "kubectl uncordon") || !strings.Contains(h, "replica count") {
+		t.Errorf("hints %q", h)
+	}
+	// with room (c uncordoned) a missing replica is just being placed
+	nodes[2] = pNode("c", "", 20*gi, 0)
+	if f := PlacementFindings([]*Volume{v}, reps, nodes, func() PlacementSettings { return PlacementSettingsFrom(nil) }); len(f) != 0 {
+		t.Errorf("room: %+v", f)
 	}
 }

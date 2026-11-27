@@ -146,7 +146,12 @@ func printPlacement(p *longhorn.Placement, hypothetical bool) {
 	case p.Placeable() >= missing:
 		fmt.Printf("✔ %d replica(s) missing and there is room – Longhorn places them (it retries every few seconds)\n", missing)
 	default:
-		fmt.Printf("✘ %d replica(s) missing, room for %d – free space, lower the replica count, or allow soft anti-affinity\n", missing, p.Placeable())
+		fmt.Printf("✘ %d replica(s) missing, room for %d\n", missing, p.Placeable())
+	}
+	if p.Placeable() < max(missing, map[bool]int{true: p.Want}[hypothetical]) {
+		for _, h := range p.Hints() {
+			fmt.Println("  → " + h)
+		}
 	}
 }
 

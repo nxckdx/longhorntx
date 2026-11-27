@@ -172,6 +172,41 @@ func shortReason(n NodeVerdict) string {
 	return strings.TrimSpace(r)
 }
 
+// Hints: what would make room, from the reasons nodes were refused.
+func (p *Placement) Hints() []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(h string) {
+		if !seen[h] {
+			seen[h] = true
+			out = append(out, h)
+		}
+	}
+	for _, n := range p.Nodes {
+		if n.OK {
+			continue
+		}
+		r := shortReason(n)
+		switch {
+		case strings.HasPrefix(r, "already holds a replica"), strings.HasPrefix(r, "zone"):
+			add("lower the volume's replica count, add a node, or allow soft anti-affinity (replica-soft-anti-affinity / replica-zone-soft-anti-affinity, or per volume)")
+		case strings.HasPrefix(r, "over-provisioned"):
+			add("free scheduled space (old volumes, orphans), add disks, or raise storage-over-provisioning-percentage")
+		case strings.HasPrefix(r, "too little space"):
+			add("free real space on the disks (snapshots, old volumes) or add disks")
+		case strings.Contains(r, "Cordoned"), strings.HasPrefix(r, "not schedulable") && strings.Contains(n.Reason, "cordoned"):
+			add("kubectl uncordon the node (Longhorn's disable-scheduling-on-cordoned-node is on)")
+		case strings.HasPrefix(r, "scheduling disabled"):
+			add("enable Longhorn scheduling on the node/disk: lhtx --rw uncordon NODE[:DISK]")
+		case strings.HasPrefix(r, "tags"), strings.HasPrefix(r, "tagged"):
+			add("check the node/disk tags against the volume's selectors")
+		case strings.HasPrefix(r, "not ready"):
+			add("bring the node back (Longhorn shows it not ready)")
+		}
+	}
+	return out
+}
+
 // selectorsInTags: like Longhorn's types.IsSelectorsInTags – every
 // selector must be a tag; no selectors fit an untagged node/disk, or any
 // one if allowEmpty.
@@ -410,8 +445,17 @@ func PlacementFindings(vols []*Volume, replicas []*Replica, nodes []*Node, setti
 	var out []Finding
 	var s *PlacementSettings
 	for _, v := range vols {
-		c, ok := condition(v.Status.Conditions, "Scheduled")
-		if !ok || c.Status != "False" {
+		c, _ := condition(v.Status.Conditions, "Scheduled")
+		unscheduled := c.Status == "False"
+		// also: a replica without a node while Longhorn says scheduled
+		// ("allow volume creation with degraded availability")
+		placed := 0
+		for _, r := range byVol[v.Name] {
+			if r.Spec.NodeID != "" && r.Spec.FailedAt == "" && r.DeletionTimestamp == nil {
+				placed++
+			}
+		}
+		if !unscheduled && placed >= v.Spec.NumberOfReplicas {
 			continue
 		}
 		if s == nil {
@@ -420,7 +464,10 @@ func PlacementFindings(vols []*Volume, replicas []*Replica, nodes []*Node, setti
 		}
 		p := AnalyzePlacement(v, byVol[v.Name], nodes, *s)
 		msg := p.Problem()
-		if msg == "" {
+		switch {
+		case msg == "" && !unscheduled:
+			continue // room: Longhorn places it (a rebuild is starting)
+		case msg == "":
 			msg = "Longhorn could not place a replica (" + condReason(c) + "); by lhtx's reading there is room now – it retries"
 		}
 		out = append(out, Finding{Severity: SevWarning, Check: "placement", Object: "volume/" + v.Name, Message: msg,

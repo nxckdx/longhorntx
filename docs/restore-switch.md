@@ -102,4 +102,5 @@ shrunk with their own tools (dump/restore, CNPG).
 The app is down from step 4 to the end – about as long as reading the used
 data twice (copy, compare) takes, plus stopping and starting the app.
 `--dry-run` shows the plan; `--image` / `--image-pull-secret` for clusters
-without access to ghcr.io (default: the image of this lhtx version).
+without access to ghcr.io (default: env `LHTX_SHRINK_IMAGE`, else the image
+of this lhtx version). In the TUI: `K` in the volume details.

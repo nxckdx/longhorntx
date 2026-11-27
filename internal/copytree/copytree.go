@@ -402,7 +402,8 @@ type VerifyOptions struct {
 	Progress func(checked int64)
 }
 
-// Verify compares two trees walking the source and looking up each entry
+// Verify compares two trees walking the source (call sync first: the
+// target's content is then read from the disk, see fileHash) and looking up each entry
 // in the target (memory does not grow with the tree): the same entries with
 // the same type, mode, owner, size, symlink target, link count and
 // modification time – and, with Hashes, the same content. It then counts
@@ -505,6 +506,9 @@ func fileHash(p string, size int64, buf []byte) ([32]byte, error) {
 		return sum, err
 	}
 	defer f.Close()
+	// read what is on the disk, not what is still in the page cache from
+	// writing it (the caller synced: the pages are clean and can be dropped)
+	_ = unix.Fadvise(int(f.Fd()), 0, 0, unix.FADV_DONTNEED)
 	h := sha256.New()
 	blockHash(h, size, nil)
 	if _, err := scanData(f, size, buf, func(off int64, block []byte) error {

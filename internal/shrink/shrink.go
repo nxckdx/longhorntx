@@ -56,8 +56,22 @@ type Plan struct {
 	Image     string           `json:"image"`
 	Volume    map[string]any   `json:"volume"` // the new Longhorn volume (spec)
 	VolLabels map[string]any   `json:"volumeLabels,omitempty"`
-	Blockers  []string         `json:"blockers,omitempty"`
-	Warnings  []string         `json:"warnings,omitempty"`
+	// Node: where the probe and copy pods run (the old volume's node, the
+	// node of its replica for strict-local; "" = the scheduler picks for
+	// the probe and the copy follows it). NodeWhy says why.
+	Node        string   `json:"node,omitempty"`
+	NodeWhy     string   `json:"nodeWhy,omitempty"`
+	Tolerations []any    `json:"tolerations,omitempty"` // of the app's pod: its node may be tainted
+	PullSecrets []string `json:"pullSecrets,omitempty"`
+	ProbePod    string   `json:"probePod"`
+	Blockers    []string `json:"blockers,omitempty"`
+	Warnings    []string `json:"warnings,omitempty"`
+}
+
+// BuildOptions: the copy pod's image and pull secrets.
+type BuildOptions struct {
+	Image       string
+	PullSecrets []string
 }
 
 func (p *Plan) block(f string, a ...any) { p.Blockers = append(p.Blockers, fmt.Sprintf(f, a...)) }
@@ -84,7 +98,7 @@ var keepSpec = []string{
 }
 
 // Build plans the shrink of namespace/pvc to size bytes. Nothing changes.
-func Build(ctx context.Context, c *longhorn.Client, namespace, pvc string, size int64, image string, now time.Time) (*Plan, error) {
+func Build(ctx context.Context, c *longhorn.Client, namespace, pvc string, size int64, bo BuildOptions, now time.Time) (*Plan, error) {
 	name := shrinkName(pvc, now)
 	for i := 2; i <= 9 && exists(ctx, c, longhorn.GVRVolume, c.Namespace, name); i++ {
 		name = shrinkName(pvc, now) + "-" + strconv.Itoa(i) // another shrink today
@@ -93,13 +107,13 @@ func Build(ctx context.Context, c *longhorn.Client, namespace, pvc string, size 
 	if err != nil {
 		return nil, err
 	}
-	p := &Plan{Switch: sw, NewSize: size, Used: -1, Image: image,
-		TempPVC: "lhtx-shrink-" + pvc, TempPV: "lhtx-shrink-" + name}
-	if len(p.TempPVC) > 63 {
-		p.TempPVC = strings.TrimRight(p.TempPVC[:63], "-")
-	}
+	size = (size + 2<<20 - 1) &^ (2<<20 - 1) // Longhorn sizes are multiples of 2 MiB
+	sw.NewSize = size
+	p := &Plan{Switch: sw, NewSize: size, Used: -1, Image: bo.Image, PullSecrets: bo.PullSecrets,
+		TempPVC: tempPVCName(pvc), TempPV: "lhtx-shrink-" + name}
 	h := sha256.Sum256([]byte(namespace + "/" + pvc + now.String()))
 	p.CopyPod = "lhtx-shrink-copy-" + hex.EncodeToString(h[:])[:8]
+	p.ProbePod = "lhtx-shrink-probe-" + hex.EncodeToString(h[:])[:8]
 	// BuildPending compared encryption with "false": that check is about
 	// restores, not this – drop its blocker, the new volume follows the old
 	sw.Blockers = without(sw.Blockers, "encrypted")
@@ -130,6 +144,29 @@ func Build(ctx context.Context, c *longhorn.Client, namespace, pvc string, size 
 		}
 	}
 
+	// where the pods run: an old volume with data locality strict-local
+	// can only attach where its replica is; otherwise where the app ran
+	if ov.Spec.DataLocality == "strict-local" {
+		if rs, err := c.Replicas(ctx, ov.Name); err == nil && len(rs) > 0 {
+			p.Node, p.NodeWhy = rs[0].Spec.NodeID, "the old volume is strict-local: only its replica's node can attach it"
+		}
+		if p.Node == "" {
+			p.block("the old volume is strict-local but its replica's node is not known")
+		}
+	} else if ov.Status.CurrentNodeID != "" {
+		p.Node, p.NodeWhy = ov.Status.CurrentNodeID, "where the app runs now"
+	}
+	if sw.Freeze != nil && len(sw.Freeze.Pods) > 0 {
+		pns, pname, _ := strings.Cut(sw.Freeze.Pods[0], "/")
+		if po, err := c.Dynamic().Resource(gvrPod).Namespace(pns).Get(ctx, pname, metav1.GetOptions{}); err == nil {
+			p.Tolerations, _, _ = unstructured.NestedSlice(po.Object, "spec", "tolerations")
+		}
+	}
+	if ov.Status.LastBackup != "" || len(p.VolLabels) > 0 {
+		p.warn("backups of the new volume start a new chain under its own name (the first one is a full backup); the old volume's backups stay restorable (lhtx backupvolumes)")
+	}
+	p.warn("snapshots of the old volume do not move – they stay with the old volume")
+
 	// checks
 	switch {
 	case sw.VolumeMode == "Block":
@@ -147,7 +184,7 @@ func Build(ctx context.Context, c *longhorn.Client, namespace, pvc string, size 
 		p.block("volume %s exists already (nine shrinks today?) – delete old ones first", name)
 	}
 	if exists(ctx, c, gvrPVC, namespace, p.TempPVC) {
-		p.block("PVC %s/%s exists already (left over from a shrink?) – delete it first", namespace, p.TempPVC)
+		p.block("PVC %s/%s exists already – a shrink is running or was interrupted: lhtx --rw shrink --abort %s/%s", namespace, p.TempPVC, namespace, pvc)
 	}
 	if ns, err := c.Dynamic().Resource(gvrNS).Get(ctx, namespace, metav1.GetOptions{}); err == nil {
 		if ns.GetLabels()["pod-security.kubernetes.io/enforce"] == "restricted" {
@@ -254,9 +291,17 @@ func Run(ctx context.Context, c *longhorn.Client, p *Plan, o Options) error {
 		o.Poll = 3 * time.Second
 	}
 	r := &runner{c: c, p: p, o: o, ctx: ctx}
+	// everything that can fail without the app being down, first
+	if err := r.dryRunCopyPod(); err != nil {
+		return err
+	}
 	if err := r.createTarget(); err != nil {
 		r.cleanup(true)
 		return err
+	}
+	if err := r.preflight(); err != nil {
+		r.cleanup(true)
+		return fmt.Errorf("%w (nothing was stopped; the new volume was removed)", err)
 	}
 	err := switchover.Run(ctx, c, p.Switch, switchover.Options{
 		Log: o.Log, Journal: o.Journal, Wait: o.Wait, Poll: o.Poll,
@@ -279,6 +324,7 @@ type runner struct {
 	o      Options
 	ctx    context.Context
 	volUID string
+	node   string // where the probe ran: the copy pod runs there too
 }
 
 func (r *runner) createTarget() error {
@@ -287,7 +333,7 @@ func (r *runner) createTarget() error {
 	vol := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": longhorn.Group + "/" + longhorn.Version, "kind": "Volume",
 		"metadata": map[string]any{"name": sw.NewVolume, "namespace": r.c.Namespace, "labels": p.VolLabels,
-			"annotations": map[string]any{"lhtx.io/shrink-of": sw.OldVolume}},
+			"annotations": map[string]any{AnnShrinkOf: sw.OldVolume}},
 		"spec": p.Volume,
 	}}
 	created, err := dyn.Resource(longhorn.GVRVolume).Namespace(r.c.Namespace).Create(r.ctx, vol, metav1.CreateOptions{FieldManager: "lhtx"})
@@ -339,34 +385,138 @@ func (r *runner) createTarget() error {
 	return nil
 }
 
+// podObject is the copy pod (probe=false: mounts the old PVC read-only and
+// the new volume, copies) or the pre-flight probe (only the new volume).
+func (r *runner) podObject(probe bool) *unstructured.Unstructured {
+	sw, p := r.p.Switch, r.p
+	root := int64(0)
+	name, args, role := p.CopyPod, []any{"copy", "/src", "/dst"}, "copy"
+	mounts := []any{
+		map[string]any{"name": "src", "mountPath": "/src", "readOnly": true},
+		map[string]any{"name": "dst", "mountPath": "/dst"},
+	}
+	vols := []any{
+		map[string]any{"name": "src", "persistentVolumeClaim": map[string]any{"claimName": sw.PVC, "readOnly": true}},
+		map[string]any{"name": "dst", "persistentVolumeClaim": map[string]any{"claimName": p.TempPVC}},
+	}
+	if probe {
+		name, args, role = p.ProbePod, []any{"copy", "--probe", "/dst"}, "probe"
+		mounts, vols = mounts[1:], vols[1:]
+	}
+	spec := map[string]any{
+		"restartPolicy":                 "Never",
+		"terminationGracePeriodSeconds": int64(5),
+		"securityContext":               map[string]any{"runAsUser": root, "runAsGroup": root},
+		"containers": []any{map[string]any{
+			"name": "copy", "image": p.Image, "imagePullPolicy": "IfNotPresent",
+			"args": args, "volumeMounts": mounts,
+			// the content hashes of a tree with millions of files need memory
+			"resources": map[string]any{
+				"requests": map[string]any{"cpu": "100m", "memory": "64Mi"},
+				"limits":   map[string]any{"memory": "2Gi"},
+			},
+		}},
+		"volumes": vols,
+	}
+	if r.node != "" {
+		spec["affinity"] = map[string]any{"nodeAffinity": map[string]any{
+			"requiredDuringSchedulingIgnoredDuringExecution": map[string]any{"nodeSelectorTerms": []any{
+				map[string]any{"matchFields": []any{map[string]any{"key": "metadata.name", "operator": "In", "values": []any{r.node}}}},
+			}}}}
+	}
+	if len(p.Tolerations) > 0 {
+		spec["tolerations"] = p.Tolerations
+	}
+	if len(p.PullSecrets) > 0 {
+		var ps []any
+		for _, n := range p.PullSecrets {
+			ps = append(ps, map[string]any{"name": n})
+		}
+		spec["imagePullSecrets"] = ps
+	}
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "v1", "kind": "Pod",
+		"metadata": map[string]any{"name": name, "namespace": sw.Namespace,
+			"labels": map[string]any{LabelCopy: role, "app.kubernetes.io/managed-by": "lhtx"}},
+		"spec": spec,
+	}}
+}
+
+// dryRunCopyPod: the API server and every admission check (Pod Security,
+// policy engines, quotas, LimitRanges) see the copy pod before anything
+// is created. The temporary PVC does not exist yet – admission does not
+// look it up.
+func (r *runner) dryRunCopyPod() error {
+	r.node = r.p.Node
+	pod := r.podObject(false)
+	_, err := r.c.Dynamic().Resource(gvrPod).Namespace(r.p.Switch.Namespace).Create(r.ctx, pod,
+		metav1.CreateOptions{FieldManager: "lhtx", DryRun: []string{metav1.DryRunAll}})
+	if err != nil {
+		return fmt.Errorf("the copy pod would be rejected (nothing changed): %w", err)
+	}
+	r.o.Log("✔ the copy pod passes admission (server dry run)")
+	return nil
+}
+
+// preflight starts a pod that only mounts the new volume, before the app
+// is stopped: the image can be pulled, the pod can be scheduled (on the
+// chosen node), Longhorn can place the new replicas and attach the
+// volume, the filesystem (and encryption) is created and writable.
+func (r *runner) preflight() error {
+	sw, p := r.p.Switch, r.p
+	res := r.c.Dynamic().Resource(gvrPod).Namespace(sw.Namespace)
+	if _, err := res.Create(r.ctx, r.podObject(true), metav1.CreateOptions{FieldManager: "lhtx"}); err != nil {
+		return fmt.Errorf("pre-flight pod: %w", err)
+	}
+	defer r.deleteNamedPod(context.WithoutCancel(r.ctx), p.ProbePod)
+	r.o.Log("pre-flight pod %s: pulls the image, mounts and formats the new volume (the app still runs)", p.ProbePod)
+	start, lastLog, errs := time.Now(), time.Time{}, 0
+	for {
+		select {
+		case <-r.ctx.Done():
+			return r.ctx.Err()
+		case <-time.After(r.o.Poll):
+		}
+		po, err := res.Get(r.ctx, p.ProbePod, metav1.GetOptions{})
+		if err != nil {
+			if errs++; errs > transientErrors || apierrors.IsNotFound(err) {
+				return fmt.Errorf("pre-flight pod: %w", err)
+			}
+			continue
+		}
+		errs = 0
+		phase, _, _ := unstructured.NestedString(po.Object, "status", "phase")
+		switch phase {
+		case "Succeeded":
+			r.node, _, _ = unstructured.NestedString(po.Object, "spec", "nodeName")
+			r.o.Log("✔ pre-flight passed on node %s: image, scheduling, attach and the new filesystem work", r.node)
+			return nil
+		case "Failed":
+			msg := "the pre-flight pod failed"
+			if line, err := r.c.PodLogTail(r.ctx, sw.Namespace, p.ProbePod, 3); err == nil && strings.TrimSpace(line) != "" {
+				msg += ": " + strings.TrimSpace(line)
+			}
+			return fmt.Errorf("%s", msg)
+		}
+		if time.Since(start) > r.o.Wait {
+			return fmt.Errorf("the pre-flight pod did not run within %s (%s) – kubectl -n %s describe pod %s", r.o.Wait, waitingReason(po), sw.Namespace, p.ProbePod)
+		}
+		if time.Since(lastLog) > 15*time.Second {
+			lastLog = time.Now()
+			r.o.Log("… pre-flight: %s (%s)", phase, waitingReason(po))
+		}
+	}
+}
+
+// transientErrors: polls in a row that may fail (API server restart,
+// a network blip on the way to it) before lhtx gives up.
+const transientErrors = 40
+
 // copy runs while the PVC is frozen and its volume detached.
 func (r *runner) copy(ctx context.Context) error {
 	sw, p := r.p.Switch, r.p
 	dyn := r.c.Dynamic()
-	root := int64(0)
-	pod := &unstructured.Unstructured{Object: map[string]any{
-		"apiVersion": "v1", "kind": "Pod",
-		"metadata": map[string]any{"name": p.CopyPod, "namespace": sw.Namespace,
-			"labels": map[string]any{LabelCopy: "copy", "app.kubernetes.io/managed-by": "lhtx"}},
-		"spec": map[string]any{
-			"restartPolicy":                 "Never",
-			"terminationGracePeriodSeconds": int64(5),
-			"securityContext":               map[string]any{"runAsUser": root, "runAsGroup": root},
-			"containers": []any{map[string]any{
-				"name": "copy", "image": p.Image, "imagePullPolicy": "IfNotPresent",
-				"args": []any{"copy", "/src", "/dst"},
-				"volumeMounts": []any{
-					map[string]any{"name": "src", "mountPath": "/src", "readOnly": true},
-					map[string]any{"name": "dst", "mountPath": "/dst"},
-				},
-				"resources": map[string]any{"requests": map[string]any{"cpu": "100m", "memory": "64Mi"}},
-			}},
-			"volumes": []any{
-				map[string]any{"name": "src", "persistentVolumeClaim": map[string]any{"claimName": sw.PVC, "readOnly": true}},
-				map[string]any{"name": "dst", "persistentVolumeClaim": map[string]any{"claimName": p.TempPVC}},
-			},
-		},
-	}}
+	pod := r.podObject(false)
 	if _, err := dyn.Resource(gvrPod).Namespace(sw.Namespace).Create(ctx, pod, metav1.CreateOptions{FieldManager: "lhtx"}); err != nil {
 		return fmt.Errorf("start copy pod: %w", err)
 	}
@@ -401,6 +551,7 @@ func (r *runner) followCopy(ctx context.Context) (*copyReport, error) {
 	sw, p := r.p.Switch, r.p
 	start := time.Now()
 	lastLog := time.Time{}
+	errs := 0
 	var last copyReport
 	for {
 		select {
@@ -410,8 +561,16 @@ func (r *runner) followCopy(ctx context.Context) (*copyReport, error) {
 		}
 		po, err := r.c.Dynamic().Resource(gvrPod).Namespace(sw.Namespace).Get(ctx, p.CopyPod, metav1.GetOptions{})
 		if err != nil {
-			return nil, fmt.Errorf("copy pod: %w", err)
+			// the copy goes on in the cluster: a blip must not roll it back
+			if errs++; errs > transientErrors || apierrors.IsNotFound(err) {
+				return nil, fmt.Errorf("copy pod: %w", err)
+			}
+			if errs == 1 {
+				r.o.Log("… cannot reach the API server (%v) – retrying, the copy goes on in the cluster", err)
+			}
+			continue
 		}
+		errs = 0
 		phase, _, _ := unstructured.NestedString(po.Object, "status", "phase")
 		if phase == "Running" || phase == "Succeeded" || phase == "Failed" {
 			if line, err := r.c.PodLogTail(ctx, sw.Namespace, p.CopyPod, 2); err == nil {
@@ -475,20 +634,24 @@ func waitingReason(po *unstructured.Unstructured) string {
 	return "scheduling / attaching volumes"
 }
 
-func (r *runner) deletePod(ctx context.Context) {
-	sw, p := r.p.Switch, r.p
-	res := r.c.Dynamic().Resource(gvrPod).Namespace(sw.Namespace)
-	if err := res.Delete(ctx, p.CopyPod, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
-		r.o.Log("delete copy pod: %v", err)
+func (r *runner) deletePod(ctx context.Context) { r.deleteNamedPod(ctx, r.p.CopyPod) }
+
+// deleteNamedPod deletes a pod and waits until it is gone (its volumes
+// are released).
+func (r *runner) deleteNamedPod(ctx context.Context, name string) {
+	res := r.c.Dynamic().Resource(gvrPod).Namespace(r.p.Switch.Namespace)
+	if err := res.Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		r.o.Log("delete pod %s: %v", name, err)
 		return
 	}
 	deadline := time.Now().Add(r.o.Wait)
 	for time.Now().Before(deadline) {
-		if _, err := res.Get(ctx, p.CopyPod, metav1.GetOptions{}); apierrors.IsNotFound(err) {
+		if _, err := res.Get(ctx, name, metav1.GetOptions{}); apierrors.IsNotFound(err) {
 			return
 		}
 		time.Sleep(r.o.Poll)
 	}
+	r.o.Log("pod %s is still there after %s", name, r.o.Wait)
 }
 
 func (r *runner) deleteTemp(ctx context.Context) error {
@@ -571,6 +734,7 @@ func (r *runner) cleanup(deleteVolume bool) bool {
 	ctx := context.WithoutCancel(r.ctx)
 	sw, p := r.p.Switch, r.p
 	r.deletePod(ctx)
+	r.deleteNamedPod(ctx, p.ProbePod)
 	_ = r.c.Dynamic().Resource(gvrPVC).Namespace(sw.Namespace).Delete(ctx, p.TempPVC, metav1.DeleteOptions{})
 	_ = r.c.Dynamic().Resource(gvrPV).Delete(ctx, p.TempPV, metav1.DeleteOptions{})
 	if deleteVolume && r.volUID != "" {

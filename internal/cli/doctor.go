@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/nxckdx/longhorntx/internal/longhorn"
+	"github.com/nxckdx/longhorntx/internal/shrink"
 	"github.com/nxckdx/longhorntx/internal/switchover"
 )
 
@@ -73,6 +74,7 @@ func runDoctor(cmd *cobra.Command, g *globals, backupMaxAge time.Duration, minSe
 	in.Extra = append(in.Extra, c.HistoryChecks(cmd.Context())...)
 	in.Extra = append(in.Extra, c.CapacityChecks(cmd.Context())...)
 	in.Extra = append(in.Extra, c.RWXChecks(cmd.Context(), in.Volumes)...)
+	in.Extra = append(in.Extra, shrink.LeftoverChecks(in.Volumes)...)
 	in.Extra = append(in.Extra, c.MountChecks(cmd.Context(), in.Volumes, longhorn.NodeNames(in.Nodes))...)
 	all := longhorn.Diagnose(in)
 	var fs []longhorn.Finding

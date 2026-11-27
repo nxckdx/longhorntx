@@ -15,7 +15,9 @@ import (
 
 func shrinkCmd(g *globals) *cobra.Command {
 	var image string
+	var pullSecrets []string
 	var wait time.Duration
+	var abort bool
 	cmd := &cobra.Command{
 		Use:   "shrink NAMESPACE/PVC SIZE",
 		Short: "Make a volume smaller: new volume, copy the files, swap the PVC (needs --rw; the app is down while copying)",
@@ -40,13 +42,19 @@ Databases are better shrunk with their own tools (dump/restore, CNPG).
 lhtx must keep running until the end (Ctrl+C before the swap rolls back).`,
 		Example: `  lhtx --rw shrink shop/data 5Gi
   lhtx shrink shop/data 5Gi --dry-run`,
-		Args:              cobra.ExactArgs(2),
+		Args:              cobra.RangeArgs(1, 2),
 		ValidArgsFunction: g.completeVolumes,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			ns, pvc, ok := strings.Cut(args[0], "/")
 			if !ok || ns == "" || pvc == "" {
 				return fmt.Errorf("give the PVC as NAMESPACE/NAME")
+			}
+			if abort {
+				return g.shrinkAbort(cmd, ns, pvc)
+			}
+			if len(args) != 2 {
+				return fmt.Errorf("give the new size: lhtx shrink NAMESPACE/PVC SIZE")
 			}
 			q, err := resource.ParseQuantity(args[1])
 			if err != nil {
@@ -62,15 +70,19 @@ lhtx must keep running until the end (Ctrl+C before the swap rolls back).`,
 			if err != nil {
 				return err
 			}
-			p, err := shrink.Build(ctx, c, ns, pvc, q.Value(), image, time.Now())
+			p, err := shrink.Build(ctx, c, ns, pvc, q.Value(), shrink.BuildOptions{Image: image, PullSecrets: pullSecrets}, time.Now())
 			if err != nil {
 				return err
 			}
 			sw := p.Switch
 			fmt.Printf("Shrink PVC %s from %s to %s · %s\n\n", sw.PVCRef(), humanSize(p.OldSize), humanSize(p.NewSize), c.Cluster.Context)
 			if p.Used >= 0 {
-				fmt.Printf("  used: %s (%s)\n\n", humanSize(p.Used), p.UsedFrom)
+				fmt.Printf("  used: %s (%s)\n", humanSize(p.Used), p.UsedFrom)
 			}
+			if p.Node != "" {
+				fmt.Printf("  copy on node: %s (%s)\n", p.Node, p.NodeWhy)
+			}
+			fmt.Println()
 			for i, s := range p.Steps() {
 				fmt.Printf("  %2d. %s\n", i+1, s)
 			}
@@ -109,6 +121,42 @@ lhtx must keep running until the end (Ctrl+C before the swap rolls back).`,
 		},
 	}
 	cmd.Flags().StringVar(&image, "image", "", "image of the copy pod (default: ghcr.io/nxckdx/lhtx:<this version>)")
+	cmd.Flags().StringSliceVar(&pullSecrets, "image-pull-secret", nil, "pull secret(s) in the PVC's namespace for the copy pod's image")
+	cmd.Flags().BoolVar(&abort, "abort", false, "clean up an interrupted shrink of the PVC (copy pod, temporary PVC/PV, new volume) and unfreeze it")
 	cmd.Flags().DurationVar(&wait, "wait", 10*time.Minute, "how long to wait for pods to stop / start and volumes to detach")
 	return cmd
+}
+
+func (g *globals) shrinkAbort(cmd *cobra.Command, ns, pvc string) error {
+	ctx := cmd.Context()
+	c, err := g.client()
+	if err != nil {
+		return err
+	}
+	l, err := shrink.FindLeftovers(ctx, c, ns, pvc)
+	if err != nil {
+		return err
+	}
+	if l.Problem != "" {
+		return fmt.Errorf("%s", l.Problem)
+	}
+	if l.Empty() {
+		fmt.Printf("Nothing left over from a shrink of %s/%s.\n", ns, pvc)
+		return nil
+	}
+	fmt.Printf("Clean up the interrupted shrink of %s/%s · %s\n\n", ns, pvc, c.Cluster.Context)
+	for i, s := range l.Lines() {
+		fmt.Printf("  %2d. %s\n", i+1, s)
+	}
+	if l.Swapped {
+		fmt.Println("\n⚠ the PVC already uses the shrunk volume – only leftovers are removed")
+	}
+	if mode, err := g.dryRun(); err != nil || mode != longhorn.DryRunNone {
+		fmt.Println("\n(dry run: nothing changed)")
+		return err
+	}
+	if err := g.confirm(true, ns+"/"+pvc); err != nil {
+		return err
+	}
+	return shrink.Abort(ctx, c, l, func(f string, a ...any) { fmt.Printf(f+"\n", a...) })
 }

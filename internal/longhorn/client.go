@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/dynamic"
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
+	storagev1client "k8s.io/client-go/kubernetes/typed/storage/v1"
 	"k8s.io/client-go/metadata"
 
 	"github.com/nxckdx/longhorntx/internal/fuzzy"
@@ -51,6 +52,10 @@ type Client struct {
 	coreClient corev1client.CoreV1Interface
 	coreErr    error
 
+	storageOnce   sync.Once // mounts.go
+	storageClient storagev1client.StorageV1Interface
+	storageErr    error
+
 	meta metadata.Interface // secret names (secrets.go), created on first use
 	exec ExecFunc           // replaces pods/exec (demo, tests)
 }
@@ -70,6 +75,7 @@ func NewClient(c *kube.Cluster, namespace string) (*Client, error) {
 func NewClientFrom(c *kube.Cluster, namespace string, dyn dynamic.Interface, core corev1client.CoreV1Interface) *Client {
 	cl := &Client{Cluster: c, Namespace: namespace, dyn: dyn, coreClient: core}
 	cl.coreOnce.Do(func() {})
+	cl.storageOnce.Do(func() { cl.storageErr = errNoStorage })
 	return cl
 }
 

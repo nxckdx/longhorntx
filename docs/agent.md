@@ -161,6 +161,8 @@ names of volumes, PVCs or people):
 |---|---|
 | `lhtx_agent_leader` | 1 on the active agent, 0 on a standby |
 | `lhtx_agent_freezes{phase}`, `lhtx_agent_frozen_pvcs` | Freeze resources, PVCs frozen by the agent |
+| `lhtx_agent_freeze_oldest_seconds` | how long the oldest freeze has kept its apps down |
+| `lhtx_agent_volumes{robustness}` | volumes by robustness (needs the digests) |
 | `lhtx_agent_switches{phase}` | Switch resources |
 | `lhtx_agent_operations_total{kind,result}` | finished freezes, unfreezes, switches … |
 | `lhtx_agent_volume_events_total`, `lhtx_agent_digest_writes_total` | volume updates the agent saw vs digests written – the traffic lhtx saves |
@@ -173,6 +175,24 @@ Chart values: `metrics.service` (on; a Service with `prometheus.io/scrape`
 annotations, also in the plain manifests), `metrics.serviceMonitor.enabled`
 (Prometheus operator), `metrics.dashboard.enabled` (a ConfigMap with a
 Grafana dashboard for the sidecar, label `grafana_dashboard: "1"`).
+
+### Alerts
+
+`metrics.prometheusRule.enabled: true` adds a `PrometheusRule` (Prometheus
+operator; kube-prometheus-stack needs its `release` label in
+`metrics.prometheusRule.labels`):
+
+| alert | when |
+|---|---|
+| `LhtxAgentDown` | no agent holds the lease for 10 minutes |
+| `LonghornVolumeFaulted` | a volume is faulted for 5 minutes (critical) |
+| `LonghornVolumeDegraded` | a volume is degraded for `degradedFor` (30m) |
+| `LonghornBackupsFailing` | `backupFailures` (2) backups failed in 24 hours |
+| `LonghornReplicasFailing` | `replicaFailures` (3) replicas failed in an hour |
+| `LhtxFreezeLong` | a freeze has kept apps down for `frozenForSeconds` (6h) |
+| `LhtxFreezeOrSwitchStuck` | a Freeze freezing or failed, or a Switch stuck, for 30 minutes |
+
+The descriptions name the lhtx command that shows the details.
 
 How many lhtx TUIs use the agent cannot be seen by the agent – lhtx only
 talks to the API server. The dashboard takes it from the API server's own

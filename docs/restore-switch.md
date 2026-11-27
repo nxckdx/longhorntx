@@ -82,7 +82,15 @@ back: the app starts again on the old volume, the new volume is removed.
 The old volume is kept as the way back (`lhtx switch NS/PVC --to-volume
 OLD`); it keeps its space until you delete it (lhtx prints how).
 
-**If lhtx is killed** during a shrink (laptop closed), the PVC stays
+**With the [lhtx agent](agent.md)** (`rw: true`) the shrink runs in the
+cluster: lhtx and the TUI only follow it, closing the laptop changes
+nothing (`--local` runs it on your machine). The copy pod uses the agent's
+own image – it comes from wherever the agent's came from. If the agent
+itself restarts during the copy, the next one removes the unfinished copy
+(the PVC stays frozen) and starts it again; after the swap it finishes the
+switch.
+
+**If lhtx is killed** during a local shrink (laptop closed), the PVC stays
 frozen and the copy pod, the temporary PVC and the new volume stay.
 `lhtx doctor` reports them; `lhtx --rw shrink --abort NS/PVC` removes
 them and unfreezes – the app starts again on its old volume. If lhtx was

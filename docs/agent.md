@@ -88,6 +88,13 @@ it. Restores go into a new volume the agent marks as its own; a volume of the
 same name from before is never taken (it may hold changes) – the name gets
 `-2`, `-3`, ….
 
+
+A Switch with `spec.shrinkTo: 5Gi` instead of `toVolume`/`fromBackup` shrinks
+the PVC ([shrink](restore-switch.md#shrink-a-volume)); `lhtx shrink` and `K`
+in the TUI create it. The requester must also be allowed to create pods in
+the namespace (the copy pod runs there, with the agent's image;
+`spec.imagePullSecrets` names pull secrets in that namespace). An agent that
+stops hands its run over: nothing is rolled back, the next one continues.
 ## Less traffic: volume digests
 
 The agent keeps a small `VolumeDigest` per volume – the fields lhtx shows,

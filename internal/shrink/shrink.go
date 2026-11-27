@@ -25,6 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/nxckdx/longhorntx/internal/copytree"
+	"github.com/nxckdx/longhorntx/internal/format"
 	"github.com/nxckdx/longhorntx/internal/longhorn"
 	"github.com/nxckdx/longhorntx/internal/switchover"
 )
@@ -85,6 +86,9 @@ var keepSpec = []string{
 // Build plans the shrink of namespace/pvc to size bytes. Nothing changes.
 func Build(ctx context.Context, c *longhorn.Client, namespace, pvc string, size int64, image string, now time.Time) (*Plan, error) {
 	name := shrinkName(pvc, now)
+	for i := 2; i <= 9 && exists(ctx, c, longhorn.GVRVolume, c.Namespace, name); i++ {
+		name = shrinkName(pvc, now) + "-" + strconv.Itoa(i) // another shrink today
+	}
 	sw, err := switchover.BuildPending(ctx, c, namespace, pvc, name, size, false)
 	if err != nil {
 		return nil, err
@@ -140,7 +144,7 @@ func Build(ctx context.Context, c *longhorn.Client, namespace, pvc string, size 
 		p.block("%s is too small", human(size))
 	}
 	if exists(ctx, c, longhorn.GVRVolume, c.Namespace, name) {
-		p.block("volume %s exists already (a shrink today?) – delete it or wait a day", name)
+		p.block("volume %s exists already (nine shrinks today?) – delete old ones first", name)
 	}
 	if exists(ctx, c, gvrPVC, namespace, p.TempPVC) {
 		p.block("PVC %s/%s exists already (left over from a shrink?) – delete it first", namespace, p.TempPVC)
@@ -169,7 +173,12 @@ func Build(ctx context.Context, c *longhorn.Client, namespace, pvc string, size 
 		p.warn("how much of the volume is used is not known here (kubelet's stats need nodes/proxy or the volume is not mounted) – the copy pod checks it first and stops (rollback) if it does not fit")
 	}
 	p.Blockers = append(p.Blockers, sw.Blockers...)
-	p.Warnings = append(p.Warnings, sw.Warnings...)
+	for _, w := range without(sw.Warnings, "older than an expansion") {
+		if strings.HasPrefix(w, "encrypted: the new PV uses the same key Secret") {
+			w = strings.SplitN(w, " – ", 2)[0] + " – the new volume is encrypted with it"
+		}
+		p.Warnings = append(p.Warnings, w)
+	}
 	if owners := sw.Freeze.Owners; len(owners) > 0 {
 		for _, o := range owners {
 			if o.Kind == "StatefulSet" {
@@ -254,7 +263,12 @@ func Run(ctx context.Context, c *longhorn.Client, p *Plan, o Options) error {
 		AfterFreeze: r.copy,
 	})
 	if err != nil && !r.swapped(ctx) {
-		r.cleanup(true)
+		if r.cleanup(true) {
+			// the switch says the target stays – here it was removed
+			msg := strings.Replace(err.Error(), "volume "+p.Switch.NewVolume+" stays – delete it if not needed",
+				"the new volume "+p.Switch.NewVolume+" was removed", 1)
+			return fmt.Errorf("%s", msg)
+		}
 	}
 	return err
 }
@@ -362,8 +376,9 @@ func (r *runner) copy(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	r.o.Log("copied and verified: %d files, %d directories, %d links, %s in %s",
-		rep.Stats.Files, rep.Stats.Dirs, rep.Stats.Symlinks+rep.Stats.Hardlinks, human(rep.Stats.Bytes), (time.Duration(rep.Seconds) * time.Second).String())
+	r.o.Log("✔ copied and verified: %d files, %d directories, %d links, %s of data in %s",
+		rep.Stats.Files, rep.Stats.Dirs, rep.Stats.Symlinks+rep.Stats.Hardlinks, format.Bytes(rep.Stats.Bytes),
+		(time.Duration(rep.Seconds * float64(time.Second))).Round(100*time.Millisecond))
 	// the temporary PVC and PV go; the switch binds the PVC to the volume
 	if err := r.deleteTemp(ctx); err != nil {
 		return err
@@ -434,13 +449,13 @@ func (r *runner) followCopy(ctx context.Context) (*copyReport, error) {
 			case phase == "Pending":
 				r.o.Log("… copy pod %s: starting (%s)", p.CopyPod, waitingReason(po))
 			case last.Phase == "check" && last.Used > 0:
-				r.o.Log("… %s used, %s free in the new volume – copying", human(last.Used), human(last.Free))
+				r.o.Log("… %s used, %s free in the new volume – copying", format.Bytes(last.Used), format.Bytes(last.Free))
 			case last.Phase == "copy":
 				pct := ""
 				if last.Used > 0 {
 					pct = fmt.Sprintf(" (~%d %%)", min(99, last.Stats.Bytes*100/last.Used))
 				}
-				r.o.Log("… copying: %d files, %s%s", last.Stats.Files, human(last.Stats.Bytes), pct)
+				r.o.Log("… copying: %d files, %s%s", last.Stats.Files, format.Bytes(last.Stats.Bytes), pct)
 			case last.Phase == "verify":
 				r.o.Log("… comparing both trees")
 			}
@@ -552,7 +567,7 @@ func (r *runner) swapped(ctx context.Context) bool {
 
 // cleanup after a failure before the swap: the copy pod, the temporary
 // PVC/PV and the new volume go (the old volume was never changed).
-func (r *runner) cleanup(deleteVolume bool) {
+func (r *runner) cleanup(deleteVolume bool) bool {
 	ctx := context.WithoutCancel(r.ctx)
 	sw, p := r.p.Switch, r.p
 	r.deletePod(ctx)
@@ -564,8 +579,9 @@ func (r *runner) cleanup(deleteVolume bool) {
 			metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &u}})
 		if err == nil || apierrors.IsNotFound(err) {
 			r.o.Log("cleaned up: copy pod, PVC %s, PV %s and volume %s removed; %s is unchanged", p.TempPVC, p.TempPV, sw.NewVolume, sw.OldVolume)
-			return
+			return true
 		}
 		r.o.Log("cleanup: delete volume %s: %v", sw.NewVolume, err)
 	}
+	return false
 }

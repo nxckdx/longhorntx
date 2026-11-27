@@ -60,6 +60,7 @@ spec:
             {{- else }}
             - --no-history
             {{- end }}
+            - --capacity-interval={{ .Values.capacity.interval }}
             {{- with .Values.extraArgs }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

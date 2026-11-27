@@ -24,6 +24,7 @@ lhtx engineimages                    # engine images, state, how many volumes us
 lhtx targets                         # backup targets
 lhtx contexts                        # kubeconfig contexts
 lhtx history [VOLUME] [--bad --since 168h]  # rebuilds, failures, backups – kept by the lhtx agent
+lhtx capacity                    # when will the disks be full (trend; lhtx agent)
 lhtx doctor [--backup-max-age 36h]   # health check, exit code 0/1/2/3 (ok/warn/crit/error)
 lhtx overview [--contexts a,b]       # doctor summary for all kubeconfig contexts, one line each (+ agent)
 lhtx drain-check NODE                # what happens if NODE goes away (reboot/drain)

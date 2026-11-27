@@ -20,7 +20,7 @@ func agentCmd(g *globals) *cobra.Command {
 	var noDigests, noHistory bool
 	var rw, manifestsRW bool
 	var histVol, histCluster int
-	var histAge time.Duration
+	var histAge, capacityEvery time.Duration
 	cmd := &cobra.Command{
 		Use:   "agent",
 		Short: "Optional in-cluster agent: carries out freezes so they do not depend on your laptop",
@@ -62,6 +62,7 @@ lhtx-freeze to them. The agent itself needs rights like cluster-admin
 			a := agent.New(c, os.Getenv("POD_NAME"))
 			a.NoDigests, a.NoHistory, a.RW = noDigests, noHistory, rw
 			a.HistoryVolumeMax, a.HistoryClusterMax, a.HistoryMaxAge = histVol, histCluster, histAge
+			a.CapacityInterval = capacityEvery
 			a.SetVersion(Version)
 			if healthAddr != "" {
 				go func() {
@@ -83,6 +84,7 @@ lhtx-freeze to them. The agent itself needs rights like cluster-admin
 		},
 	}
 	cmd.Flags().BoolVar(&rw, "rw", false, "carry out Freezes and Switches (needs the write RBAC); without it the agent only reads and refuses them")
+	cmd.Flags().DurationVar(&capacityEvery, "capacity-interval", 6*time.Hour, "sample the disks for the capacity forecast (lhtx capacity) this often; 0 = off")
 	cmd.Flags().BoolVar(&noHistory, "no-history", false, "do not record VolumeHistories (lhtx history)")
 	cmd.Flags().IntVar(&histVol, "history-per-volume", longhorn.MaxVolumeHistory, "events kept per volume (at most 1000)")
 	cmd.Flags().IntVar(&histCluster, "history-cluster", longhorn.MaxClusterHistory, "notable events kept in the cluster-wide history (at most 5000)")

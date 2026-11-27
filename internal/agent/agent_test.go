@@ -26,6 +26,7 @@ func setupMode(t *testing.T, rw bool) (context.Context, *longhorn.Client, []stri
 	c := demo.NewClient(ctx)
 	a := agent.New(c, "agent-0")
 	a.RW = rw
+	a.CapacityInterval = time.Hour
 	a.Poll, a.Resync, a.Logf = 50*time.Millisecond, 200*time.Millisecond, t.Logf
 	go func() { _ = a.Run(ctx) }()
 	vols, _ := c.Volumes(ctx)
@@ -421,5 +422,21 @@ func TestAgentReadOnlyRefusesFreeze(t *testing.T) {
 	}
 	if _, err := c.Dynamic().Resource(gvrVAPt).Get(ctx, agent.PolicyName(name), metav1.GetOptions{}); err == nil {
 		t.Error("a read-only agent created a freeze policy")
+	}
+}
+
+// The agent takes a capacity sample at once when there is none.
+func TestAgentCapacitySample(t *testing.T) {
+	ctx, c, _ := setup(t)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		s, err := c.Capacity(ctx)
+		if err == nil && len(s) == 1 && len(s[0].Disks) > 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no capacity sample: %v %v", s, err)
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 }

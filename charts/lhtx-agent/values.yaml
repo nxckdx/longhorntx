@@ -86,6 +86,11 @@ history:
   cluster: 300 # notable events cluster-wide, at most 5000
   maxAge: ""
 
+# Capacity forecast (lhtx capacity, doctor): the agent samples the Longhorn
+# disks this often and keeps ~60 days of samples; "0" = off.
+capacity:
+  interval: 6h
+
 podDisruptionBudget:
   # created when replicaCount > 1
   minAvailable: 1

@@ -28,6 +28,7 @@ lhtx capacity                    # when will the disks be full (trend; lhtx agen
 lhtx doctor [--backup-max-age 36h]   # health check, exit code 0/1/2/3 (ok/warn/crit/error)
 lhtx overview [--contexts a,b]       # doctor summary for all kubeconfig contexts, one line each (+ agent)
 lhtx drain-check NODE                # what happens if NODE goes away (reboot/drain)
+lhtx mounts [--node N] [--min-wait 2m] # pods stuck mounting Longhorn volumes, per node, kubelet's view
 lhtx matrix [--problems]             # replica distribution volumes × nodes, shared node/disk first
 lhtx diag VOLUME                     # diagnostics bundle (tar.gz) for a bug report
 lhtx measure [-d 60s] [--backups]    # measure startup + watch traffic per resource
@@ -102,6 +103,7 @@ destructive ones), `d` runs a server-side dry run, `esc` cancels.
   a purge runs (hint: the known workaround is lowering the replica count until
   the snapshot is purged)
 - orphans
+- stuck mounts and the CSI side (see below)
 
 Engines and snapshots are only read for volumes that are rebuilding. Exit codes
 follow Nagios (0 ok, 1 warning, 2 critical, 3 error), so `lhtx doctor --min warning`
@@ -114,6 +116,52 @@ worst finding (`-o wide` adds traffic and duration). Clusters without
 Longhorn show `no Longhorn` and do not affect the exit code
 (`--ignore-not-installed` hides them). Unreachable clusters show the error.
 Exit code: worst of all clusters, 3 if one could not be checked.
+
+## Stuck mounts
+
+A node can look healthy in Longhorn and Kubernetes while pods there never get
+their volume: kubelet or the Longhorn CSI plugin on that node hangs, the
+node stays Ready, and often not even an event says so – the pod just sits in
+`ContainerCreating`. `lhtx mounts` (also part of `doctor` and the Health tab)
+finds those pods and says how far each got:
+
+| stage | meaning |
+|---|---|
+| `attach` | the volume is not attached to the node yet (Longhorn / kube-controller-manager side) |
+| `attach-error` | attaching failed (the VolumeAttachment's error) |
+| `mount` | attached, but kubelet / the CSI plugin on the node did not mount it |
+
+```
+NODE     POD             PVC              WAITING   STAGE   DETAIL
+node-2   shop/db-0       shop/data-db-0   14 min    mount   no events from kubelet; attached by Longhorn, but not mounted on the node
+
+NODE     READY   CSI DRIVER   CSI PLUGIN   STUCK            KUBELET
+node-2   true    ok           ready        1 (up to 14 min) healthz ok, 3/4 Longhorn volumes mounted, failed: NodeStageVolume DeadlineExceeded 6
+
+CRITICAL node/node-2: 1 pod(s) wait for up to 14 min for Longhorn volumes that are attached here but not mounted – kubelet or the CSI plugin on this node hangs
+  → first delete longhorn-csi-plugin-x7k2p (…); if that does not help, restart kubelet: systemctl restart rke2-agent (on the node)
+```
+
+Per node it checks that Longhorn's CSI driver is registered with kubelet
+(CSINode) and that the `longhorn-csi-plugin` pod is ready. For nodes with
+pods stuck at `mount` (and `--node`), lhtx asks kubelet itself through the
+API server's node proxy: `/healthz` (a hung sync loop shows up there),
+the volume manager's Longhorn volumes wanted vs. mounted, failed mount and
+CSI calls since kubelet started, and whether kubelet lists the volume as in
+use at all (if not, its volume manager is not working on it). That needs
+`get` on `nodes/proxy`; without it lhtx says so. A kubelet that does not
+answer within 10 seconds is reported as hanging.
+
+The hint fits how kubelet runs on the node: `rke2-agent` / `rke2-server`,
+`k3s-agent` / `k3s`, `talosctl service kubelet restart` on Talos, otherwise
+`systemctl restart kubelet`. lhtx never restarts anything itself.
+
+Traffic: one LIST of pending pods (field selector) plus CSINodes and the CSI
+plugin pods; only when pods wait: their VolumeAttachments (GET by name),
+events and nodes, and kubelet's metrics (~300 KB per asked node).
+
+The agent runs the same check every minute and records stuck mounts in the
+volume's history (see [agent.md](agent.md#stuck-mounts)).
 
 ## Node maintenance
 

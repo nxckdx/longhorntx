@@ -552,6 +552,53 @@ func readyPod(ctx context.Context, dyn dynamic.Interface, pods []string) string 
 // dry run until the policy rejects it (policies take a moment to load).
 func verifyEnforced(ctx context.Context, dyn dynamic.Interface, p *FreezePlan, o FreezeOptions) error {
 	ns, pvc, _ := strings.Cut(p.PVCs[0], "/")
+	deadline := time.Now().Add(30 * time.Second)
+	var last error
+	for time.Now().Before(deadline) {
+		err := testPod(ctx, dyn, ns, pvc)
+		if err != nil && strings.Contains(err.Error(), denyMarker) {
+			return nil
+		}
+		last = err
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Second):
+		}
+	}
+	if last != nil {
+		return fmt.Errorf("could not verify the policy – the test pod was rejected for another reason: %v (policy removed, nothing deleted)", last)
+	}
+	return fmt.Errorf("the API server does not enforce the policy after 30 s (policy removed, nothing deleted)")
+}
+
+// waitLifted: after the policy is deleted the API server still enforces it
+// for a moment (its policy cache). Owners nudged in that moment fail to
+// create their pods and fall into their back-off – the app would come back
+// only with the next nudge. Wait (at most 20 s) until a dry-run pod on the
+// PVC is no longer denied by the freeze.
+func waitLifted(ctx context.Context, dyn dynamic.Interface, pvcs []string) {
+	if len(pvcs) == 0 {
+		return
+	}
+	ns, pvc, _ := strings.Cut(pvcs[0], "/")
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		err := testPod(ctx, dyn, ns, pvc)
+		if err == nil || !strings.Contains(err.Error(), denyMarker) {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+}
+
+// testPod creates (dry run) a minimal pod mounting the PVC; the error says
+// whether the freeze policy denies it.
+func testPod(ctx context.Context, dyn dynamic.Interface, ns, pvc string) error {
 	f := false
 	t := true
 	uid := int64(65534)
@@ -567,24 +614,8 @@ func verifyEnforced(ctx context.Context, dyn dynamic.Interface, p *FreezePlan, o
 			"volumes": []any{map[string]any{"name": "v", "persistentVolumeClaim": map[string]any{"claimName": pvc}}},
 		},
 	}}
-	deadline := time.Now().Add(30 * time.Second)
-	var last error
-	for time.Now().Before(deadline) {
-		_, err := dyn.Resource(gvrPod).Namespace(ns).Create(ctx, pod, metav1.CreateOptions{DryRun: []string{metav1.DryRunAll}})
-		if err != nil && strings.Contains(err.Error(), denyMarker) {
-			return nil
-		}
-		last = err
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(time.Second):
-		}
-	}
-	if last != nil {
-		return fmt.Errorf("could not verify the policy – the test pod was rejected for another reason: %v (policy removed, nothing deleted)", last)
-	}
-	return fmt.Errorf("the API server does not enforce the policy after 30 s (policy removed, nothing deleted)")
+	_, err := dyn.Resource(gvrPod).Namespace(ns).Create(ctx, pod, metav1.CreateOptions{DryRun: []string{metav1.DryRunAll}})
+	return err
 }
 
 // waitVolumes waits until the volumes of the PVCs reach state.
@@ -774,6 +805,7 @@ func Unfreeze(ctx context.Context, c *longhorn.Client, f Freeze, o FreezeOptions
 	if err := removePolicy(ctx, dyn, f.Name); err != nil {
 		return fmt.Errorf("remove policy %s: %w", f.Name, err)
 	}
+	waitLifted(ctx, dyn, f.PVCs)
 	o.Log("✔ policy %s removed: pods may start again", f.Name)
 	woken := map[string]bool{}
 	for _, ow := range f.Hibernated {

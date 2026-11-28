@@ -90,6 +90,7 @@ type BackupTarget struct {
 		BackupTargetURL  string `json:"backupTargetURL"`
 		CredentialSecret string `json:"credentialSecret"`
 		PollInterval     string `json:"pollInterval"`
+		SyncRequestedAt  string `json:"syncRequestedAt,omitempty"`
 	} `json:"spec"`
 	Status struct {
 		Available    bool        `json:"available"`

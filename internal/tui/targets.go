@@ -131,7 +131,7 @@ func (m *model) targetForm(t *longhorn.BackupTarget) {
 		{key: "name", label: "name", value: s.Name, readOnly: t != nil},
 		{key: "url", label: "URL", value: s.URL},
 		secret,
-		{key: "poll", label: "poll interval", value: s.PollInterval, hint: "how often Longhorn reads the store, 0 = off"},
+		{key: "poll", label: "poll interval", value: format.Interval(s.PollInterval), hint: "how often Longhorn reads the store, 0 = off"},
 	}}
 	f.live = func(map[string]string) []string { return []string{"URL formats: " + longhorn.TargetURLHelp} }
 	f.submit = func(v map[string]string) (*longhorn.Action, error) {

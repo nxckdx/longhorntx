@@ -73,7 +73,23 @@ func TestTargetActions(t *testing.T) {
 		t.Error("default deletable")
 	}
 	sy := SyncTarget(tg, time.Date(2026, 11, 24, 10, 0, 0, 0, time.UTC))
-	if sy.Patch["spec"].(map[string]any)["syncRequestedAt"] != "2026-11-24T10:00:00Z" {
-		t.Errorf("%v", sy.Patch)
+	if sy.Patch["spec"].(map[string]any)["syncRequestedAt"] != "2026-11-24T10:00:00Z" || sy.Patch["metadata"] != nil {
+		t.Errorf("sync is a request, no resourceVersion: %v", sy.Patch)
+	}
+	// Longhorn stores durations as 1m0s: sent that way, and "1m" vs "1m0s"
+	// is no change
+	a, _ = CreateTarget(TargetSpec{Name: "n2", URL: "nfs://x:/y", PollInterval: "1m"}, nil, nil)
+	if p := a.Object["spec"].(map[string]any)["pollInterval"]; p != "1m0s" {
+		t.Errorf("create poll %v", p)
+	}
+	tg.Spec.PollInterval = "1m"
+	s = TargetSpecOf(tg)
+	s.PollInterval = "60s"
+	if _, err := UpdateTarget(tg, s, nil, nil); err == nil || !strings.Contains(err.Error(), "nothing changed") {
+		t.Errorf("1m → 60s: %v", err)
+	}
+	s.PollInterval = "2m"
+	if a, err := UpdateTarget(tg, s, nil, nil); err != nil || a.Patch["spec"].(map[string]any)["pollInterval"] != "2m0s" {
+		t.Errorf("1m → 2m: %v %v", err, a)
 	}
 }

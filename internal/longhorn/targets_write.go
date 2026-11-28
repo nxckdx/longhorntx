@@ -84,6 +84,19 @@ func (s TargetSpec) warnings() []string {
 	return w
 }
 
+// pollInterval in the form Longhorn stores it (a Go duration: 1m → 1m0s,
+// 0 → 0s). Its controller rewrites the spec to that form after a change, so
+// a value sent as "1m" looks changed by someone else on the next edit.
+func pollInterval(s string) string {
+	if d, err := time.ParseDuration(s); err == nil {
+		return d.String()
+	}
+	if s == "0" {
+		return "0s"
+	}
+	return s
+}
+
 func CreateTarget(s TargetSpec, others []*BackupTarget, secrets []string) (*Action, error) {
 	if s.PollInterval == "" {
 		s.PollInterval = "5m0s"
@@ -91,6 +104,7 @@ func CreateTarget(s TargetSpec, others []*BackupTarget, secrets []string) (*Acti
 	if err := s.Validate(others, secrets); err != nil {
 		return nil, err
 	}
+	s.PollInterval = pollInterval(s.PollInterval)
 	for _, o := range others {
 		if o.Name == s.Name {
 			return nil, fmt.Errorf("backup target %q exists", s.Name)
@@ -112,6 +126,7 @@ func UpdateTarget(t *BackupTarget, s TargetSpec, others []*BackupTarget, secrets
 	if err := s.Validate(others, secrets); err != nil {
 		return nil, err
 	}
+	s.PollInterval = pollInterval(s.PollInterval)
 	old := TargetSpecOf(t)
 	patch := map[string]any{}
 	var ch []Change
@@ -121,7 +136,7 @@ func UpdateTarget(t *BackupTarget, s TargetSpec, others []*BackupTarget, secrets
 	if s.Secret != old.Secret {
 		patch["credentialSecret"], ch = s.Secret, append(ch, Change{"spec.credentialSecret", old.Secret, s.Secret})
 	}
-	if s.PollInterval != old.PollInterval {
+	if s.PollInterval != pollInterval(old.PollInterval) {
 		patch["pollInterval"], ch = s.PollInterval, append(ch, Change{"spec.pollInterval", old.PollInterval, s.PollInterval})
 	}
 	if len(patch) == 0 {
@@ -166,11 +181,14 @@ func DeleteTarget(t *BackupTarget, vols []*Volume) (*Action, error) {
 // like the web UI's sync button – e.g. after another cluster wrote backups.
 func SyncTarget(t *BackupTarget, now time.Time) *Action {
 	ts := now.UTC().Format(time.RFC3339)
+	// a request, not a decision on the object's state: no resourceVersion
+	// (Longhorn's controller rewrites the target's spec itself, a cached
+	// object is often stale)
 	return &Action{
 		Title: "Sync backup target " + t.Name + " now",
 		Verb:  VerbPatch, GVR: GVRBackupTarget, Name: t.Name,
-		Patch:   patchWithRV(t.ResourceVersion, map[string]any{"syncRequestedAt": ts}),
-		Changes: []Change{{"spec.syncRequestedAt", "", ts}},
+		Patch:   map[string]any{"spec": map[string]any{"syncRequestedAt": ts}},
+		Changes: []Change{{"spec.syncRequestedAt", t.Spec.SyncRequestedAt, ts}},
 	}
 }
 

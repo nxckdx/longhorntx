@@ -18,6 +18,8 @@ lhtx delete snapshot NAME
 lhtx delete replica NAME                   # refused for the only healthy replica
 lhtx delete orphan NAME|--all-cleanable    # Longhorn deletes the data dir if cleanable (bulk skips risky ones)
 lhtx set replicas VOLUME COUNT             # volume must be attached
+lhtx restart share-manager VOLUME          # RWX: Longhorn starts a new NFS server (lhtx rwx)
+lhtx restart csi-plugin NODE               # the node's longhorn-csi-plugin pod (lhtx mounts)
 lhtx set setting NAME VALUE
 lhtx upgrade-engine VOLUME... --image v1.12.1   # like "Upgrade Engine" in the web UI
 lhtx expand VOLUME 20Gi|+5Gi               # through the PVC if bound (StorageClass must allow it)

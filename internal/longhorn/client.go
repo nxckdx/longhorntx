@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/dynamic"
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
+	discoveryv1client "k8s.io/client-go/kubernetes/typed/discovery/v1"
 	storagev1client "k8s.io/client-go/kubernetes/typed/storage/v1"
 	"k8s.io/client-go/metadata"
 
@@ -56,6 +57,10 @@ type Client struct {
 	storageClient storagev1client.StorageV1Interface
 	storageErr    error
 
+	discoveryOnce   sync.Once // rwx.go (EndpointSlices)
+	discoveryClient discoveryv1client.DiscoveryV1Interface
+	discoveryErr    error
+
 	meta metadata.Interface // secret names (secrets.go), created on first use
 	exec ExecFunc           // replaces pods/exec (demo, tests)
 }
@@ -76,6 +81,7 @@ func NewClientFrom(c *kube.Cluster, namespace string, dyn dynamic.Interface, cor
 	cl := &Client{Cluster: c, Namespace: namespace, dyn: dyn, coreClient: core}
 	cl.coreOnce.Do(func() {})
 	cl.storageOnce.Do(func() { cl.storageErr = errNoStorage })
+	cl.discoveryOnce.Do(func() { cl.discoveryErr = errNoStorage })
 	return cl
 }
 

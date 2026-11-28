@@ -62,7 +62,7 @@ func newNotifier(a *Agent, cfg Notify) *notifier {
 
 // notifiable: failures and degradations, and volumes healthy again.
 func notifiable(e longhorn.HistoryEvent) bool {
-	return e.Bad() || e.Kind == longhorn.HistMounted || (e.Kind == longhorn.HistRobustness && strings.HasSuffix(e.Text, "→ healthy") &&
+	return e.Bad() || e.Kind == longhorn.HistMounted || e.Kind == longhorn.HistShareManager || (e.Kind == longhorn.HistRobustness && strings.HasSuffix(e.Text, "→ healthy") &&
 		(strings.HasPrefix(e.Text, "degraded") || strings.HasPrefix(e.Text, "faulted")))
 }
 

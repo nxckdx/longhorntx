@@ -94,7 +94,7 @@ func (a *Agent) mountCheck(ctx context.Context, rep *longhorn.MountReport, waits
 }
 
 func (a *Agent) recordMount(ctx context.Context, volume string, e longhorn.HistoryEvent) {
-	a.Logf("mount check: %s", e.Text)
+	a.Logf("%s: %s", e.Kind, e.Text)
 	vol := &longhorn.Volume{}
 	vol.Name = volume
 	if a.c != nil {

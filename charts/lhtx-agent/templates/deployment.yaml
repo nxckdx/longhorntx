@@ -63,6 +63,8 @@ spec:
             - --capacity-interval={{ .Values.capacity.interval }}
             - --mount-check-interval={{ .Values.mountCheck.interval }}
             - --mount-check-after={{ .Values.mountCheck.after }}
+            - --nfs-probe-interval={{ .Values.nfsProbe.interval }}
+            - --nfs-probe-timeout={{ .Values.nfsProbe.timeout }}
             {{- if .Values.mountCheck.kubelet }}
             - --mount-check-kubelet
             {{- end }}

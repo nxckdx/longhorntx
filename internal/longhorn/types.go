@@ -113,6 +113,17 @@ type KubernetesStatus struct {
 	// LastPVCRefAt is set when the PVC no longer uses the volume (deleted
 	// or bound elsewhere); Namespace/PVCName then name the former PVC.
 	LastPVCRefAt string `json:"lastPVCRefAt"`
+	// LastPodRefAt is set when no pod uses the volume any more.
+	LastPodRefAt    string           `json:"lastPodRefAt,omitempty"`
+	WorkloadsStatus []WorkloadStatus `json:"workloadsStatus,omitempty"`
+}
+
+// WorkloadStatus: a pod using the volume, as Longhorn records it.
+type WorkloadStatus struct {
+	PodName      string `json:"podName"`
+	PodStatus    string `json:"podStatus"`
+	WorkloadName string `json:"workloadName,omitempty"`
+	WorkloadType string `json:"workloadType,omitempty"`
 }
 
 // BoundPVC is like PVC but only for the PVC that uses the volume now.

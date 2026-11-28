@@ -209,6 +209,24 @@ agent never restarts kubelet or pods.
 nodes with stuck mounts. It grants the agent `get` on `nodes/proxy`, which
 reaches every kubelet API – a powerful right, hence off by default.
 
+## RWX volumes
+
+A hung NFS server of an RWX volume is invisible to Kubernetes: the
+share-manager pod stays Ready, the ShareManager `running`, the client pods
+`Running` – while their I/O hangs. Every minute (`--nfs-probe-interval`,
+chart `nfsProbe.interval`) the agent sends each running share manager an NFS
+NULL call (a 44-byte RPC ping) and waits `nfsProbe.timeout` (10s). Two
+misses in a row are a bad `share-manager` event in the volume's history
+(notification, `lhtx rwx`, `doctor`), an answer again a recovery. The agent
+needs to reach the share-manager Services on port 2049 (mind
+NetworkPolicies).
+
+It also records share manager failures (`error`, the NFS server restarting
+under its clients) and container restarts of share-manager pods with the
+reason. Metrics `lhtx_agent_share_managers{state}`,
+`lhtx_agent_nfs_unresponsive`; alerts `LonghornNFSUnresponsive`,
+`LonghornShareManagerError`, `LonghornShareManagerRestarts`.
+
 ## Capacity forecast
 
 Longhorn shows how full a disk is, not how fast it fills. The agent samples
@@ -254,6 +272,7 @@ names of volumes, PVCs or people):
 | `lhtx_agent_digest_volumes` | volumes with a digest |
 | `lhtx_agent_history_events_total{kind}` | history events by kind (rebuilt, replica-failed, backup-failed, …) |
 | `lhtx_agent_rebuild_seconds` (sum/count) | durations of finished rebuilds |
+| `lhtx_agent_share_managers{state}`, `lhtx_agent_nfs_unresponsive` | RWX share managers by state; those whose NFS server does not answer |
 | `lhtx_agent_mounts_waiting{node,stage}` | pods waiting for a Longhorn volume longer than `mountCheck.after` |
 | `lhtx_agent_build_info{version}` | |
 
@@ -277,6 +296,9 @@ operator; kube-prometheus-stack needs its `release` label in
 | `LonghornReplicasFailing` | `replicaFailures` (3) replicas failed in an hour |
 | `LonghornMountStuck` | pods on a node wait for attached volumes that are not mounted, for 5 minutes (critical) |
 | `LonghornAttachStuck` | pods on a node wait for volumes to attach, for 10 minutes |
+| `LonghornNFSUnresponsive` | an RWX NFS server does not answer for 2 minutes (critical) |
+| `LonghornShareManagerError` | a share manager is in error for 5 minutes (critical) |
+| `LonghornShareManagerRestarts` | a share manager failed or restarted in the last hour |
 | `LhtxFreezeLong` | a freeze has kept apps down for `frozenForSeconds` (6h) |
 | `LhtxFreezeOrSwitchStuck` | a Freeze freezing or failed, or a Switch stuck, for 30 minutes |
 

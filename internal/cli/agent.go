@@ -26,6 +26,7 @@ func agentCmd(g *globals) *cobra.Command {
 	var notify agent.Notify
 	var probe agent.RestoreProbe
 	var mounts agent.MountCheck
+	var nfs agent.NFSProbe
 	var maxSize string
 	cmd := &cobra.Command{
 		Use:   "agent",
@@ -78,6 +79,7 @@ lhtx-freeze to them. The agent itself needs rights like cluster-admin
 			a.Notify = notify
 			a.Probe = probe
 			a.Mounts = mounts
+			a.NFS = nfs
 			if maxSize != "" {
 				q, err := resource.ParseQuantity(maxSize)
 				if err != nil {
@@ -117,6 +119,8 @@ lhtx-freeze to them. The agent itself needs rights like cluster-admin
 	cmd.Flags().DurationVar(&mounts.Interval, "mount-check-interval", time.Minute, "look for pods stuck mounting Longhorn volumes this often (lhtx mounts; 0 = off)")
 	cmd.Flags().DurationVar(&mounts.After, "mount-check-after", 5*time.Minute, "report a pod that waits longer than this for its volume")
 	cmd.Flags().BoolVar(&mounts.Kubelet, "mount-check-kubelet", false, "also ask kubelet on nodes with stuck mounts (needs get on nodes/proxy – a powerful right, see docs/agent.md)")
+	cmd.Flags().DurationVar(&nfs.Interval, "nfs-probe-interval", time.Minute, "send the NFS server of every RWX volume a NULL call this often – finds hung share managers Kubernetes shows as fine (0 = off)")
+	cmd.Flags().DurationVar(&nfs.Timeout, "nfs-probe-timeout", 10*time.Second, "an NFS server that does not answer within this is failing")
 	cmd.Flags().BoolVar(&noHistory, "no-history", false, "do not record VolumeHistories (lhtx history)")
 	cmd.Flags().IntVar(&histVol, "history-per-volume", longhorn.MaxVolumeHistory, "events kept per volume (at most 1000)")
 	cmd.Flags().IntVar(&histCluster, "history-cluster", longhorn.MaxClusterHistory, "notable events kept in the cluster-wide history (at most 5000)")

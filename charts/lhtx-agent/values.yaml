@@ -125,6 +125,15 @@ mountCheck:
   after: 5m
   kubelet: false
 
+# NFS probe: a hung NFS server of an RWX volume looks fine to Kubernetes
+# (pod Ready, ShareManager running) while all its clients hang. The agent
+# sends each running share manager an NFS NULL call (a 44-byte "ping") and
+# records when one stops answering (alert LonghornNFSUnresponsive). Needs
+# the agent to reach the share-manager Services on port 2049 (NetworkPolicy).
+nfsProbe:
+  interval: 1m # "0" = off
+  timeout: 10s
+
 podDisruptionBudget:
   # created when replicaCount > 1
   minAvailable: 1

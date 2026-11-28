@@ -29,6 +29,7 @@ lhtx doctor [--backup-max-age 36h]   # health check, exit code 0/1/2/3 (ok/warn/
 lhtx overview [--contexts a,b]       # doctor summary for all kubeconfig contexts, one line each (+ agent)
 lhtx drain-check NODE                # what happens if NODE goes away (reboot/drain)
 lhtx mounts [--node N] [--min-wait 2m] # pods stuck mounting Longhorn volumes, per node, kubelet's view
+lhtx rwx [-o wide]                   # RWX volumes: share manager, pod, endpoints, NFS options, clients
 lhtx matrix [--problems]             # replica distribution volumes × nodes, shared node/disk first
 lhtx diag VOLUME                     # diagnostics bundle (tar.gz) for a bug report
 lhtx measure [-d 60s] [--backups]    # measure startup + watch traffic per resource
@@ -103,7 +104,7 @@ destructive ones), `d` runs a server-side dry run, `esc` cancels.
   a purge runs (hint: the known workaround is lowering the replica count until
   the snapshot is purged)
 - orphans
-- stuck mounts and the CSI side (see below)
+- stuck mounts and the CSI side, RWX share managers (see below)
 
 Engines and snapshots are only read for volumes that are rebuilding. Exit codes
 follow Nagios (0 ok, 1 warning, 2 critical, 3 error), so `lhtx doctor --min warning`
@@ -139,7 +140,7 @@ NODE     READY   CSI DRIVER   CSI PLUGIN   STUCK            KUBELET
 node-2   true    ok           ready        1 (up to 14 min) healthz ok, 3/4 Longhorn volumes mounted, failed: NodeStageVolume DeadlineExceeded 6
 
 CRITICAL node/node-2: 1 pod(s) wait for up to 14 min for Longhorn volumes that are attached here but not mounted – kubelet or the CSI plugin on this node hangs
-  → first delete longhorn-csi-plugin-x7k2p (…); if that does not help, restart kubelet: systemctl restart rke2-agent (on the node)
+  → first restart the CSI plugin (lhtx --rw restart csi-plugin node-2); if that does not help, restart kubelet: systemctl restart rke2-agent (on the node)
 ```
 
 Per node it checks that Longhorn's CSI driver is registered with kubelet
@@ -162,6 +163,43 @@ events and nodes, and kubelet's metrics (~300 KB per asked node).
 
 The agent runs the same check every minute and records stuck mounts in the
 volume's history (see [agent.md](agent.md#stuck-mounts)).
+
+## RWX volumes
+
+Longhorn serves each ReadWriteMany volume over NFS from a share-manager pod.
+When it fails, client pods hang or get I/O errors – often while everything
+looks green. `lhtx rwx` shows the chain per RWX volume, and `doctor` reports
+what is wrong with it:
+
+```
+PVC / VOLUME   STATE      SHARE     POD NODE   POD                               RESTARTS   ENDPOINTS   CLIENTS   NFS OPTIONS
+shop/uploads   attached   running   node-3     ready 13 min, NFS NOT ANSWERING   0          1           2         vers=4.1,noresvport,softerr,timeo=600,retrans=5 (default)
+
+CRITICAL shop/uploads: the NFS server does not answer (lhtx agent, for 3 min) although its pod is Ready – client pods hang
+  → lhtx --rw restart share-manager pvc-… (Longhorn starts a new one; clients reconnect)
+```
+
+- share manager in `error`, or in use but not `running`
+- share-manager pod gone or not ready, restarts in the last 24 hours (with
+  the reason: OOMKilled, exit code …) – clients may have seen I/O errors
+- the Service has no ready endpoint; the pod runs on another node than the
+  volume is attached to
+- NFS options: the StorageClass's `nfsOptions` or Longhorn's default;
+  `hard` is noted (client I/O blocks for good while the server is away)
+- **NFS server not answering**: only the [agent](agent.md#rwx-volumes) can
+  tell – it pings every share manager from inside the cluster
+
+A pod stuck mounting an RWX volume (`lhtx mounts`) points to the share
+manager, not to the node. Fixes, with preview and `--rw`:
+
+```
+lhtx --rw restart share-manager VOLUME   # Longhorn starts a new NFS server; clients reconnect
+lhtx --rw restart csi-plugin NODE        # the node's longhorn-csi-plugin pod (stuck mounts)
+```
+
+Reads only if there are RWX volumes: ShareManagers, the share-manager pods,
+their EndpointSlices, the cluster history, and (`lhtx rwx` only) one PV per
+RWX volume.
 
 ## Node maintenance
 

@@ -36,7 +36,7 @@ write actions are not tested.
   [usage](docs/usage.md)
 - **Health**: `lhtx doctor` / Health tab, `lhtx overview` across all
   clusters, drain check before node work, stuck mounts on "healthy" nodes
-  (hung kubelet / CSI plugin), diagnostics bundle –
+  (hung kubelet / CSI plugin), RWX share managers and hung NFS servers, diagnostics bundle –
   [usage](docs/usage.md#health-check)
 - **Changes** with preview, confirmation and server dry run: snapshots,
   backups, replicas, expansion, attach/detach, scheduling and eviction,

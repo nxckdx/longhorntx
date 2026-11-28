@@ -33,11 +33,14 @@ type metrics struct {
 	historyKinds  sync.Map     // kind → *atomic.Int64
 	rebuildSecs   atomic.Int64 // summed durations of finished rebuilds
 	rebuilds      atomic.Int64
-	probeOK       atomic.Int64                      // unix time of the last successful restore probe
+	probeOK       atomic.Int64 // unix time of the last successful restore probe
+	nfsDown       atomic.Int64 // share managers whose NFS server does not answer
+	nfsProbed     atomic.Bool
 	mountsWaiting atomic.Pointer[map[[2]string]int] // node, stage → pods (mount check on)
 
 	freezes, switches cache.Store // set by Run (leader)
 	volumes           cache.Store // set by runDigests (leader, digests on)
+	shares            cache.Store // share managers, set by watchShares (history on)
 	version           string
 }
 
@@ -110,6 +113,14 @@ func (a *Agent) writeMetrics(w io.Writer) {
 		}
 		p("lhtx_agent_volumes", "gauge", "Longhorn volumes by robustness (healthy, degraded, faulted, unknown = detached).")
 		writeByLabel(w, "lhtx_agent_volumes", "robustness", rob)
+	}
+	if m.shares != nil {
+		p("lhtx_agent_share_managers", "gauge", "Share managers (NFS servers of RWX volumes) by state.")
+		writeByLabel(w, "lhtx_agent_share_managers", "state", shareStates(m.shares))
+	}
+	if m.nfsProbed.Load() {
+		p("lhtx_agent_nfs_unresponsive", "gauge", "Running share managers whose NFS server does not answer a NULL call (RWX clients hang).")
+		fmt.Fprintf(w, "lhtx_agent_nfs_unresponsive %d\n", m.nfsDown.Load())
 	}
 	if m.switches != nil {
 		phases := map[string]int{}

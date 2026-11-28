@@ -35,7 +35,7 @@ rules:
   # read only
   - apiGroups: [""]
     resources: [pods, persistentvolumeclaims, persistentvolumes]
-    verbs: [get, list]
+    verbs: [get, list, watch] # watch: share-manager pods (RWX history)
   - apiGroups: [""]
     resources: [pods/log]
     verbs: [get] # LogQueries (lhtx diag): read and filter in the cluster
@@ -45,6 +45,9 @@ rules:
   - apiGroups: [longhorn.io]
     resources: [settings, backupvolumes, engines, nodes] # nodes: capacity samples
     verbs: [get, list]
+  - apiGroups: [longhorn.io]
+    resources: [sharemanagers]
+    verbs: [get, list, watch] # RWX history
   # mount check (lhtx mounts): pods stuck mounting, their events, the
   # VolumeAttachments, nodes, CSI registration
   - apiGroups: [""]

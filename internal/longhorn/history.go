@@ -54,6 +54,8 @@ const (
 	// or mounted (lhtx mounts); HistMounted: it no longer waits.
 	HistMountStuck = "mount-stuck"
 	HistMounted    = "mounted"
+	// HistShareManager: the NFS server of an RWX volume failed or restarted.
+	HistShareManager = "share-manager"
 )
 
 // HistoryEvent is one entry.
@@ -70,7 +72,7 @@ type HistoryEvent struct {
 func (e HistoryEvent) Notable() bool {
 	switch e.Kind {
 	case HistRobustness, HistReplicaFailed, HistBackupFailed, HistRebuildDone, HistRestoreProbe, HistRestoreProbeFailed,
-		HistMountStuck, HistMounted:
+		HistMountStuck, HistMounted, HistShareManager:
 		return true
 	}
 	return false
@@ -83,6 +85,8 @@ func (e HistoryEvent) Bad() bool {
 		return true
 	case HistRobustness:
 		return strings.HasSuffix(e.Text, "degraded") || strings.HasSuffix(e.Text, "faulted")
+	case HistShareManager:
+		return !strings.HasSuffix(e.Text, "→ running")
 	}
 	return false
 }

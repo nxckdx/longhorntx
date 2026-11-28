@@ -75,6 +75,29 @@ spec:
           annotations:
             summary: "Pods on {{ "{{" }} $labels.node {{ "}}" }} wait for Longhorn volumes to attach"
             description: lhtx mounts shows which volumes and why.
+        - alert: LonghornShareManagerError
+          expr: sum(lhtx_agent_share_managers{state="error"}) > 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "{{ "{{" }} $value {{ "}}" }} RWX share manager(s) in error"
+            description: The NFS server of an RWX volume is down – its client pods hang or get I/O errors. lhtx rwx; fix with lhtx --rw restart share-manager VOLUME.
+        - alert: LonghornNFSUnresponsive
+          expr: max(lhtx_agent_nfs_unresponsive) > 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "{{ "{{" }} $value {{ "}}" }} RWX NFS server(s) do not answer"
+            description: The share manager looks running but its NFS server does not answer – client pods hang. lhtx history --kind share-manager --since 1h names the volume; fix with lhtx --rw restart share-manager VOLUME.
+        - alert: LonghornShareManagerRestarts
+          expr: sum(increase(lhtx_agent_history_events_total{kind="share-manager"}[1h])) > 0
+          labels:
+            severity: warning
+          annotations:
+            summary: An RWX share manager failed or restarted
+            description: Client pods may have seen I/O errors or stale file handles. lhtx history --kind share-manager --since 1h
         - alert: LhtxFreezeLong
           expr: max(lhtx_agent_freeze_oldest_seconds) > {{ $r.frozenForSeconds }}
           labels:

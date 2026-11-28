@@ -47,7 +47,7 @@ func NewClient(ctx context.Context) *longhorn.Client {
 		longhorn.GVRVolume, longhorn.GVRReplica, longhorn.GVREngine, longhorn.GVRNode,
 		longhorn.GVRSetting, longhorn.GVRSnapshot, longhorn.GVRBackup, longhorn.GVRBackupTarget,
 		longhorn.GVRRecurringJob, longhorn.GVREngineImage, longhorn.GVROrphan,
-		longhorn.GVRVolumeAttachment, longhorn.GVRBackupVolume,
+		longhorn.GVRVolumeAttachment, longhorn.GVRBackupVolume, longhorn.GVRShareManager,
 	} {
 		kinds[g] = kindOf(g) + "List"
 	}
@@ -207,7 +207,7 @@ func kindOf(g schema.GroupVersionResource) string {
 		"volumes": "Volume", "replicas": "Replica", "engines": "Engine", "nodes": "Node",
 		"settings": "Setting", "snapshots": "Snapshot", "backups": "Backup",
 		"backuptargets": "BackupTarget", "recurringjobs": "RecurringJob",
-		"engineimages": "EngineImage", "orphans": "Orphan", "volumeattachments": "VolumeAttachment",
+		"engineimages": "EngineImage", "orphans": "Orphan", "volumeattachments": "VolumeAttachment", "sharemanagers": "ShareManager",
 		"backupvolumes": "BackupVolume",
 	}[g.Resource]
 }

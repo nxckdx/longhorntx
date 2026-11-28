@@ -57,7 +57,7 @@ func NewClient(ctx context.Context) *longhorn.Client {
 		gvrReplicaSet: "ReplicaSetList", gvrDeployment: "DeploymentList", gvrStatefulSet: "StatefulSetList",
 		gvrHPA: "HorizontalPodAutoscalerList", gvrKS: "KustomizationList", gvrHR: "HelmReleaseList",
 		gvrVAP: "ValidatingAdmissionPolicyList", gvrVAPB: "ValidatingAdmissionPolicyBindingList",
-		gvrCluster: "ClusterList", gvrProm: "PrometheusList",
+		gvrProm:                                 "PrometheusList",
 		{Version: "v1", Resource: "configmaps"}: "ConfigMapList", {Version: "v1", Resource: "secrets"}: "SecretList",
 		agent.GVRFreeze: "FreezeList", gvrLease: "LeaseList", agent.GVRSwitch: "SwitchList",
 		longhorn.GVRVolumeDigest: "VolumeDigestList", longhorn.GVRVolumeHistory: "VolumeHistoryList", agent.GVRLogQuery: "LogQueryList"} {

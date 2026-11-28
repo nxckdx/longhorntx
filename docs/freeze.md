@@ -24,9 +24,9 @@ pods are deleted and lhtx waits until the volumes are detached.
 
 Clustered apps shut down cleanly: each app's pods stop one after the other,
 highest ordinal first (like a StatefulSet scales down), each with its normal
-grace period; apps run in parallel. CloudNativePG clusters are hibernated
-(`cnpg.io/hibernation: on`), so the operator stops them itself and keeps the
-PVCs. App knowledge comes from **hooks** – a command run with `sh -c` via
+grace period; apps run in parallel. Pods of an operator are treated like any
+other: deleted, and the operator cannot start them again until the unfreeze.
+App knowledge comes from **hooks** – a command run with `sh -c` via
 `pods/exec` in a ready pod of the app; a failing pre-freeze hook stops the
 freeze before anything is stopped. Keep hooks idempotent: the agent runs the
 pre-freeze hooks again if it restarts in the middle of a freeze:

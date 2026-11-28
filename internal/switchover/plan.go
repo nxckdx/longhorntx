@@ -213,15 +213,6 @@ func build(ctx context.Context, c *longhorn.Client, namespace, pvc, newVolume st
 	}
 	p.Freeze = fp
 	p.Warnings = append(p.Warnings, fp.Warnings...)
-	for _, pod := range fp.Pods {
-		ns, n, _ := strings.Cut(pod, "/")
-		if po, err := dyn.Resource(gvrPod).Namespace(ns).Get(ctx, n, metav1.GetOptions{}); err == nil {
-			if k, cl := owner(po); k == "Cluster" {
-				p.warn("this is an instance of the CloudNativePG cluster %s: restoring one instance's PVC does not restore the database "+
-					"consistently (the other instances keep their data, the operator may re-sync or fail over) – prefer CNPG's own recovery", cl)
-			}
-		}
-	}
 	if p.OldReclaim == "Delete" {
 		p.warn("the old PV has reclaim policy Delete: it is set to Retain first, so deleting the old PVC keeps the old volume for a rollback")
 	}
@@ -238,19 +229,6 @@ func mountsClaim(pod *unstructured.Unstructured, claim string) bool {
 		}
 	}
 	return false
-}
-
-// owner returns the controller owner reference (kind, name).
-func owner(o *unstructured.Unstructured) (string, string) {
-	for _, r := range o.GetOwnerReferences() {
-		if r.Controller != nil && *r.Controller {
-			return r.Kind, r.Name
-		}
-	}
-	if refs := o.GetOwnerReferences(); len(refs) > 0 {
-		return refs[0].Kind, refs[0].Name
-	}
-	return "", ""
 }
 
 // keepAnnotations drops what the PV controller set for the old binding;
@@ -301,13 +279,6 @@ func (p *Plan) Steps() []string {
 		}
 	}
 	add("freeze %s (admission policy: no pod may mount it, only lhtx may delete/create it) and %s", p.PVCRef(), pods)
-	if p.Freeze != nil {
-		for _, g := range p.Freeze.Groups {
-			if g.Hibernate {
-				add("hibernate the CloudNativePG cluster %s (the operator stops it cleanly)", g.Owner.Name)
-			}
-		}
-	}
 	add("wait until volume %s is detached", p.OldVolume)
 	if p.OldReclaim != "Retain" {
 		add("PV %s: reclaim policy %s → Retain (keeps volume %s)", p.OldPV, p.OldReclaim, p.OldVolume)

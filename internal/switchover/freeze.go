@@ -44,11 +44,12 @@ const (
 	annAttached    = "lhtx.io/attached" // ns/name of PVCs whose volume was attached
 	annReason      = "lhtx.io/reason"
 	annPostHooks   = "lhtx.io/post-hooks" // JSON []groupHook: run after unfreeze
-	annHibernated  = "lhtx.io/hibernated" // JSON []Owner: CNPG clusters to wake up
-	annCNPG        = "cnpg.io/hibernation"
-	annUser        = "lhtx.io/user"
-	annRequest     = "lhtx.io/request" // name of the Freeze resource the agent works on
-	denyMarker     = "frozen by lhtx"
+	// annHibernated: set by lhtx ≤ 0.7 on freezes that hibernated an
+	// operator's cluster; unfreeze only reminds to wake them by hand.
+	annHibernated = "lhtx.io/hibernated"
+	annUser       = "lhtx.io/user"
+	annRequest    = "lhtx.io/request" // name of the Freeze resource the agent works on
+	denyMarker    = "frozen by lhtx"
 )
 
 // Owner is the controller of a deleted pod; it is nudged on unfreeze.
@@ -67,9 +68,6 @@ type Group struct {
 	Pods  []string `json:"pods"` // ns/name in stop order (highest ordinal first)
 	Pre   *Hook    `json:"pre,omitempty"`
 	Post  *Hook    `json:"post,omitempty"`
-	// Hibernate: a CloudNativePG cluster – the operator shuts it down
-	// cleanly (cnpg.io/hibernation: on) instead of lhtx deleting pods.
-	Hibernate bool `json:"hibernate,omitempty"`
 	// Display names the app as people know it (the Deployment rather than
 	// its ReplicaSet).
 	Display string `json:"display,omitempty"`
@@ -96,7 +94,7 @@ type Freeze struct {
 	PVCs       []string    `json:"pvcs"`
 	Owners     []Owner     `json:"owners"`
 	PostHooks  []groupHook `json:"postHooks,omitempty"`
-	Hibernated []Owner     `json:"hibernated,omitempty"`
+	Hibernated []Owner     `json:"hibernated,omitempty"` // from lhtx ≤ 0.7, see annHibernated
 	Attached   []string    `json:"attached"`
 	Reason     string      `json:"reason"`
 	User       string      `json:"user"`
@@ -193,7 +191,6 @@ func PlanFreeze(ctx context.Context, c *longhorn.Client, pvcs []string, reason s
 
 	owners := map[string]Owner{}
 	withPod := map[string]bool{}
-	cnpg := map[string]bool{}
 	groups := map[string]*Group{}
 	var order []string
 	firstPod := map[string]*unstructured.Unstructured{}
@@ -224,7 +221,7 @@ func PlanFreeze(ctx context.Context, c *longhorn.Client, pvcs []string, reason s
 				key = "pod " + ns + "/" + pod.GetName()
 			}
 			if groups[key] == nil {
-				groups[key] = &Group{Owner: o, Hibernate: hasOwner && o.Kind == "Cluster" && strings.HasPrefix(o.APIVersion, "postgresql.cnpg.io/")}
+				groups[key] = &Group{Owner: o}
 				order = append(order, key)
 				firstPod[key] = pod
 			}
@@ -233,9 +230,6 @@ func PlanFreeze(ctx context.Context, c *longhorn.Client, pvcs []string, reason s
 				owners[o.String()] = o
 			} else {
 				p.Warnings = append(p.Warnings, fmt.Sprintf("pod %s/%s has no owner: it is deleted and will not come back by itself", ns, pod.GetName()))
-			}
-			if k, n := owner(pod); k == "Cluster" && !cnpg[ns+"/"+n] {
-				cnpg[ns+"/"+n] = true
 			}
 		}
 	}
@@ -356,22 +350,17 @@ func policyObjects(name string, p *FreezePlan, now time.Time, request string) (*
 	sort.Slice(nsList, func(i, j int) bool { return nsList[i].(string) < nsList[j].(string) })
 	owners, _ := json.Marshal(p.Owners)
 	var posts []groupHook
-	var hib []Owner
 	for _, g := range p.Groups {
 		if g.Post != nil {
 			posts = append(posts, groupHook{Owner: g.Owner, Hook: g.Post})
 		}
-		if g.Hibernate {
-			hib = append(hib, g.Owner)
-		}
 	}
 	postJSON, _ := json.Marshal(posts)
-	hibJSON, _ := json.Marshal(hib)
 	meta := map[string]any{"name": name,
 		"labels": map[string]any{labelManagedBy: "lhtx"},
 		"annotations": map[string]any{annPVCs: strings.Join(p.PVCs, ","), annOwners: string(owners),
 			annAttached: strings.Join(p.Attached, ","), annReason: p.Reason, annUser: p.User,
-			annPostHooks: string(postJSON), annHibernated: string(hibJSON),
+			annPostHooks:      string(postJSON),
 			"lhtx.io/created": now.UTC().Format(time.RFC3339)}}
 	if request != "" {
 		meta["annotations"].(map[string]any)[annRequest] = request
@@ -500,12 +489,9 @@ func ApplyFreeze(ctx context.Context, c *longhorn.Client, p *FreezePlan, o Freez
 		if g.Post != nil {
 			f.PostHooks = append(f.PostHooks, groupHook{Owner: g.Owner, Hook: g.Post})
 		}
-		if g.Hibernate {
-			f.Hibernated = append(f.Hibernated, g.Owner)
-		}
 	}
 	if prev != nil {
-		f.PostHooks, f.Hibernated = mergeHooks(prev.PostHooks, f.PostHooks), mergeOwners(prev.Hibernated, f.Hibernated)
+		f.PostHooks, f.Hibernated = mergeHooks(prev.PostHooks, f.PostHooks), prev.Hibernated
 	}
 	// pre-freeze hooks first: if one fails nothing is stopped
 	for _, g := range p.Groups {
@@ -807,20 +793,11 @@ func Unfreeze(ctx context.Context, c *longhorn.Client, f Freeze, o FreezeOptions
 	}
 	waitLifted(ctx, dyn, f.PVCs)
 	o.Log("✔ policy %s removed: pods may start again", f.Name)
-	woken := map[string]bool{}
 	for _, ow := range f.Hibernated {
-		if err := hibernate(ctx, c, ow, false); err != nil {
-			o.Log("⚠ could not wake %s: %v – set %s: off yourself", ow, err, annCNPG)
-			continue
-		}
-		woken[ow.String()] = true
-		o.Log("✔ %s woken up (%s: off)", ow, annCNPG)
+		o.Log("⚠ an older lhtx hibernated %s for this freeze – wake it up yourself (its operator's hibernation setting)", ow)
 	}
 	nudged := 0
 	for _, ow := range f.Owners {
-		if woken[ow.String()] {
-			continue
-		}
 		if err := nudge(ctx, c, ow); err != nil {
 			o.Log("⚠ could not nudge %s: %v (it starts its pods after its own back-off)", ow, err)
 			continue
@@ -860,7 +837,7 @@ func Unfreeze(ctx context.Context, c *longhorn.Client, f Freeze, o FreezeOptions
 		}
 		n := 0
 		for _, ow := range f.Owners {
-			if nss[ow.Namespace] && !woken[ow.String()] && !hasPod[ow.String()] && nudge(ctx, c, ow) == nil {
+			if nss[ow.Namespace] && !hasPod[ow.String()] && nudge(ctx, c, ow) == nil {
 				n++
 			}
 		}
@@ -957,8 +934,7 @@ func resourceFor(c *longhorn.Client, apiVersion, kind string) (schema.GroupVersi
 
 // stopGroups stops the apps: each app's pods one after the other in stop
 // order (like a StatefulSet scales down), waiting until a pod is gone
-// before the next; up to 8 apps in parallel. CloudNativePG clusters are
-// hibernated instead, so the operator shuts them down cleanly.
+// before the next; up to 8 apps in parallel.
 func stopGroups(ctx context.Context, c *longhorn.Client, groups []Group, o FreezeOptions) error {
 	sem := make(chan struct{}, 8)
 	errs := make(chan error, len(groups))
@@ -983,19 +959,6 @@ func stopGroups(ctx context.Context, c *longhorn.Client, groups []Group, o Freez
 
 func stopGroup(ctx context.Context, c *longhorn.Client, g Group, o FreezeOptions) error {
 	dyn := c.Dynamic()
-	if g.Hibernate {
-		if err := hibernate(ctx, c, g.Owner, true); err != nil {
-			return fmt.Errorf("hibernate %s: %w", g.name(), err)
-		}
-		o.Log("✔ %s: hibernation requested (%s: on) – the operator stops its instances", g.name(), annCNPG)
-		for _, x := range g.Pods {
-			if err := waitPodGone(ctx, dyn, x, o); err != nil {
-				return fmt.Errorf("%s: %w", g.name(), err)
-			}
-		}
-		o.Log("✔ %s: %d instances stopped", g.name(), len(g.Pods))
-		return nil
-	}
 	for i, x := range g.Pods {
 		ns, n, _ := strings.Cut(x, "/")
 		err := dyn.Resource(gvrPod).Namespace(ns).Delete(ctx, n, metav1.DeleteOptions{})
@@ -1035,21 +998,6 @@ func waitPodGone(ctx context.Context, dyn dynamic.Interface, x string, o FreezeO
 	}
 }
 
-// hibernate sets or clears CloudNativePG's declarative hibernation.
-func hibernate(ctx context.Context, c *longhorn.Client, ow Owner, on bool) error {
-	gvr, err := resourceFor(c, ow.APIVersion, ow.Kind)
-	if err != nil {
-		return err
-	}
-	v := "off"
-	if on {
-		v = "on"
-	}
-	body := fmt.Sprintf(`{"metadata":{"annotations":{%q:%q}}}`, annCNPG, v)
-	_, err = c.Dynamic().Resource(gvr).Namespace(ow.Namespace).Patch(ctx, ow.Name, types.MergePatchType, []byte(body), metav1.PatchOptions{FieldManager: "lhtx"})
-	return err
-}
-
 // runPostHooks waits for a ready pod of each app and runs its hook.
 func runPostHooks(ctx context.Context, c *longhorn.Client, hooks []groupHook, o FreezeOptions) error {
 	var failed []string
@@ -1068,8 +1016,7 @@ func runPostHooks(ctx context.Context, c *longhorn.Client, hooks []groupHook, o 
 	return nil
 }
 
-// waitReadyPod finds a running, ready pod of the owner (or of the CNPG
-// cluster / StatefulSet whose pods name it).
+// waitReadyPod finds a running, ready pod of the owner.
 func waitReadyPod(ctx context.Context, c *longhorn.Client, ow Owner, o FreezeOptions) (string, error) {
 	deadline := time.Now().Add(o.Wait)
 	for {
@@ -1117,9 +1064,6 @@ func (p *FreezePlan) GroupLines() []string {
 		if len(g.Pods) == 1 {
 			how = "stop " + shortNames(g.Pods)[0]
 		}
-		if g.Hibernate {
-			how = fmt.Sprintf("CloudNativePG: hibernate (%s: on) – the operator stops its %d instance(s) cleanly", annCNPG, len(g.Pods))
-		}
 		out = append(out, g.name()+": "+how)
 		if g.Pre != nil {
 			out = append(out, "    before: "+g.Pre.String())
@@ -1143,7 +1087,7 @@ func shortNames(pods []string) []string {
 // HookCount counts the apps with hooks and without (for hints).
 func (p *FreezePlan) HookCount() (with, without int) {
 	for _, g := range p.Groups {
-		if g.Pre != nil || g.Post != nil || g.Hibernate {
+		if g.Pre != nil || g.Post != nil {
 			with++
 		} else {
 			without++

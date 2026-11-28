@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -18,8 +19,8 @@ import (
 
 // Workloads behind the demo PVCs, so restore + switch can run in the demo:
 // most are Deployments of the Flux Kustomization "apps", jellyfin comes
-// from a HelmRelease, loki is a StatefulSet, and two show what lhtx
-// refuses: postgres (CloudNativePG Cluster) and prometheus (operator).
+// from a HelmRelease, loki and postgres are StatefulSets, and prometheus
+// comes from an operator.
 
 var (
 	gvrPod         = schema.GroupVersionResource{Version: "v1", Resource: "pods"}
@@ -33,7 +34,7 @@ var (
 )
 
 type demoWorkload struct {
-	kind, name string // Deployment | StatefulSet | Cluster (CNPG) | operator-StatefulSet
+	kind, name string // Deployment | StatefulSet | operator-StatefulSet
 	operator   string // owner kind of an operator-managed StatefulSet
 	helm       bool   // from the HelmRelease "jellyfin"
 }
@@ -42,7 +43,7 @@ type demoWorkload struct {
 func workloadOf(pvc string) demoWorkload {
 	switch {
 	case strings.HasPrefix(pvc, "data-postgres-"):
-		return demoWorkload{kind: "Cluster", name: "postgres"}
+		return demoWorkload{kind: "StatefulSet", name: "postgres"}
 	case strings.HasPrefix(pvc, "prometheus-db-"):
 		return demoWorkload{kind: "StatefulSet", name: "prometheus", operator: "Prometheus"}
 	case pvc == "storage-loki-0":
@@ -62,7 +63,7 @@ func fluxLabels(w demoWorkload) map[string]any {
 		return map[string]any{"helm.toolkit.fluxcd.io/name": "jellyfin", "helm.toolkit.fluxcd.io/namespace": "flux-system",
 			"app.kubernetes.io/managed-by": "Helm"}
 	}
-	if w.kind == "Cluster" || w.operator != "" {
+	if w.operator != "" {
 		return map[string]any{}
 	}
 	return map[string]any{"kustomize.toolkit.fluxcd.io/name": "apps", "kustomize.toolkit.fluxcd.io/namespace": "flux-system"}
@@ -111,11 +112,6 @@ func (d *data) workloadObjects() []runtime.Object {
 		nsName, w := parts[0], workloadOf(pvcs[0])
 		labels := fluxLabels(w)
 		switch {
-		case w.kind == "Cluster":
-			for k, pvc := range pvcs {
-				out = append(out, d.pod(nsName, fmt.Sprintf("%s-%d", w.name, k+1), nodeOf[key], []string{pvc},
-					owner("postgresql.cnpg.io/v1", "Cluster", w.name)))
-			}
 		case w.kind == "StatefulSet":
 			meta := map[string]any{"name": w.name, "namespace": nsName, "labels": labels}
 			if w.name == "loki" { // hooks as annotations on the StatefulSet
@@ -125,11 +121,15 @@ func (d *data) workloadObjects() []runtime.Object {
 			}
 			sts := map[string]any{"apiVersion": "apps/v1", "kind": "StatefulSet",
 				"metadata": meta,
-				"spec":     map[string]any{"replicas": int64(1)}, "status": map[string]any{"readyReplicas": int64(1)}}
+				"spec":     map[string]any{"replicas": int64(len(pvcs))}, "status": map[string]any{"readyReplicas": int64(len(pvcs))}}
 			if w.operator != "" {
 				sts["metadata"].(map[string]any)["ownerReferences"] = owner("monitoring.coreos.com/v1", w.operator, w.name)
 			}
-			out = append(out, u(sts), d.pod(nsName, w.name+"-0", nodeOf[key], pvcs, owner("apps/v1", "StatefulSet", w.name)))
+			out = append(out, u(sts))
+			sort.Strings(pvcs)
+			for k, pvc := range pvcs { // one pod per ordinal
+				out = append(out, d.pod(nsName, fmt.Sprintf("%s-%d", w.name, k), nodeOf[key], []string{pvc}, owner("apps/v1", "StatefulSet", w.name)))
+			}
 		default:
 			rs := w.name + "-" + hex8(w.name)[:6]
 			out = append(out,

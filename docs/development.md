@@ -30,8 +30,8 @@ individual commits.
 
 Write actions, freezes and the agent can be tried on a throwaway cluster:
 three NixOS VMs (qemu/KVM, 4 GiB each) with k3s, Longhorn v1.12.1, an NFS
-backup target, test apps with hooks, encrypted StorageClasses, External
-Secrets and CloudNativePG – plus an optional second one-node cluster for
+backup target, test apps with hooks, encrypted StorageClasses and External
+Secrets – plus an optional second one-node cluster for
 migrations (`lhtx-lab start2`), all defined in `nix/lab/`.
 
 ```
@@ -112,8 +112,8 @@ with the block device as `diskPath`; lhtx shows that as is.
    volume or snapshot – with preview,
    confirmation, client and server dry run, restore + switch of the PVC, freeze
    for maintenance (admission policy, works with any operator/GitOps) · ✔
-   optional in-cluster agent that carries freezes out (Helm chart) · open:
-   CloudNativePG-aware restore
+   optional in-cluster agent that carries freezes out (Helm chart) · not
+   planned: database-aware restores (use the database's own tools)
 4. **Health** ✔ `lhtx doctor` / Health tab, diagnostics bundle, backup age,
    drain check · open: rebuild/snapshot deadlock workaround as a guided action
    (after collecting evidence with `lhtx diag`)

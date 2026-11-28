@@ -43,8 +43,7 @@ anything. Made for Longhorn upgrades and other maintenance:
 
 Clean shutdown of clustered apps: each app's pods are stopped one by one,
 highest ordinal first (like a StatefulSet scales down), each with its normal
-grace period; apps run in parallel. CloudNativePG clusters are hibernated
-(cnpg.io/hibernation: on) so the operator stops them itself. Hooks add app
+grace period; apps run in parallel. Hooks add app
 knowledge – a command run with sh -c via pods/exec in one pod of the app:
 
   lhtx.io/pre-freeze:    "[container:] command"   before its pods stop

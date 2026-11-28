@@ -37,8 +37,8 @@ backup (lhtx restore) – and takes care of everything around it:
 The old volume stays: switch back with the same command and --to-volume OLD.
 Until the old PVC is deleted, any failure (or Ctrl+C) is rolled back
 automatically; after that the PVC stays frozen until the switch is done.
-CloudNativePG instances are allowed with a warning (one instance from a
-backup is rarely consistent with the others).
+lhtx restores volumes, not databases: for a replicated database use its own
+backup and restore.
 
 Every step is written to a journal in $XDG_STATE_HOME/lhtx/switch/.
 --dry-run shows the plan only.

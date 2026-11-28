@@ -77,7 +77,7 @@ func world(extra ...runtime.Object) *cluster {
 		gvrPod: "PodList", gvrPVC: "PersistentVolumeClaimList", gvrPV: "PersistentVolumeList", gvrRS: "ReplicaSetList",
 		GVRPolicy: "ValidatingAdmissionPolicyList", GVRBinding: "ValidatingAdmissionPolicyBindingList",
 		longhorn.GVRVolume: "VolumeList", longhorn.GVREngine: "EngineList", gvrConfigMap: "ConfigMapList",
-		{Group: "postgresql.cnpg.io", Version: "v1", Resource: "clusters"}: "ClusterList",
+		{Group: "example.io", Version: "v1", Resource: "databases"}: "DatabaseList",
 		gvrSecret: "SecretList",
 	}
 	objs := []runtime.Object{
@@ -372,14 +372,6 @@ func TestSwitchBlockers(t *testing.T) {
 	if _, err := Build(ctx, k.c, "app", "data", "pvc-nope"); err == nil {
 		t.Error("missing target volume accepted")
 	}
-	// a CloudNativePG instance is allowed, with a clear warning
-	k = world(ownedBy(obj("v1", "Pod", "app", "db-1", nil, map[string]any{
-		"spec": map[string]any{"volumes": []any{map[string]any{"persistentVolumeClaim": map[string]any{"claimName": "data"}}}},
-	}), "postgresql.cnpg.io/v1", "Cluster", "db"))
-	p, err := Build(ctx, k.c, "app", "data", "pvc-new")
-	if err != nil || len(p.Blockers) > 0 || !strings.Contains(strings.Join(p.Warnings, " "), "CloudNativePG") {
-		t.Errorf("CNPG: %v %v %v", err, p.Blockers, p.Warnings)
-	}
 }
 
 func TestChecks(t *testing.T) {
@@ -499,41 +491,36 @@ func TestFreezeHooks(t *testing.T) {
 	}
 }
 
-func TestFreezeCNPGHibernation(t *testing.T) {
-	gvrCluster := schema.GroupVersionResource{Group: "postgresql.cnpg.io", Version: "v1", Resource: "clusters"}
+// An operator's pod is stopped like any other: deleted (its grace period
+// lets the app shut down), the operator nudged on unfreeze. No operator
+// gets special treatment.
+func TestFreezeOperatorPod(t *testing.T) {
+	gvrDB := schema.GroupVersionResource{Group: "example.io", Version: "v1", Resource: "databases"}
 	dbPod := ownedBy(obj("v1", "Pod", "app", "db-1", nil, map[string]any{
 		"spec": map[string]any{"volumes": []any{map[string]any{"persistentVolumeClaim": map[string]any{"claimName": "db"}}}},
-	}), "postgresql.cnpg.io/v1", "Cluster", "db")
-	k := world(dbPod, obj("postgresql.cnpg.io/v1", "Cluster", "app", "db", nil, map[string]any{"spec": map[string]any{"instances": int64(1)}}))
+	}), "example.io/v1", "Database", "db")
+	k := world(dbPod, obj("example.io/v1", "Database", "app", "db", nil, nil))
 	ctx := context.Background()
-	// the operator stops its instance when hibernation is requested
-	k.dyn.PrependReactor("patch", "clusters", func(a k8stesting.Action) (bool, runtime.Object, error) {
-		if strings.Contains(string(a.(k8stesting.PatchActionImpl).GetPatch()), `"on"`) {
-			go func() { _ = k.dyn.Resource(gvrPod).Namespace("app").Delete(ctx, "db-1", metav1.DeleteOptions{}) }()
-		}
-		return false, nil, nil
-	})
 	p, err := PlanFreeze(ctx, k.c, []string{"app/db"}, "t")
-	if err != nil || len(p.Groups) != 1 || !p.Groups[0].Hibernate {
+	if err != nil || len(p.Groups) != 1 || !strings.Contains(strings.Join(p.GroupLines(), "\n"), "stop db-1") {
 		t.Fatalf("%v %+v", err, p)
 	}
 	if _, err := ApplyFreeze(ctx, k.c, p, fastF); err != nil {
 		t.Fatal(err)
 	}
-	cl := get(t, k.dyn, gvrCluster, "app", "db")
-	if cl.GetAnnotations()[annCNPG] != "on" {
-		t.Error("not hibernated")
+	if _, err := k.dyn.Resource(gvrPod).Namespace("app").Get(ctx, "db-1", metav1.GetOptions{}); err == nil {
+		t.Error("operator pod not deleted")
 	}
 	fs, _ := ActiveFreezes(ctx, k.dyn)
-	if len(fs) != 1 || len(fs[0].Hibernated) != 1 {
+	if len(fs) != 1 {
 		t.Fatalf("%+v", fs)
 	}
 	if err := Unfreeze(ctx, k.c, fs[0], FreezeOptions{Poll: 10 * time.Millisecond, Wait: 200 * time.Millisecond}); err != nil &&
 		!strings.Contains(err.Error(), "not attached") {
 		t.Fatal(err)
 	}
-	if get(t, k.dyn, gvrCluster, "app", "db").GetAnnotations()[annCNPG] != "off" {
-		t.Error("not woken up")
+	if get(t, k.dyn, gvrDB, "app", "db").GetAnnotations() == nil {
+		t.Error("operator not nudged")
 	}
 }
 

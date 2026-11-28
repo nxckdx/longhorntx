@@ -45,7 +45,7 @@ write actions are not tested.
   into new volumes – [write actions](docs/write-actions.md)
 - **Freeze** for Longhorn upgrades and maintenance: stop everything that uses
   the volumes through an admission policy – no scaling, works with any
-  operator and GitOps, ordered shutdown, hooks, CloudNativePG hibernation –
+  operator and GitOps, ordered shutdown, hooks –
   [freeze](docs/freeze.md)
 - **Restore and switch**: put a backup under a running app's PVC in one
   confirmed run, with rollback and the way back; **shrink** a volume, RWX too (new
@@ -145,7 +145,7 @@ parses flags like `--context`.
 - [Usage](docs/usage.md) – commands, TUI keys, health check, drain check, diagnostics
 - [Configuration](docs/configuration.md) – config file per context, themes, traffic budget
 - [Write actions](docs/write-actions.md) – write mode, dry runs, every change and how it is made
-- [Freeze](docs/freeze.md) – freeze for maintenance, hooks, CloudNativePG
+- [Freeze](docs/freeze.md) – freeze for maintenance, hooks
 - [Restore and switch](docs/restore-switch.md) – a backup under a running app's PVC, and back
 - [Encrypted volumes](docs/encryption.md) – keys with restore, clone, switch and migration
 - [Agent](docs/agent.md) – the optional in-cluster agent, Helm chart, RBAC

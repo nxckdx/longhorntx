@@ -21,9 +21,10 @@ The old volume is kept: `lhtx switch NS/PVC --to-volume OLD` switches back
 – and Ctrl+C – is rolled back; after that the PVC stays frozen until it is
 fixed, so nothing re-creates it with an empty volume. Every step goes to a
 journal in `$XDG_STATE_HOME/lhtx/switch/` (`lhtx switch --status`; `doctor`
-warns about unfinished ones). A CloudNativePG instance can be switched, but
-lhtx warns: restoring one instance's PVC does not restore the database
-consistently – prefer CNPG's own recovery. `--dry-run` shows the plan.
+warns about unfinished ones). lhtx restores volumes, not databases: one
+instance of a replicated database restored from a backup is rarely
+consistent with the others – use the database's own backup and restore.
+`--dry-run` shows the plan.
 
 `lhtx switch NS/PVC --from-backup BACKUP` is the same as `restore --switch`.
 With the [lhtx agent](agent.md) in the cluster the switch runs there – it
@@ -137,7 +138,7 @@ Flux/Helm needs its size changed in Git first (or the next sync expands it
 again); a StatefulSet's claim template keeps the old size; the new volume
 starts a new backup chain (first backup full, the old backups stay
 restorable); snapshots stay with the old volume. Databases are better
-shrunk with their own tools (dump/restore, CNPG).
+shrunk with their own tools (dump/restore).
 
 The app is down from step 5 to the end: stopping it, copying what changed
 since the pre-copy (in the lab: 0.6 s for an app writing five files a

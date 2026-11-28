@@ -164,30 +164,4 @@ in
       valuesContent = builtins.toJSON { installCRDs = true; webhook.create = false; certController.create = false; };
     };
   };
-
-  # CloudNativePG: freeze hibernates the cluster instead of deleting pods
-  cnpg.content = [
-    {
-      apiVersion = "helm.cattle.io/v1";
-      kind = "HelmChart";
-      metadata = { name = "cloudnative-pg"; namespace = "kube-system"; };
-      spec = {
-        repo = "https://cloudnative-pg.github.io/charts";
-        chart = "cloudnative-pg";
-        version = "0.29.2";
-        targetNamespace = "cnpg-system";
-        createNamespace = true;
-      };
-    }
-    (ns "lab-db")
-    {
-      apiVersion = "postgresql.cnpg.io/v1";
-      kind = "Cluster";
-      metadata = { name = "pg"; namespace = "lab-db"; };
-      spec = {
-        instances = 2;
-        storage = { size = "1Gi"; storageClass = "longhorn"; };
-      };
-    }
-  ];
 })

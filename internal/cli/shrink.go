@@ -42,7 +42,7 @@ kept as the way back (lhtx --rw switch NS/PVC --to-volume OLD).
 The app is down from the freeze to the unfreeze: about as long as copying
 the used data takes. The copy pod runs as root (it must keep file owners);
 namespaces enforcing the "restricted" Pod Security level are refused.
-Databases are better shrunk with their own tools (dump/restore, CNPG).
+Databases are better shrunk with their own tools (dump/restore).
 lhtx must keep running until the end (Ctrl+C before the swap rolls back).`,
 		Example: `  lhtx --rw shrink shop/data 5Gi
   lhtx shrink shop/data 5Gi --dry-run`,

@@ -29,8 +29,7 @@ rules:
   - apiGroups: [longhorn.io]
     resources: [volumes]
     verbs: [create, delete] # restore for a Switch; restore probe test volumes (only those, with a UID precondition)
-  # owners of the stopped pods: read the chain, nudge on unfreeze,
-  # CloudNativePG hibernation annotation
+  # owners of the stopped pods (any kind): read the chain, nudge on unfreeze
   - apiGroups: ["*"]
     resources: ["*"]
     verbs: [get, patch]

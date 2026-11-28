@@ -50,8 +50,8 @@ spec:
               x-kubernetes-validations:
                 - rule: self == oldSelf
                   message: a Switch cannot be changed – create a new one
-                - rule: has(self.toVolume) != has(self.fromBackup)
-                  message: give either toVolume or fromBackup
+                - rule: "[has(self.toVolume), has(self.fromBackup), has(self.shrinkTo)].filter(x, x).size() == 1"
+                  message: give one of toVolume, fromBackup, shrinkTo
               properties:
                 pvc:
                   description: The PVC to switch, in this namespace.
@@ -73,6 +73,15 @@ spec:
                   type: integer
                   minimum: 1
                   maximum: 20
+                shrinkTo:
+                  description: Shrink the PVC to this size (lhtx shrink) – a new smaller volume, the files copied by a pod with the agent's image.
+                  type: string
+                  pattern: '^[0-9]+(\.[0-9]+)?(Ki|Mi|Gi|Ti|k|M|G|T)?$'
+                imagePullSecrets:
+                  description: Names of image pull Secrets in this namespace for the copy pod of a shrink.
+                  type: array
+                  items:
+                    type: string
                 wait:
                   type: string
                   pattern: '^([0-9]+(\.[0-9]+)?(ms|s|m|h))+$'

@@ -632,7 +632,7 @@ not touched; the volume stays attached for them.`,
 
 func writeCmds(g *globals) []*cobra.Command {
 	return append([]*cobra.Command{
-		createCmd(g), deleteCmd(g), setCmd(g), restartCmd(g), upgradeEngineCmd(g), expandCmd(g), restoreCmd(g), cloneCmd(g), switchCmd(g),
+		createCmd(g), deleteCmd(g), setCmd(g), restartCmd(g), shrinkCmd(g), upgradeEngineCmd(g), expandCmd(g), restoreCmd(g), cloneCmd(g), switchCmd(g),
 		nodeDiskCmd(g, "cordon", "Disable replica scheduling on a node or disk (needs --rw)",
 			func(n *longhorn.Node, d string, _ bool) (*longhorn.Action, error) {
 				return longhorn.SetScheduling(n, d, false)

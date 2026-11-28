@@ -9,6 +9,7 @@ import (
 
 	"github.com/nxckdx/longhorntx/internal/format"
 	"github.com/nxckdx/longhorntx/internal/longhorn"
+	"github.com/nxckdx/longhorntx/internal/shrink"
 	"github.com/nxckdx/longhorntx/internal/switchover"
 )
 
@@ -54,6 +55,7 @@ func (m *model) loadHealth() tea.Cmd {
 		x.extra = append(x.extra, c.HistoryChecks(ctx)...)
 		x.extra = append(x.extra, c.CapacityChecks(ctx)...)
 		x.extra = append(x.extra, c.RWXChecks(ctx, vols)...)
+		x.extra = append(x.extra, shrink.LeftoverChecks(vols)...)
 		x.extra = append(x.extra, c.MountChecks(ctx, vols, nodes)...)
 		for _, v := range rebuilding {
 			if s, err := c.Snapshots(ctx, v); err == nil {

@@ -13,7 +13,7 @@ rules:
     verbs: [create, patch, delete] # the freeze policy
   - apiGroups: [""]
     resources: [pods]
-    verbs: [create, delete] # create: only the server dry run that checks the policy
+    verbs: [create, delete] # the freeze's dry-run test pod; shrink: its pre-flight and copy pods
   - apiGroups: [""]
     resources: [pods/exec]
     verbs: [get, create] # hooks
@@ -22,7 +22,7 @@ rules:
     verbs: [create, delete] # switches
   - apiGroups: [""]
     resources: [persistentvolumes]
-    verbs: [create, patch] # switches: PV of the target, Retain on the old one
+    verbs: [create, patch, delete] # switches: PV of the target, Retain on the old one; shrink: its temporary PV
   - apiGroups: [""]
     resources: [secrets]
     verbs: [get, list, create] # switches of encrypted volumes: guard the key, keep a copy if it is replaced

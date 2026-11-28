@@ -54,6 +54,7 @@ Write commands: [write-actions.md](write-actions.md). Freeze: [freeze.md](freeze
 | `B` | health tab (write mode): back up all attached volumes whose backup is late or missing (one confirmation) |
 | `Z` | volume list / details (write mode): freeze the selected volumes, this one, all on its node or ALL (Longhorn upgrade) – plan, `Y`, live log; `Z` again lists active freezes to unfreeze; the header shows `❄ N frozen` |
 | `w` | volume details (write mode): switch a PVC to this volume – back to the old one after a restore, or to a clone |
+| `K` | volume details (write mode): shrink its PVC to a smaller size – plan, steps, live log, `x` cancels ([shrink](restore-switch.md#shrink-a-volume)) |
 | `r` … then `switch` | in the restore form choose "switch NS/PVC to it": restore + switch with a step preview, live log, `x` cancels (rolls back until the old PVC is deleted); lhtx does not quit while it runs |
 | `r` | backups tab (write mode): restore the newest backup of the backup volume, or the selected backup in a backup list, into a new volume (+ PV/PVC) |
 | `n`, `enter`, `X` | recurring jobs / backup targets pages (write mode): new, edit, delete – forms with live checks (cron: next runs; targets: secret picker); `s` syncs a target now |

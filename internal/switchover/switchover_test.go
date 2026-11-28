@@ -770,3 +770,78 @@ func TestSwitchContinue(t *testing.T) {
 		t.Errorf("second continue: %v", err)
 	}
 }
+
+// lhtx shrink: AfterFreeze runs while frozen and detached; its error rolls
+// back. The freeze lets only labelled pods of the freezing user through.
+func TestSwitchAfterFreeze(t *testing.T) {
+	k := world()
+	ctx := context.Background()
+	p, err := Build(ctx, k.c, "app", "data", "pvc-new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Freeze.AllowLabel = "lhtx.io/shrink"
+	pol, _ := policyObjects("x", p.Freeze, time.Now(), "")
+	vals, _, _ := unstructured.NestedSlice(pol.Object, "spec", "validations")
+	if e := vals[0].(map[string]any)["expression"].(string); !strings.Contains(e, "'lhtx.io/shrink' in object.metadata.labels && request.userInfo.username == 'tester'") {
+		t.Errorf("no copy pod exception: %s", e)
+	}
+	o := fast
+	var state string
+	o.AfterFreeze = func(context.Context) error {
+		state = field(get(t, k.dyn, longhorn.GVRVolume, lhNS, "pvc-old"), "status", "state")
+		return errors.New("copy failed")
+	}
+	err = Run(ctx, k.c, p, o)
+	if err == nil || !strings.Contains(err.Error(), "copy failed") || !strings.Contains(err.Error(), "rolled back") {
+		t.Fatalf("want rollback with the copy error, got %v", err)
+	}
+	if state != "detached" {
+		t.Errorf("AfterFreeze ran with the old volume %s", state)
+	}
+	if vn := field(get(t, k.dyn, gvrPVC, "app", "data"), "spec", "volumeName"); vn != "pvc-old" {
+		t.Errorf("PVC moved to %s", vn)
+	}
+}
+
+func TestMarkRolledBack(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name string, j journal) {
+		b, _ := json.Marshal(j)
+		_ = os.WriteFile(filepath.Join(dir, name), b, 0o600)
+	}
+	p := &Plan{Namespace: "shop", PVC: "data"}
+	write("a.json", journal{Context: "c1", Plan: p, Steps: []string{"frozen"}})
+	write("b.json", journal{Context: "c1", Plan: p, Steps: []string{"finished"}})
+	write("c.json", journal{Context: "c2", Plan: p, Steps: []string{"frozen"}})
+	if n := MarkRolledBack(dir, "c1", "shop/data", "aborted"); n != 1 {
+		t.Fatalf("closed %d", n)
+	}
+	for _, e := range Journals(dir) {
+		if e.Context == "c1" && !e.Finished && !e.RolledBack {
+			t.Errorf("still open: %+v", e)
+		}
+	}
+}
+
+// The agent stopping (ctx cancelled, Handover): nothing is rolled back –
+// the freeze stays for the next agent to take over.
+func TestSwitchHandover(t *testing.T) {
+	k := world()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	p, err := Build(ctx, k.c, "app", "data", "pvc-new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := fast
+	o.Handover = true
+	o.AfterFreeze = func(ctx context.Context) error { cancel(); return ctx.Err() }
+	err = Run(ctx, k.c, p, o)
+	if err == nil || !strings.Contains(err.Error(), "handed over") {
+		t.Fatalf("want hand-over, got %v", err)
+	}
+	if fs, _ := ActiveFreezes(context.Background(), k.dyn); len(fs) != 1 {
+		t.Errorf("freeze gone: %+v", fs)
+	}
+}

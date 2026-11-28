@@ -40,6 +40,15 @@ type Options struct {
 	FreezeName string
 	// Request: the agent's Switch resource, stored on the freeze policy.
 	Request string
+	// AfterFreeze runs once the PVC is frozen and its volume detached,
+	// before the old PVC goes (lhtx shrink copies the data here). An error
+	// rolls back: the workload starts again on the old volume.
+	AfterFreeze func(ctx context.Context) error
+	// Handover: the caller stopping (ctx cancelled) hands the run over
+	// instead of rolling it back – the lhtx agent losing its lease: the
+	// next agent continues from the cluster state, and a rollback of the
+	// old one would race with it.
+	Handover bool
 }
 
 // journal is what the journal file holds.
@@ -136,6 +145,11 @@ func (r *runner) run() error {
 		return r.rollback(err)
 	}
 	r.step("%s frozen (%s), its pods are gone and volume %s is detached", p.PVCRef(), f.Name, p.OldVolume)
+	if r.o.AfterFreeze != nil {
+		if err := r.o.AfterFreeze(r.ctx); err != nil {
+			return r.rollback(err)
+		}
+	}
 	if p.OldReclaim != "Retain" && p.OldPV != "" {
 		if err := r.patch(gvrPV, "", p.OldPV, `{"spec":{"persistentVolumeReclaimPolicy":"Retain"}}`); err != nil {
 			return r.rollback(fmt.Errorf("set Retain on PV %s: %w", p.OldPV, err))
@@ -357,6 +371,10 @@ func Continue(ctx context.Context, c *longhorn.Client, p *Plan, o Options) error
 // rollback ends the freeze (before the old PVC was deleted): the pods
 // start again on the old volume.
 func (r *runner) rollback(cause error) error {
+	if r.o.Handover && r.ctx.Err() != nil {
+		r.o.Log("stopping – the PVC stays frozen, the next run continues")
+		return fmt.Errorf("%w (handed over: nothing rolled back)", r.ctx.Err())
+	}
 	r.o.Log("✖ %v – rolling back", cause)
 	if r.freeze == nil {
 		r.j.RolledBack = true
@@ -417,7 +435,11 @@ func (r *runner) waitTargetReady() error {
 			case v.Status.RestoreRequired:
 				state = "restoring"
 			}
-			r.o.Log("… waiting for %s: %s%s", v.Name, state, r.restoreProgress(v.Name))
+			progress := ""
+			if v.Status.RestoreRequired {
+				progress = r.restoreProgress(v.Name)
+			}
+			r.o.Log("… waiting for %s: %s%s", v.Name, state, progress)
 		}
 		if err := r.sleep(); err != nil {
 			return err

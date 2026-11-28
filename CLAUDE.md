@@ -46,6 +46,9 @@ internal/switchover freeze (ValidatingAdmissionPolicy denies pods mounting the P
                     owners) and switch (restore → freeze → swap PV/PVC → unfreeze;
                     rollback until the old PVC is deleted; journal). No per-operator
                     or per-GitOps logic – the desired state is never changed.
+internal/shrink     lhtx shrink: new smaller volume (same settings/key) + switchover with
+                    AfterFreeze = copy pod (lhtx's image, `lhtx copy` = internal/copytree,
+                    freeze exception by label lhtx.io/shrink), rollback removes the new volume
 internal/agent      optional in-cluster agent (`lhtx agent`, image ghcr.io/nxckdx/lhtx):
                     Freeze CRD lhtx.io/v1alpha1 (cluster-scoped), controller reusing
                     switchover (named, resumable freezes; status log; finalizer =

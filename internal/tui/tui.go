@@ -547,6 +547,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.onSwitchPlan(msg)
 		return m, nil
 
+	case shrinkPlanMsg:
+		m.onShrinkPlan(msg)
+		return m, nil
+
 	case switchLogMsg:
 		return m, m.onSwitchLog(msg)
 

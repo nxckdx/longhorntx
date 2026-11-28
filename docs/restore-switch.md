@@ -32,3 +32,83 @@ continues after a restart, and namespace users may switch their own PVCs.
 A restore or clone into a **new** volume (+ PV/PVC) is described in
 [write-actions.md](write-actions.md); encrypted volumes in
 [encryption.md](encryption.md).
+
+## Shrink a volume
+
+Neither Longhorn nor Kubernetes can make a volume smaller. `lhtx shrink
+NS/PVC SIZE` does what you would do by hand – new volume, copy, swap – as
+one checked run with the switch underneath:
+
+```
+lhtx --rw shrink shop/data 5Gi
+```
+
+**While the app still runs** – a failure here costs no downtime, lhtx
+removes what it created:
+
+1. the copy pod goes through the API server as a server dry run: Pod
+   Security, policy engines (Kyverno, Gatekeeper), quotas and LimitRanges
+   see it before anything is created
+2. a new, smaller Longhorn volume with the old one's settings (replicas,
+   data locality, selectors, recurring jobs and groups – backups go on)
+   and, if encrypted, the same key; a temporary PV/PVC for it
+3. a pre-flight pod on the copy node mounts the new volume: the image can
+   be pulled, the pod scheduled, Longhorn places **all** replicas,
+   attaches the volume and creates the filesystem (and encryption).
+   A bad image or an unschedulable pod ends this at once, not after a
+   timeout
+
+**App down** (frozen, like `lhtx freeze`):
+
+4. freeze the PVC (its pods stop) and wait until the volume is detached
+5. the copy pod (lhtx's own image, `lhtx copy`, root) mounts the old PVC
+   read-only – the freeze lets exactly this pod through – and the new
+   volume; checks that the used space **and the number of files** fit;
+   copies all files keeping owners, modes, setuid, hard and symbolic
+   links, devices and FIFOs, xattrs/ACLs/capabilities, timestamps and
+   holes (sparse files are not even read where they are empty); then
+   compares both trees: every entry's type, mode, owner, size, links,
+   times and a SHA-256 of every file's content
+6. delete the copy pod and the temporary PV/PVC, then the switch: old PV
+   to `Retain`, PVC re-created on the new volume, key guard, unfreeze
+
+The copy runs on the node of the old volume (for `strict-local` volumes
+the node of their replica – the only one that can attach them), with the
+tolerations of the app's pod. If lhtx loses the API server while copying
+it retries for about two minutes – the copy goes on in the cluster.
+
+Until the old PVC is deleted (step 6) every failure – and Ctrl+C – rolls
+back: the app starts again on the old volume, the new volume is removed.
+The old volume is kept as the way back (`lhtx switch NS/PVC --to-volume
+OLD`); it keeps its space until you delete it (lhtx prints how).
+
+**With the [lhtx agent](agent.md)** (`rw: true`) the shrink runs in the
+cluster: lhtx and the TUI only follow it, closing the laptop changes
+nothing (`--local` runs it on your machine). The copy pod uses the agent's
+own image – it comes from wherever the agent's came from. If the agent
+itself restarts during the copy, the next one removes the unfinished copy
+(the PVC stays frozen) and starts it again; after the swap it finishes the
+switch.
+
+**If lhtx is killed** during a local shrink (laptop closed), the PVC stays
+frozen and the copy pod, the temporary PVC and the new volume stay.
+`lhtx doctor` reports them; `lhtx --rw shrink --abort NS/PVC` removes
+them and unfreezes – the app starts again on its old volume. If lhtx was
+killed after the old PVC was deleted, `--abort` refuses and points to the
+journal (`lhtx switch --status`).
+
+Checks before anything changes: raw block PVCs, RWX volumes and namespaces
+enforcing the `restricted` Pod Security level are refused; the size must be
+smaller and leave 10 % free of what is used (from kubelet's stats when
+allowed, otherwise the copy pod checks it). lhtx notes: a PVC managed by
+Flux/Helm needs its size changed in Git first (or the next sync expands it
+again); a StatefulSet's claim template keeps the old size; the new volume
+starts a new backup chain (first backup full, the old backups stay
+restorable); snapshots stay with the old volume. Databases are better
+shrunk with their own tools (dump/restore, CNPG).
+
+The app is down from step 4 to the end – about as long as reading the used
+data twice (copy, compare) takes, plus stopping and starting the app.
+`--dry-run` shows the plan; `--image` / `--image-pull-secret` for clusters
+without access to ghcr.io (default: env `LHTX_SHRINK_IMAGE`, else the image
+of this lhtx version). In the TUI: `K` in the volume details.

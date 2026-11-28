@@ -71,6 +71,7 @@ type SwitchSpec struct {
 	// switch. The copy pod uses the agent's own image.
 	ShrinkTo         string   `json:"shrinkTo,omitempty"`
 	ImagePullSecrets []string `json:"imagePullSecrets,omitempty"` // in the PVC's namespace, for the copy pod
+	NoPrecopy        bool     `json:"noPrecopy,omitempty"`        // copy everything while the app is down
 
 	RequestedBy     string   `json:"requestedBy"`
 	RequestedGroups []string `json:"requestedGroups,omitempty"`

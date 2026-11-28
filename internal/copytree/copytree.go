@@ -35,6 +35,13 @@ type Stats struct {
 	// context= mount, trusted.* without CAP_SYS_ADMIN) – see Skipped.
 	XattrsSkipped int64    `json:"xattrsSkipped,omitempty"`
 	Skipped       []string `json:"skipped,omitempty"` // first few, "path: attr: error"
+	// Dirty: entries a live copy could not take consistently (changed or
+	// vanished while copying) – the final pass copies them.
+	Dirty int64 `json:"dirty,omitempty"`
+	// Removed: entries the final pass deleted (gone from the source).
+	Removed int64 `json:"removed,omitempty"`
+	// Unchanged: entries the final pass kept from the pre-copy.
+	Unchanged int64 `json:"unchanged,omitempty"`
 }
 
 // Options: Progress is called now and then with the stats so far; Skip
@@ -48,6 +55,12 @@ type Options struct {
 	// Hashes: record a SHA-256 of every regular file's content as it is
 	// read (for Verify, without reading the source twice).
 	Hashes map[string][32]byte
+	// Live: the source is in use (the pre-copy of a shrink): an entry that
+	// changes or vanishes while it is copied is skipped (Stats.Dirty), not
+	// an error.
+	Live bool
+	// State: record each entry's fingerprint for a later Sync.
+	State *State
 }
 
 type inodeKey struct{ dev, ino uint64 }
@@ -75,6 +88,10 @@ func Copy(src, dst string, o Options) (Stats, error) {
 	skip := skipSet(o.Skip)
 	err := filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
+			if o.Live && p != src {
+				c.st.Dirty++ // vanished while walking
+				return nil
+			}
 			return err
 		}
 		rel, _ := filepath.Rel(src, p)
@@ -87,8 +104,39 @@ func Copy(src, dst string, o Options) (Stats, error) {
 			}
 			return nil
 		}
+		var before unix.Stat_t
+		if o.State != nil {
+			if err := unix.Lstat(p, &before); err != nil {
+				if o.Live {
+					c.st.Dirty++
+					return nil
+				}
+				return err
+			}
+		}
 		if err := c.entry(p, filepath.Join(dst, rel), rel); err != nil {
+			if o.Live {
+				c.st.Dirty++
+				if !d.IsDir() {
+					_ = os.Remove(filepath.Join(dst, rel)) // a partial copy
+				}
+				if o.Hashes != nil {
+					delete(o.Hashes, rel)
+				}
+				return nil
+			}
 			return fmt.Errorf("%s: %w", rel, err)
+		}
+		if o.State != nil {
+			var after unix.Stat_t
+			if err := unix.Lstat(p, &after); err == nil && fingerprintOf(&before) == fingerprintOf(&after) {
+				o.State.Entries[rel] = fingerprintOf(&before)
+			} else {
+				c.st.Dirty++ // changed while copying
+				if o.Hashes != nil {
+					delete(o.Hashes, rel)
+				}
+			}
 		}
 		if o.Progress != nil && time.Since(c.last) >= o.Every {
 			c.last = time.Now()

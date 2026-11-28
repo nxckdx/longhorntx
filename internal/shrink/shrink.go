@@ -64,14 +64,19 @@ type Plan struct {
 	Tolerations []any    `json:"tolerations,omitempty"` // of the app's pod: its node may be tainted
 	PullSecrets []string `json:"pullSecrets,omitempty"`
 	ProbePod    string   `json:"probePod"`
-	Blockers    []string `json:"blockers,omitempty"`
-	Warnings    []string `json:"warnings,omitempty"`
+	PrecopyPod  string   `json:"precopyPod"`
+	// Precopy: copy while the app still runs, then – frozen – only what
+	// changed (off for ReadWriteOncePod PVCs: no second pod may mount them).
+	Precopy  bool     `json:"precopy"`
+	Blockers []string `json:"blockers,omitempty"`
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // BuildOptions: the copy pod's image and pull secrets.
 type BuildOptions struct {
 	Image       string
 	PullSecrets []string
+	NoPrecopy   bool // copy everything while the app is down
 }
 
 func (p *Plan) block(f string, a ...any) { p.Blockers = append(p.Blockers, fmt.Sprintf(f, a...)) }
@@ -114,6 +119,14 @@ func Build(ctx context.Context, c *longhorn.Client, namespace, pvc string, size 
 	h := sha256.Sum256([]byte(namespace + "/" + pvc + now.String()))
 	p.CopyPod = "lhtx-shrink-copy-" + hex.EncodeToString(h[:])[:8]
 	p.ProbePod = "lhtx-shrink-probe-" + hex.EncodeToString(h[:])[:8]
+	p.PrecopyPod = "lhtx-shrink-pre-" + hex.EncodeToString(h[:])[:8]
+	p.Precopy = !bo.NoPrecopy
+	for _, m := range sw.AccessModes {
+		if m == "ReadWriteOncePod" && p.Precopy {
+			p.Precopy = false
+			p.warn("the PVC is ReadWriteOncePod: no second pod may mount it while the app runs – no pre-copy, everything is copied while the app is down")
+		}
+	}
 	// BuildPending compared encryption with "false": that check is about
 	// restores, not this – drop its blocker, the new volume follows the old
 	sw.Blockers = without(sw.Blockers, "encrypted")
@@ -264,6 +277,10 @@ func (p *Plan) Steps() []string {
 		fmt.Sprintf("pre-flight pod %s on %s: pulls the image, attaches and formats the new volume, checks that all replicas are placed – the app still runs; a failure removes everything",
 			p.ProbePod, where),
 	}
+	if p.Precopy {
+		out = append(out, fmt.Sprintf("pre-copy pod %s on %s: copies everything while the app still runs (mounts the PVC read-only next to it) and checks the content – the app's downtime is only the changes",
+			p.PrecopyPod, where))
+	}
 	for _, s := range sw.Steps() {
 		if strings.HasPrefix(s, "wait until volume "+sw.NewVolume) {
 			continue
@@ -271,11 +288,18 @@ func (p *Plan) Steps() []string {
 		out = append(out, s)
 		if strings.HasPrefix(s, "wait until volume "+sw.OldVolume+" is detached") {
 			out = append(out,
-				fmt.Sprintf("copy pod %s (image %s, root): copy all files from %s to the new volume, then compare both trees", p.CopyPod, p.Image, sw.PVCRef()),
+				copyStep(p),
 				fmt.Sprintf("delete the copy pod, PVC %s and PV %s (the new volume stays)", p.TempPVC, p.TempPV))
 		}
 	}
 	return out
+}
+
+func copyStep(p *Plan) string {
+	if p.Precopy {
+		return fmt.Sprintf("copy pod %s: copy what changed since the pre-copy (new, changed, removed entries), then compare both trees (content of what was copied again)", p.CopyPod)
+	}
+	return fmt.Sprintf("copy pod %s (image %s, root): copy all files from %s to the new volume, then compare both trees", p.CopyPod, p.Image, p.Switch.PVCRef())
 }
 
 // Options: Log gets progress lines; Wait bounds waits for pods/PVCs.
@@ -320,6 +344,15 @@ func Run(ctx context.Context, c *longhorn.Client, p *Plan, o Options) error {
 	if err := r.preflight(); err != nil {
 		r.cleanup(true)
 		return fmt.Errorf("%w (nothing was stopped; the new volume was removed)", err)
+	}
+	if p.Precopy {
+		r.precopy()
+		if ctx.Err() != nil {
+			if !(o.Handover) {
+				r.cleanup(true)
+			}
+			return fmt.Errorf("%w (nothing was stopped)", ctx.Err())
+		}
 	}
 	err := switchover.Run(ctx, c, p.Switch, switchover.Options{
 		Log: o.Log, Journal: o.Journal, Wait: o.Wait, Poll: o.Poll,
@@ -422,10 +455,20 @@ func (r *runner) createTarget() error {
 
 // podObject is the copy pod (probe=false: mounts the old PVC read-only and
 // the new volume, copies) or the pre-flight probe (only the new volume).
-func (r *runner) podObject(probe bool) *unstructured.Unstructured {
+// podObject: role "probe" (pre-flight: only the new volume), "pre" (the
+// pre-copy, the app still runs) or "copy" (the final copy, frozen).
+func (r *runner) podObject(role string) *unstructured.Unstructured {
 	sw, p := r.p.Switch, r.p
 	root := int64(0)
-	name, args, role := p.CopyPod, []any{"copy", "/src", "/dst"}, "copy"
+	mode := "full"
+	if p.Precopy {
+		mode = "final" // only what changed since the pre-copy (or everything, if it did not finish)
+	}
+	name, args := p.CopyPod, []any{"copy", "--mode", mode, "/src", "/dst"}
+	probe := role == "probe"
+	if role == "pre" {
+		name, args = p.PrecopyPod, []any{"copy", "--mode", "pre", "/src", "/dst"}
+	}
 	mounts := []any{
 		map[string]any{"name": "src", "mountPath": "/src", "readOnly": true},
 		map[string]any{"name": "dst", "mountPath": "/dst"},
@@ -435,7 +478,7 @@ func (r *runner) podObject(probe bool) *unstructured.Unstructured {
 		map[string]any{"name": "dst", "persistentVolumeClaim": map[string]any{"claimName": p.TempPVC}},
 	}
 	if probe {
-		name, args, role = p.ProbePod, []any{"copy", "--probe", "/dst"}, "probe"
+		name, args = p.ProbePod, []any{"copy", "--probe", "/dst"}
 		mounts, vols = mounts[1:], vols[1:]
 	}
 	spec := map[string]any{
@@ -483,7 +526,7 @@ func (r *runner) podObject(probe bool) *unstructured.Unstructured {
 // look it up.
 func (r *runner) dryRunCopyPod() error {
 	r.node = r.p.Node
-	pod := r.podObject(false)
+	pod := r.podObject("copy")
 	_, err := r.c.Dynamic().Resource(gvrPod).Namespace(r.p.Switch.Namespace).Create(r.ctx, pod,
 		metav1.CreateOptions{FieldManager: "lhtx", DryRun: []string{metav1.DryRunAll}})
 	if err != nil {
@@ -500,7 +543,7 @@ func (r *runner) dryRunCopyPod() error {
 func (r *runner) preflight() error {
 	sw, p := r.p.Switch, r.p
 	res := r.c.Dynamic().Resource(gvrPod).Namespace(sw.Namespace)
-	cp, err := res.Create(r.ctx, r.podObject(true), metav1.CreateOptions{FieldManager: "lhtx"})
+	cp, err := res.Create(r.ctx, r.podObject("probe"), metav1.CreateOptions{FieldManager: "lhtx"})
 	if err != nil {
 		return fmt.Errorf("pre-flight pod: %w", err)
 	}
@@ -575,23 +618,19 @@ const transientErrors = 40
 
 // copy runs while the PVC is frozen and its volume detached.
 func (r *runner) copy(ctx context.Context) error {
-	sw, p := r.p.Switch, r.p
-	dyn := r.c.Dynamic()
-	pod := r.podObject(false)
-	cp, err := dyn.Resource(gvrPod).Namespace(sw.Namespace).Create(ctx, pod, metav1.CreateOptions{FieldManager: "lhtx"})
-	if err != nil {
-		return fmt.Errorf("start copy pod: %w", err)
-	}
-	r.podUIDs[p.CopyPod] = string(cp.GetUID())
-	r.o.Log("copy pod %s started", p.CopyPod)
-	rep, err := r.followCopy(ctx)
-	r.deletePod(context.WithoutCancel(ctx))
+	p := r.p
+	rep, err := r.runPod(ctx, "copy")
 	if err != nil {
 		return err
 	}
-	r.o.Log("✔ copied and verified: %d files, %d directories, %d links, %s of data in %s",
-		rep.Stats.Files, rep.Stats.Dirs, rep.Stats.Symlinks+rep.Stats.Hardlinks, format.Bytes(rep.Stats.Bytes),
-		(time.Duration(rep.Seconds * float64(time.Second))).Round(100*time.Millisecond))
+	took := (time.Duration(rep.Seconds * float64(time.Second))).Round(100 * time.Millisecond)
+	if p.Precopy && rep.Stats.Unchanged > 0 {
+		r.o.Log("✔ synced and verified in %s: %d entries kept from the pre-copy, %d copied again (%s), %d removed",
+			took, rep.Stats.Unchanged, rep.Changed, format.Bytes(rep.Stats.Bytes), rep.Stats.Removed)
+	} else {
+		r.o.Log("✔ copied and verified: %d files, %d directories, %d links, %s of data in %s",
+			rep.Stats.Files, rep.Stats.Dirs, rep.Stats.Symlinks+rep.Stats.Hardlinks, format.Bytes(rep.Stats.Bytes), took)
+	}
 	// the temporary PVC and PV go; the switch binds the PVC to the volume
 	if err := r.deleteTemp(ctx); err != nil {
 		return err
@@ -608,10 +647,43 @@ type copyReport struct {
 	Diff    []string       `json:"diff"`
 	Error   string         `json:"error"`
 	Seconds float64        `json:"seconds"`
+	Changed int64          `json:"changed"`
 }
 
-func (r *runner) followCopy(ctx context.Context) (*copyReport, error) {
-	sw, p := r.p.Switch, r.p
+// runPod starts the pre-copy ("pre") or copy ("copy") pod, follows it to
+// the end and deletes it.
+func (r *runner) runPod(ctx context.Context, role string) (*copyReport, error) {
+	sw := r.p.Switch
+	pod := r.podObject(role)
+	cp, err := r.c.Dynamic().Resource(gvrPod).Namespace(sw.Namespace).Create(ctx, pod, metav1.CreateOptions{FieldManager: "lhtx"})
+	if err != nil {
+		return nil, fmt.Errorf("start %s pod: %w", role, err)
+	}
+	r.podUIDs[pod.GetName()] = string(cp.GetUID())
+	r.o.Log("%s pod %s started", map[string]string{"pre": "pre-copy", "copy": "copy"}[role], pod.GetName())
+	rep, err := r.followCopy(ctx, pod.GetName())
+	r.deleteNamedPod(context.WithoutCancel(ctx), pod.GetName())
+	return rep, err
+}
+
+// precopy copies while the app still runs; the final copy then only takes
+// what changed. A failure is not fatal: the final copy copies everything.
+func (r *runner) precopy() {
+	start := time.Now()
+	r.o.Log("pre-copy while the app still runs (it may slow the app's disk down)")
+	rep, err := r.runPod(r.ctx, "pre")
+	if err != nil {
+		if r.ctx.Err() == nil {
+			r.o.Log("⚠ the pre-copy failed (%v) – the copy while the app is down takes everything", err)
+		}
+		return
+	}
+	r.o.Log("✔ pre-copied %s in %s (%d entries changed meanwhile – the final copy takes them)",
+		format.Bytes(rep.Stats.Bytes), time.Since(start).Round(time.Second), rep.Stats.Dirty)
+}
+
+func (r *runner) followCopy(ctx context.Context, name string) (*copyReport, error) {
+	sw := r.p.Switch
 	start := time.Now()
 	lastLog := time.Time{}
 	errs := 0
@@ -622,7 +694,7 @@ func (r *runner) followCopy(ctx context.Context) (*copyReport, error) {
 			return nil, ctx.Err()
 		case <-time.After(r.o.Poll):
 		}
-		po, err := r.c.Dynamic().Resource(gvrPod).Namespace(sw.Namespace).Get(ctx, p.CopyPod, metav1.GetOptions{})
+		po, err := r.c.Dynamic().Resource(gvrPod).Namespace(sw.Namespace).Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
 			// the copy goes on in the cluster: a blip must not roll it back
 			if errs++; errs > transientErrors || apierrors.IsNotFound(err) {
@@ -636,7 +708,7 @@ func (r *runner) followCopy(ctx context.Context) (*copyReport, error) {
 		errs = 0
 		phase, _, _ := unstructured.NestedString(po.Object, "status", "phase")
 		if phase == "Running" || phase == "Succeeded" || phase == "Failed" {
-			if line, err := r.c.PodLogTail(ctx, sw.Namespace, p.CopyPod, 2); err == nil {
+			if line, err := r.c.PodLogTail(ctx, sw.Namespace, name, 2); err == nil {
 				for _, l := range strings.Split(strings.TrimSpace(line), "\n") {
 					var x copyReport
 					if json.Unmarshal([]byte(l), &x) == nil && x.Phase != "" {
@@ -654,7 +726,7 @@ func (r *runner) followCopy(ctx context.Context) (*copyReport, error) {
 		case "Failed":
 			msg := last.Error
 			if msg == "" {
-				msg = "the copy pod failed (kubectl -n " + sw.Namespace + " logs " + p.CopyPod + ")"
+				msg = "the copy pod failed (kubectl -n " + sw.Namespace + " logs " + name + ")"
 			}
 			if len(last.Diff) > 0 {
 				msg += ": " + strings.Join(last.Diff, "; ")
@@ -672,7 +744,7 @@ func (r *runner) followCopy(ctx context.Context) (*copyReport, error) {
 			lastLog = time.Now()
 			switch {
 			case phase == "Pending":
-				r.o.Log("… copy pod %s: starting (%s)", p.CopyPod, waitingReason(po))
+				r.o.Log("… copy pod %s: starting (%s)", name, waitingReason(po))
 			case last.Phase == "check" && last.Used > 0:
 				r.o.Log("… %s used, %s free in the new volume – copying", format.Bytes(last.Used), format.Bytes(last.Free))
 			case last.Phase == "copy":
@@ -837,6 +909,7 @@ func (r *runner) cleanup(deleteVolume bool) bool {
 	sw, p := r.p.Switch, r.p
 	r.deletePod(ctx)
 	r.deleteNamedPod(ctx, p.ProbePod)
+	r.deleteNamedPod(ctx, p.PrecopyPod)
 	if r.pvcUID != "" {
 		_ = r.c.Dynamic().Resource(gvrPVC).Namespace(sw.Namespace).Delete(ctx, p.TempPVC, uidDelete(r.pvcUID))
 	}

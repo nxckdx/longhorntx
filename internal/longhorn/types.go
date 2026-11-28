@@ -81,6 +81,13 @@ type VolumeSpec struct {
 	// ("vol://X", "snap://X/S") the volume was created from
 	FromBackup string `json:"fromBackup"`
 	DataSource string `json:"dataSource"`
+	// placement: tags nodes/disks must have; per-volume anti-affinity
+	// overrides ("ignored" = the global setting, "enabled", "disabled")
+	NodeSelector                []string `json:"nodeSelector,omitempty"`
+	DiskSelector                []string `json:"diskSelector,omitempty"`
+	ReplicaSoftAntiAffinity     string   `json:"replicaSoftAntiAffinity,omitempty"`
+	ReplicaZoneSoftAntiAffinity string   `json:"replicaZoneSoftAntiAffinity,omitempty"`
+	ReplicaDiskSoftAntiAffinity string   `json:"replicaDiskSoftAntiAffinity,omitempty"`
 }
 
 type VolumeStatus struct {

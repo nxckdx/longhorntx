@@ -75,6 +75,7 @@ func runDoctor(cmd *cobra.Command, g *globals, backupMaxAge time.Duration, minSe
 	in.Extra = append(in.Extra, c.CapacityChecks(cmd.Context())...)
 	in.Extra = append(in.Extra, c.RWXChecks(cmd.Context(), in.Volumes)...)
 	in.Extra = append(in.Extra, shrink.LeftoverChecks(in.Volumes)...)
+	in.Extra = append(in.Extra, longhorn.PlacementFindings(in.Volumes, in.Replicas, in.Nodes, func() longhorn.PlacementSettings { return c.PlacementSettings(cmd.Context()) })...)
 	in.Extra = append(in.Extra, c.MountChecks(cmd.Context(), in.Volumes, longhorn.NodeNames(in.Nodes))...)
 	all := longhorn.Diagnose(in)
 	var fs []longhorn.Finding

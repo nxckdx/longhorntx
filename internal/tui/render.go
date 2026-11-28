@@ -132,7 +132,7 @@ func (m *model) viewFooter() string {
 	case m.modal != nil:
 		keys = nil
 	case p.kind == pDetail:
-		keys = [][2]string{{"s", "snapshots"}, {"b", "backups"}, {"e", "events"}, {"J", "jobs"}, {"H", "history"}, {"esc", "back"}}
+		keys = [][2]string{{"s", "snapshots"}, {"b", "backups"}, {"e", "events"}, {"J", "jobs"}, {"H", "history"}, {"P", "placement"}, {"esc", "back"}}
 		if p.panel != panelNone {
 			keys = append(keys, [2]string{"ctrl+r", "reload"})
 		}

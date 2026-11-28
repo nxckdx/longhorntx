@@ -121,6 +121,7 @@ const (
 	panelEvents
 	panelJobs
 	panelHistory
+	panelPlacement
 )
 
 type page struct {

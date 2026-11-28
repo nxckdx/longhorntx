@@ -1,5 +1,68 @@
 # Changelog
 
+## [0.8.0](https://github.com/nxckdx/longhorntx/compare/v0.7.0...v0.8.0) (2026-11-28)
+
+
+### Features
+
+* **agent:** --notify-url / LHTX_NOTIFY_URL, --notify-format, --notify-cluster, --notify-every ([f6979bd](https://github.com/nxckdx/longhorntx/commit/f6979bd57139ae1ea88781363dd0ec522f77baa8))
+* **agent:** metrics for volumes by robustness and the oldest freeze ([c35da69](https://github.com/nxckdx/longhorntx/commit/c35da6912521cfe107c31f57685a7c2115531273))
+* **agent:** mount check – stuck mounts into the history, notifications, metric and alerts ([62a88c8](https://github.com/nxckdx/longhorntx/commit/62a88c874351baaff78adcedfb0435dbb9fca6c9))
+* **agent:** restore probe – restore the latest backup into a test volume now and then, round robin (--restore-probe-interval, needs --rw) ([2d7487b](https://github.com/nxckdx/longhorntx/commit/2d7487bd487d8bb105792ae49cfd06adec3165b6))
+* **agent:** RWX history (share manager failures and restarts) and NFS probe of every running share manager ([5f2e4f3](https://github.com/nxckdx/longhorntx/commit/5f2e4f3456bbe9910faf5b3a3f5ac590cc2d7036))
+* **agent:** sample disk capacity every 6 hours (--capacity-interval) ([d655446](https://github.com/nxckdx/longhorntx/commit/d65544647864f818b4f22bef3786b41b98eaff45))
+* **agent:** shrink through the agent (Switch spec.shrinkTo) – runs in the cluster, resumes after a restart ([dbd6d77](https://github.com/nxckdx/longhorntx/commit/dbd6d775165a764fbb04f37d87e0124d5d4f29c1))
+* **agent:** webhook notifications for failures and recoveries (ntfy, slack, discord, json; batched) ([8840dff](https://github.com/nxckdx/longhorntx/commit/8840dffa4341c428704db4325be4f1f31d813e0b))
+* **chart:** capacity.interval; agent may read Longhorn nodes ([15fa11c](https://github.com/nxckdx/longhorntx/commit/15fa11c2d9efac6440c455a174b2e3d4f473b7a5))
+* **chart:** notify.* – webhook URL from a Secret ([28fc76a](https://github.com/nxckdx/longhorntx/commit/28fc76a8631ec8a05d1a557ab0f09685bc55f796))
+* **chart:** PrometheusRule with alerts (agent down, volumes faulted/degraded, backups/replicas failing, long or stuck freezes) ([5f6fa2f](https://github.com/nxckdx/longhorntx/commit/5f6fa2fd939d2ff9b08d8bd9880d8f42b730133f))
+* **chart:** restoreProbe.*, alert LonghornRestoreProbeFailed; rw role may delete (test) volumes ([45f7e15](https://github.com/nxckdx/longhorntx/commit/45f7e1568176ff38a5dc70215ee8c6f08ca43bc2))
+* **cli:** lhtx mounts; doctor and Health tab report stuck mounts and CSI problems ([1f62d37](https://github.com/nxckdx/longhorntx/commit/1f62d378c1b0cc617953751e49287668ef818481))
+* **copy:** compare xattrs; a pre-copy over NFS leaves them to the final pass ([8156f1b](https://github.com/nxckdx/longhorntx/commit/8156f1bbcbd97e090a187b6ba9bfab73f7761c38))
+* **copy:** lhtx copy – copy a tree keeping owners, modes, hard/symlinks, devices, xattrs/ACLs/capabilities and holes, then verify ([47a9edc](https://github.com/nxckdx/longhorntx/commit/47a9edc1f09be44c7146c9890fa7882b670329f3))
+* **freeze:** no CloudNativePG special case – operator pods are stopped like any other ([81e4751](https://github.com/nxckdx/longhorntx/commit/81e47515acd213ec3a52484a9cd566e9b3406813))
+* lhtx capacity; doctor warns when a disk will be full within 14 days ([fefbe34](https://github.com/nxckdx/longhorntx/commit/fefbe34009d0c08a4260f4f4841b674642061582))
+* lhtx placement – why Longhorn does (not) place a volume's replicas ([41ae8a8](https://github.com/nxckdx/longhorntx/commit/41ae8a816c2ba0bee59f2aafbc46e06bee2fba75))
+* **longhorn:** disk capacity samples and a trend forecast ([3de37f8](https://github.com/nxckdx/longhorntx/commit/3de37f865bac27b823fcb466c3f4e5c87ac16716))
+* **longhorn:** restore probe volume and history kinds; doctor warns about failed restore probes ([36ec003](https://github.com/nxckdx/longhorntx/commit/36ec00324456e486e16fc3a6f23797f083a73e0d))
+* **mounts:** find pods stuck mounting Longhorn volumes, per node, and ask kubelet ([2387e73](https://github.com/nxckdx/longhorntx/commit/2387e738d2b8bdffdb98cadf9cb0352ecc85610e))
+* **placement:** hints from the reasons; doctor also finds replicas without a node while Longhorn says scheduled ([cf48699](https://github.com/nxckdx/longhorntx/commit/cf486993ecd66805b61af92719f999f5b36f33ac))
+* **rwx:** lhtx rwx and doctor check the share chain of RWX volumes; lhtx restart share-manager / csi-plugin ([3fa9660](https://github.com/nxckdx/longhorntx/commit/3fa966071dc1af79d7ab612cc56f3974bca77a55))
+* **rwx:** lhtx rwx and doctor show the agent's NFS verdict; docs for RWX checks, NFS probe and restarts ([77a2fcf](https://github.com/nxckdx/longhorntx/commit/77a2fcf0763be9482a976293bcc964ecf240d494))
+* **shrink:** copy and verify many files in parallel (lhtx copy --jobs, default 8) ([4b3d1ee](https://github.com/nxckdx/longhorntx/commit/4b3d1eedb8dd5c1dd0aab33ebe37b2b8b13de1ff))
+* **shrink:** lhtx shrink – new smaller volume, freeze, copy and verify in a pod with lhtx's image, swap the PVC ([b753e63](https://github.com/nxckdx/longhorntx/commit/b753e635bb215139c1e820e4f53a019ae35cf2d1))
+* **shrink:** pre-copy while the app runs – the downtime is only what changed ([33a28cb](https://github.com/nxckdx/longhorntx/commit/33a28cb3422340b54e87070b7a14326d412350c6))
+* **shrink:** RWX volumes ([1d3d89f](https://github.com/nxckdx/longhorntx/commit/1d3d89ffa62c0462c2c9ef4515dc25c537022fae))
+* **switchover:** AfterFreeze hook (rolls back on error) and a freeze exception for labelled pods of the freezing user ([5be33ed](https://github.com/nxckdx/longhorntx/commit/5be33ed0b80a93503a9fd51fd4f229a6ad5df92f))
+* **switchover:** KeepFrozen – an AfterFreeze error that must not roll back ([b907b7c](https://github.com/nxckdx/longhorntx/commit/b907b7c321d5227e7c6a74db20d244f4dae7e025))
+* **tui:** placement panel (P) in the volume details ([76466be](https://github.com/nxckdx/longhorntx/commit/76466be5d36aa542d126107583504d05c27f117e))
+* **tui:** shrink a volume with K in the volume details (plan, steps, live log, x cancels) ([fcb208a](https://github.com/nxckdx/longhorntx/commit/fcb208a050d15f8d81863cda1589b98ab5b125a4))
+
+
+### Bug Fixes
+
+* **agent:** a shrink that stopped before anything changed is Failed, not Stuck ([b7a6221](https://github.com/nxckdx/longhorntx/commit/b7a6221ed8d0dde7f876787431369099cd2a4cb5))
+* **agent:** a stopping agent hands its switch/shrink over instead of rolling back; deletes only what this run created ([9c11a94](https://github.com/nxckdx/longhorntx/commit/9c11a94fc1148c05bca6221d2661aed242c7c080))
+* **agent:** restore probe – encrypted test volume for encrypted backups; fail a restore that never starts ([8fab8a9](https://github.com/nxckdx/longhorntx/commit/8fab8a913625244fe62f8aebeb6002a9a4eb7325))
+* **agent:** restore probe waits the full interval after a probe (the history is written a few seconds later) ([690793c](https://github.com/nxckdx/longhorntx/commit/690793c2f67bf8daddb54d79c64932264198dc69))
+* **capacity:** show how long samples were taken in minutes, not rounded to hours ([4fbc8e4](https://github.com/nxckdx/longhorntx/commit/4fbc8e4208d7386e994ecc1e37c7d7f1b7cb7c8b))
+* **copy:** skip holes (SEEK_DATA), verify content by default, check inodes, tolerate refused security.*/trusted.* xattrs, verify without holding the tree in memory, probe mode ([081fb83](https://github.com/nxckdx/longhorntx/commit/081fb83a410fd699e8f33cf137635d97b8c987d2))
+* **copy:** verify reads the copy from the disk, not the page cache (fadvise DONTNEED after sync) ([26c3bc5](https://github.com/nxckdx/longhorntx/commit/26c3bc558e2f1acfe406bb2837c3a22578254136))
+* **freeze:** nudge owners only once the API server no longer enforces the removed policy ([0e9ec52](https://github.com/nxckdx/longhorntx/commit/0e9ec523502ec055b1614e322ff788b3d9664d92))
+* **jobs:** warn about job labels Longhorn leaves on volumes; next runs as info ([bf5a2e2](https://github.com/nxckdx/longhorntx/commit/bf5a2e21b526ea3d0c94d19b3da7c05992a34b29))
+* **mounts:** shorter mount errors, name the not-ready CSI plugin as the likely cause; failed counts are since kubelet start ([bb0337b](https://github.com/nxckdx/longhorntx/commit/bb0337ba578c01254d9d5a4020f7f96af43a6637))
+* **shrink:** doctor does not flag volumes kept by a later shrink; clearer message for a deleted copy pod ([53f1c8a](https://github.com/nxckdx/longhorntx/commit/53f1c8acd8c53e7066d7f0fe95ec4f4d2a381dd9))
+* **shrink:** fail fast on hopeless pods, require all replicas placed, close journals on abort; docs ([f1a2a39](https://github.com/nxckdx/longhorntx/commit/f1a2a3956fbb23b528dc9a54f1cd37c68e34907f))
+* **shrink:** free name for a second shrink on a day, correct rollback message, shrink-specific key warning; docs and tests ([ae983c9](https://github.com/nxckdx/longhorntx/commit/ae983c9bc303545d074513079be0cf1677ef8593))
+* **shrink:** pre-flight before the app stops, pinned node, retries, abort for interrupted runs ([6b9e890](https://github.com/nxckdx/longhorntx/commit/6b9e890804ffe422ecfe03590950a444cf99a6b4))
+* **targets:** edits and syncs failed with "changed meanwhile" after Longhorn rewrote the target ([47cc875](https://github.com/nxckdx/longhorntx/commit/47cc8756450c4c6468f88817e17e376ffa6e559a))
+* **tui:** after a server dry run the confirm dialog stays open – apply with y ([4f428e3](https://github.com/nxckdx/longhorntx/commit/4f428e34bcd37963dd7ef44e5071dab93cc16ff3))
+
+
+### Performance Improvements
+
+* **shrink:** copy with 16 workers by default ([2bb44d1](https://github.com/nxckdx/longhorntx/commit/2bb44d11503ccfce27c906b358b41fb951c67c1f))
+
 ## [0.7.0](https://github.com/nxckdx/longhorntx/compare/v0.6.0...v0.7.0) (2026-11-26)
 
 

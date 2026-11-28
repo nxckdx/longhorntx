@@ -85,7 +85,8 @@ Write commands: [write-actions.md](write-actions.md). Freeze: [freeze.md](freeze
 | `?` | help |
 
 Every action opens a dialog with the request: `y` applies (`Y` for
-destructive ones), `d` runs a server-side dry run, `esc` cancels.
+destructive ones), `d` runs a server-side dry run and shows its result in
+the same dialog (apply right after with `y`), `esc` cancels.
 
 ## Health check
 

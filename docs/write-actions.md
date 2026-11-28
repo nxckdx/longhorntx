@@ -37,7 +37,8 @@ lhtx detach VOLUME                         # removes only that ticket, never the
 lhtx jobs add|remove VOLUME JOB|group:NAME...   # recurring job labels on the volume
 lhtx jobs create NAME --task backup --cron "0 2 * * *" --retain 14 --groups default
 lhtx jobs edit NAME [--cron …] [--retain …] [--groups …]   # only the given flags change
-lhtx jobs delete NAME                      # preview lists the volumes that lose the job
+lhtx jobs delete NAME                      # preview lists the volumes that lose the job;
+                                           # Longhorn keeps the job's label on them (jobs remove clears it)
 lhtx jobs next "0 2 * * 1-5"               # when a cron runs (UTC like Longhorn) in your time zone
 lhtx targets create NAME --url s3://bucket@region/ --secret S [--poll 5m]
 lhtx targets edit|delete|sync NAME         # sync = re-read the store now

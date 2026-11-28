@@ -28,10 +28,10 @@ func TestPrecopyThenSync(t *testing.T) {
 	// pre-copy while "the app runs"
 	st := NewState()
 	hashes := map[string][32]byte{}
-	if _, err := Copy(src, dst, Options{NoOwner: true, Live: true, State: st, Hashes: hashes}); err != nil {
+	if _, err := Copy(src, dst, Options{NoOwner: true, Live: true, State: st, Hashes: hashes, Workers: 4}); err != nil {
 		t.Fatal(err)
 	}
-	if bad, err := VerifyContent(dst, hashes); err != nil || len(bad) != 0 {
+	if bad, err := VerifyContent(dst, hashes, 4); err != nil || len(bad) != 0 {
 		t.Fatalf("pre-copy content: %v %v", bad, err)
 	}
 	var keepIno syscall.Stat_t
@@ -53,7 +53,7 @@ func TestPrecopyThenSync(t *testing.T) {
 
 	// frozen: only the changes
 	h2 := map[string][32]byte{}
-	stats, changed, err := Sync(src, dst, st, Options{NoOwner: true, Hashes: h2})
+	stats, changed, err := Sync(src, dst, st, Options{NoOwner: true, Hashes: h2, Workers: 4})
 	if err != nil {
 		t.Fatal(err)
 	}

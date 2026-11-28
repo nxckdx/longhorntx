@@ -34,6 +34,7 @@ func copyCmd() *cobra.Command {
 	var verify string
 	var probe bool
 	var mode string
+	var jobs int
 	cmd := &cobra.Command{
 		Use:    "copy SRC DST | copy --probe DST",
 		Short:  "Copy a directory tree keeping owners, modes, links, xattrs and holes, then verify (lhtx shrink's copy pod)",
@@ -84,7 +85,7 @@ func copyCmd() *cobra.Command {
 					r.Phase = "sync"
 					report()
 					hashes := map[string][32]byte{}
-					st, changed, err := copytree.Sync(src, dst, prev, copytree.Options{Skip: skip, NoOwner: noOwner, Hashes: hashes, Progress: progress})
+					st, changed, err := copytree.Sync(src, dst, prev, copytree.Options{Skip: skip, NoOwner: noOwner, Hashes: hashes, Progress: progress, Workers: jobs})
 					r.Stats = st
 					if err != nil {
 						return fail(err)
@@ -92,7 +93,7 @@ func copyCmd() *cobra.Command {
 					unix.Sync()
 					r.Phase = "verify"
 					report()
-					diff, err := copytree.Verify(src, dst, copytree.VerifyOptions{Skip: skip, NoOwner: noOwner, Hashes: hashes})
+					diff, err := copytree.Verify(src, dst, copytree.VerifyOptions{Skip: skip, NoOwner: noOwner, Hashes: hashes, Workers: jobs})
 					if err != nil {
 						return fail(err)
 					}
@@ -136,7 +137,7 @@ func copyCmd() *cobra.Command {
 				hashes = map[string][32]byte{}
 			}
 			r.Phase = "copy"
-			o := copytree.Options{Skip: skip, NoOwner: noOwner, Hashes: hashes, Progress: progress}
+			o := copytree.Options{Skip: skip, NoOwner: noOwner, Hashes: hashes, Progress: progress, Workers: jobs}
 			var state *copytree.State
 			if mode == "pre" {
 				state = copytree.NewState()
@@ -152,7 +153,7 @@ func copyCmd() *cobra.Command {
 				// what did not arrive intact is left to the final pass
 				r.Phase = "verify"
 				report()
-				bad, err := copytree.VerifyContent(dst, hashes)
+				bad, err := copytree.VerifyContent(dst, hashes, jobs)
 				if err != nil {
 					return fail(err)
 				}
@@ -172,7 +173,7 @@ func copyCmd() *cobra.Command {
 				r.Phase = "verify"
 				report()
 				last := time.Now()
-				diff, err := copytree.Verify(src, dst, copytree.VerifyOptions{Skip: skip, NoOwner: os.Geteuid() != 0, Hashes: hashes,
+				diff, err := copytree.Verify(src, dst, copytree.VerifyOptions{Skip: skip, NoOwner: noOwner, Hashes: hashes, Workers: jobs,
 					Progress: func(n int64) {
 						if time.Since(last) > 5*time.Second {
 							last = time.Now()
@@ -196,6 +197,7 @@ func copyCmd() *cobra.Command {
 	cmd.Flags().StringSliceVar(&skip, "skip", []string{"lost+found"}, "entries of the source root to leave out")
 	cmd.Flags().StringVar(&verify, "verify", "content", "compare afterwards: content (metadata + SHA-256 of every file), meta, none")
 	cmd.Flags().StringVar(&mode, "mode", "full", "full: copy and verify; pre: copy a source in use, remember what arrived intact; final: copy only what changed since pre (else full)")
+	cmd.Flags().IntVar(&jobs, "jobs", 16, "files copied and verified at the same time (many small files: each is a few round trips to the disk)")
 	cmd.Flags().BoolVar(&probe, "probe", false, "only check that DST is mounted and writable (pre-flight)")
 	return cmd
 }

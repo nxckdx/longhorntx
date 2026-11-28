@@ -80,7 +80,10 @@ removes what it created:
    timestamps and holes (sparse files are not even read where they are
    empty). Then both trees are compared: every entry's type, mode, owner,
    size, links and times, and a SHA-256 of the content of what was copied
-   (the pre-copied rest was checked before the freeze)
+   (the pre-copied rest was checked before the freeze). 16 files are
+   copied and compared at the same time – with many small files every
+   file is a few round trips to the disk (in the lab, 80 000 small files:
+   49 s one by one, 12 s in parallel)
 7. delete the copy pod and the temporary PV/PVC, then the switch: old PV
    to `Retain`, PVC re-created on the new volume, key guard, unfreeze
 
@@ -121,7 +124,8 @@ shrunk with their own tools (dump/restore, CNPG).
 
 The app is down from step 5 to the end: stopping it, copying what changed
 since the pre-copy (in the lab: 0.6 s for an app writing five files a
-second, against 33 s for the full 1.4 GiB), starting it again. Without the
+second, against 33 s for the full 1.4 GiB; 1.7 s to check 80 000
+unchanged files), starting it again. Without the
 pre-copy, about as long as reading the used data twice (copy, compare).
 `--dry-run` shows the plan; `--image` / `--image-pull-secret` for clusters
 without access to ghcr.io (default: env `LHTX_SHRINK_IMAGE`, else the image

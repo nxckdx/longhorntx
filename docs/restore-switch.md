@@ -112,7 +112,24 @@ them and unfreezes – the app starts again on its old volume. If lhtx was
 killed after the old PVC was deleted, `--abort` refuses and points to the
 journal (`lhtx switch --status`).
 
-Checks before anything changes: raw block PVCs, RWX volumes and namespaces
+**RWX volumes** are shared over NFS by Longhorn's share manager, and NFS
+4.1 does not carry extended attributes (ACLs, file capabilities,
+`user.*`). So the pre-copy reads over NFS while the app runs (owners,
+modes, links and content come through), and once the PVC is frozen and
+its volume detached, the old volume is set to `rwo` for the copy (the
+annotation `lhtx.io/shrink-access-mode: rwx` remembers it) and the copy
+pod mounts it as a block device through a temporary PV/PVC – the final
+pass sets the extended attributes on every entry, and the comparison
+checks them. Then the old volume goes back to `rwx` (also on any
+failure), and the new volume, made `rwo` for the copy, becomes `rwx`. If
+the old volume cannot be set back, the PVC stays frozen rather than
+starting its pods on an unshared volume; `lhtx doctor` reports such a
+volume as critical and `--abort` sets it back. In the lab: two pods
+writing over NFS, encrypted or not, the app down for about 40 s of which
+the copy was 0.5 s; killing the agent mid-copy, the next one cleaned up,
+set the volume back and finished.
+
+Checks before anything changes: raw block PVCs and namespaces
 enforcing the `restricted` Pod Security level are refused; the size must be
 smaller and leave 10 % free of what is used (from kubelet's stats when
 allowed, otherwise the copy pod checks it). lhtx notes: a PVC managed by

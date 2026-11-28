@@ -77,6 +77,15 @@ type runner struct {
 // no automatic rollback any more.
 type pastReturn struct{ error }
 
+// KeepFrozen wraps an AfterFreeze error after which the workload must not
+// start again by itself (its volume is not in a state it can use): no
+// rollback, the freeze stays – the error says how to get out.
+func KeepFrozen(err error) error { return keepFrozen{err} }
+
+type keepFrozen struct{ error }
+
+func (e keepFrozen) Unwrap() error { return e.error }
+
 // ErrBlocked is returned by Run when the plan has blockers.
 var ErrBlocked = errors.New("the switch is blocked")
 
@@ -147,6 +156,12 @@ func (r *runner) run() error {
 	r.step("%s frozen (%s), its pods are gone and volume %s is detached", p.PVCRef(), f.Name, p.OldVolume)
 	if r.o.AfterFreeze != nil {
 		if err := r.o.AfterFreeze(r.ctx); err != nil {
+			var kf keepFrozen
+			if errors.As(err, &kf) {
+				name := r.freeze.Name
+				r.freeze = nil
+				return fmt.Errorf("%w – %s stays frozen (%s), nothing was rolled back", kf.error, p.PVCRef(), name)
+			}
 			return r.rollback(err)
 		}
 	}

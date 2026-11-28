@@ -40,12 +40,15 @@ func TestLeftoverChecks(t *testing.T) {
 		v.Status.KubernetesStatus = longhorn.KubernetesStatus{Namespace: ns, PVCName: pvc}
 		return v
 	}
+	kept := vol("kept", "older", "shop", "data")
+	kept.Status.KubernetesStatus.LastPVCRefAt = "2026-11-27T10:00:00Z"
 	f := LeftoverChecks([]*longhorn.Volume{
 		vol("old", "", "shop", "data"),                    // the app's volume
 		vol("done", "old-before", "shop", "other"),        // a finished shrink: in use
 		vol("orphan", "old", "", ""),                      // nobody uses it
 		vol("copying", "old", "shop", "lhtx-shrink-data"), // still on the temporary PVC
 		vol("plain", "", "", ""),                          // not made by a shrink
+		kept,                                              // a shrink's volume, replaced by a later one
 	})
 	if len(f) != 2 || f[0].Object != "volume/orphan" || !strings.Contains(f[0].Hint, "--abort shop/data") || f[1].Object != "volume/copying" {
 		t.Errorf("findings = %+v", f)
@@ -112,5 +115,34 @@ func TestPodObjectPrecopy(t *testing.T) {
 	p.Precopy = false
 	if a := args("copy"); !strings.Contains(a, "--mode full") {
 		t.Errorf("no pre-copy: %s", a)
+	}
+}
+
+// RWX: the pre-copy reads the app's PVC (over NFS), the final copy the
+// old volume as a block device through the source PVC.
+func TestPodObjectRWX(t *testing.T) {
+	p := &Plan{CopyPod: "c", PrecopyPod: "pre", TempPVC: "tmp", SrcPVC: "lhtx-shrink-src-data", Precopy: true, RWX: true}
+	p.Switch = &switchover.Plan{Namespace: "shop", PVC: "data"}
+	r := &runner{p: p}
+	src := func(role string) string {
+		return fmt.Sprint(r.podObject(role).Object["spec"].(map[string]any)["volumes"].([]any)[0])
+	}
+	if s := src("pre"); !strings.Contains(s, "claimName:data ") {
+		t.Errorf("pre-copy source %s", s)
+	}
+	if s := src("copy"); !strings.Contains(s, "lhtx-shrink-src-data") {
+		t.Errorf("copy source %s", s)
+	}
+}
+
+// An RWX volume left rwo by an interrupted shrink is critical.
+func TestLeftoverChecksAccessMode(t *testing.T) {
+	v := &longhorn.Volume{}
+	v.Name, v.Spec.AccessMode = "old", "rwo"
+	v.Annotations = map[string]string{AnnAccessMode: "rwx"}
+	v.Status.KubernetesStatus = longhorn.KubernetesStatus{Namespace: "shop", PVCName: "data"}
+	f := LeftoverChecks([]*longhorn.Volume{v})
+	if len(f) != 1 || f[0].Severity != longhorn.SevCritical || !strings.Contains(f[0].Hint, "--abort shop/data") {
+		t.Errorf("findings %+v", f)
 	}
 }

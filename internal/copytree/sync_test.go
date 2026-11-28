@@ -3,9 +3,12 @@ package copytree
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestPrecopyThenSync(t *testing.T) {
@@ -107,5 +110,39 @@ func TestLiveCopySkipsChanging(t *testing.T) {
 	}
 	if l, err := LoadState(f); err != nil || len(l.Entries) != 2 {
 		t.Errorf("load: %v %v", l, err)
+	}
+}
+
+// A pre-copy that could not read xattrs (over NFS): Verify notices them
+// missing, Sync sets them on unchanged entries too.
+func TestSyncAddsXattrsAfterNFSPrecopy(t *testing.T) {
+	src, dst := t.TempDir(), t.TempDir()
+	f := filepath.Join(src, "f")
+	_ = os.WriteFile(f, []byte("x"), 0o644)
+	if err := unix.Setxattr(f, "user.k", []byte("v"), 0); err != nil {
+		t.Skipf("no user xattrs here: %v", err)
+	}
+	st := NewState()
+	st.NoXattrs = true
+	if _, err := Copy(src, dst, Options{NoOwner: true, Live: true, State: st, NoXattrs: true, Workers: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if diff, _ := Verify(src, dst, VerifyOptions{NoOwner: true}); len(diff) != 1 || !strings.Contains(diff[0], "user.k missing") {
+		t.Errorf("verify after the pre-copy: %v", diff)
+	}
+	s, changed, err := Sync(src, dst, st, Options{NoOwner: true, Workers: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changed) != 0 || s.Unchanged != 1 {
+		t.Errorf("sync copied again: %v %+v", changed, s)
+	}
+	if diff, err := Verify(src, dst, VerifyOptions{NoOwner: true}); err != nil || len(diff) != 0 {
+		t.Errorf("verify after sync: %v %v", diff, err)
+	}
+	// another value is found too
+	_ = unix.Setxattr(filepath.Join(dst, "f"), "user.k", []byte("w"), 0)
+	if diff, _ := Verify(src, dst, VerifyOptions{NoOwner: true}); len(diff) != 1 || !strings.Contains(diff[0], "another value") {
+		t.Errorf("verify, other value: %v", diff)
 	}
 }

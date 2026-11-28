@@ -65,6 +65,10 @@ type Options struct {
 	// Workers: entries copied at the same time (default 1). Directories
 	// are always made by the walk itself, in order.
 	Workers int
+	// NoXattrs: copy no extended attributes – the source cannot give them
+	// (NFS before 4.2: the pre-copy of an RWX volume). The State records
+	// it: Sync then sets them on every entry, also unchanged ones.
+	NoXattrs bool
 }
 
 type inodeKey struct{ dev, ino uint64 }
@@ -313,6 +317,9 @@ func (c *copier) entry(src, dst, rel string, buf []byte) (err error) {
 		return err
 	}
 	// file capabilities last: chown in meta would drop them
+	if c.o.NoXattrs {
+		return nil
+	}
 	if err := copyXattr(src, dst, "security.capability"); err != nil && !errors.Is(err, unix.ENODATA) && !errors.Is(err, unix.ENOTSUP) {
 		return err
 	}
@@ -420,6 +427,9 @@ func (c *copier) file(src, dst string, size int64, h hash.Hash, buf []byte) erro
 // The target refusing a security.* or trusted.* attribute (SELinux under
 // a context= mount, trusted.* without CAP_SYS_ADMIN) is counted, not fatal.
 func (c *copier) xattrs(src, dst string) error {
+	if c.o.NoXattrs {
+		return nil
+	}
 	sz, err := unix.Llistxattr(src, nil)
 	if err != nil {
 		if errors.Is(err, unix.ENOTSUP) {
@@ -575,6 +585,10 @@ func Verify(src, dst string, o VerifyOptions) ([]string, error) {
 			add("differs: %s (%+v vs %+v)", rel, x, y)
 			return nil
 		}
+		if d := xattrDiff(p, q); d != "" {
+			add("xattrs differ: %s (%s)", rel, d)
+			return nil
+		}
 		if want, ok := o.Hashes[rel]; ok && a.Mode&unix.S_IFMT == unix.S_IFREG {
 			got, err := fileHash(q, b.Size, buf)
 			if err != nil {
@@ -635,6 +649,65 @@ func Verify(src, dst string, o VerifyOptions) ([]string, error) {
 		add("the target has %d entries, the source %d", m, n)
 	}
 	return diff, err
+}
+
+// listXattrs: the names of p's extended attributes (none where the
+// filesystem has none).
+func listXattrs(p string) ([]string, error) {
+	sz, err := unix.Llistxattr(p, nil)
+	if err != nil || sz == 0 {
+		if errors.Is(err, unix.ENOTSUP) {
+			err = nil
+		}
+		return nil, err
+	}
+	buf := make([]byte, sz)
+	if sz, err = unix.Llistxattr(p, buf); err != nil {
+		return nil, err
+	}
+	var out []string
+	for n := range bytes.SplitSeq(buf[:sz], []byte{0}) {
+		if len(n) > 0 {
+			out = append(out, string(n))
+		}
+	}
+	return out, nil
+}
+
+func getXattr(p, name string) ([]byte, error) {
+	sz, err := unix.Lgetxattr(p, name, nil)
+	if err != nil {
+		return nil, err
+	}
+	val := make([]byte, sz)
+	sz, err = unix.Lgetxattr(p, name, val)
+	return val[:sz], err
+}
+
+// xattrDiff compares the extended attributes of a (source) and b (copy).
+// Those the target may refuse (security.* but capabilities, trusted.* –
+// counted as skipped by the copy) are compared only if the copy has them.
+func xattrDiff(a, b string) string {
+	names, err := listXattrs(a)
+	if err != nil {
+		return err.Error()
+	}
+	for _, n := range names {
+		va, err := getXattr(a, n)
+		if err != nil {
+			continue // gone meanwhile (cannot happen frozen)
+		}
+		vb, err := getXattr(b, n)
+		mayLack := (strings.HasPrefix(n, "security.") && n != "security.capability") || strings.HasPrefix(n, "trusted.")
+		switch {
+		case err != nil && mayLack:
+		case err != nil:
+			return n + " missing"
+		case !bytes.Equal(va, vb):
+			return n + " has another value"
+		}
+	}
+	return ""
 }
 
 func fileHash(p string, size int64, buf []byte) ([32]byte, error) {

@@ -47,7 +47,7 @@ write actions are not tested.
   operator and GitOps, ordered shutdown, hooks, CloudNativePG hibernation –
   [freeze](docs/freeze.md)
 - **Restore and switch**: put a backup under a running app's PVC in one
-  confirmed run, with rollback and the way back; **shrink** a volume (new
+  confirmed run, with rollback and the way back; **shrink** a volume, RWX too (new
   smaller volume, copy, swap) – [restore and switch](docs/restore-switch.md)
 - **Encrypted volumes**: the key goes along with restores, clones, switches
   and migrations, whatever manages the Secret – [encryption](docs/encryption.md)

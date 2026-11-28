@@ -40,6 +40,10 @@ var (
 // LabelCopy marks the copy pod (the freeze lets it mount the PVC).
 const LabelCopy = "lhtx.io/shrink"
 
+// AnnAccessMode: on an RWX volume a shrink set to rwo for its copy – the
+// access mode to set back (lhtx shrink --abort does, doctor warns).
+const AnnAccessMode = "lhtx.io/shrink-access-mode"
+
 // Headroom: the new size must leave this much of it free after the copy.
 const Headroom = 0.10
 
@@ -67,7 +71,14 @@ type Plan struct {
 	PrecopyPod  string   `json:"precopyPod"`
 	// Precopy: copy while the app still runs, then – frozen – only what
 	// changed (off for ReadWriteOncePod PVCs: no second pod may mount them).
-	Precopy  bool     `json:"precopy"`
+	Precopy bool `json:"precopy"`
+	// RWX: the old volume is shared over NFS. Its pre-copy reads NFS
+	// (no xattrs); frozen, the old volume is set to rwo for the copy and
+	// read as a block device through SrcPV/SrcPVC, then set back. The new
+	// volume is made rwo and set to rwx after the copy.
+	RWX      bool     `json:"rwx,omitempty"`
+	SrcPVC   string   `json:"srcPVC,omitempty"`
+	SrcPV    string   `json:"srcPV,omitempty"`
 	Blockers []string `json:"blockers,omitempty"`
 	Warnings []string `json:"warnings,omitempty"`
 }
@@ -143,12 +154,19 @@ func Build(ctx context.Context, c *longhorn.Client, namespace, pvc string, size 
 		return nil, err
 	}
 	p.OldSize = int64(ov.Spec.Size)
+	if ov.Spec.AccessMode == "rwx" {
+		p.RWX = true
+		p.SrcPVC, p.SrcPV = srcPVCName(pvc), "lhtx-shrink-src-"+name
+	}
 	spec, _, _ := unstructured.NestedMap(old.Object, "spec")
 	p.Volume = map[string]any{"size": strconv.FormatInt(size, 10)}
 	for _, k := range keepSpec {
 		if v, ok := spec[k]; ok {
 			p.Volume[k] = v
 		}
+	}
+	if p.RWX {
+		p.Volume["accessMode"] = "rwo" // the copy writes the block device; rwx after it
 	}
 	p.VolLabels = map[string]any{}
 	for k, v := range old.GetLabels() { // recurring jobs and groups: backups go on
@@ -168,11 +186,16 @@ func Build(ctx context.Context, c *longhorn.Client, namespace, pvc string, size 
 		}
 	} else if ov.Status.CurrentNodeID != "" {
 		p.Node, p.NodeWhy = ov.Status.CurrentNodeID, "where the app runs now"
+		if p.RWX {
+			p.NodeWhy = "where its share manager runs now"
+		}
 	}
+	podNode := ""
 	if sw.Freeze != nil && len(sw.Freeze.Pods) > 0 {
 		pns, pname, _ := strings.Cut(sw.Freeze.Pods[0], "/")
 		if po, err := c.Dynamic().Resource(gvrPod).Namespace(pns).Get(ctx, pname, metav1.GetOptions{}); err == nil {
 			p.Tolerations, _, _ = unstructured.NestedSlice(po.Object, "spec", "tolerations")
+			podNode, _, _ = unstructured.NestedString(po.Object, "spec", "nodeName")
 		}
 	}
 	if ov.Status.LastBackup != "" || len(p.VolLabels) > 0 {
@@ -184,8 +207,6 @@ func Build(ctx context.Context, c *longhorn.Client, namespace, pvc string, size 
 	switch {
 	case sw.VolumeMode == "Block":
 		p.block("the PVC is a raw block device – there is no filesystem to copy files from")
-	case ov.Spec.AccessMode == "rwx":
-		p.block("RWX volumes are not supported by lhtx shrink yet")
 	case ov.Spec.DataEngine == "v2":
 		p.block("v2 data engine volumes are not supported")
 	case size >= p.OldSize:
@@ -195,6 +216,15 @@ func Build(ctx context.Context, c *longhorn.Client, namespace, pvc string, size 
 	}
 	if exists(ctx, c, longhorn.GVRVolume, c.Namespace, name) {
 		p.block("volume %s exists already (nine shrinks today?) – delete old ones first", name)
+	}
+	if mode := ov.Annotations[AnnAccessMode]; mode != "" {
+		p.block("volume %s was set to %s by an interrupted shrink (it is %s normally): lhtx --rw shrink --abort %s/%s", ov.Name, ov.Spec.AccessMode, mode, namespace, pvc)
+	}
+	if p.RWX {
+		p.warn("RWX: the pre-copy reads over NFS while the app runs; frozen, the old volume is set to rwo for the copy (read as a block device: xattrs, ACLs, capabilities) and back to rwx – if lhtx stops in between, lhtx --rw shrink --abort %s/%s sets it back", namespace, pvc)
+		if p.SrcPVC != "" && exists(ctx, c, gvrPVC, namespace, p.SrcPVC) {
+			p.block("PVC %s/%s exists already – a shrink is running or was interrupted: lhtx --rw shrink --abort %s/%s", namespace, p.SrcPVC, namespace, pvc)
+		}
 	}
 	if exists(ctx, c, gvrPVC, namespace, p.TempPVC) {
 		p.block("PVC %s/%s exists already – a shrink is running or was interrupted: lhtx --rw shrink --abort %s/%s", namespace, p.TempPVC, namespace, pvc)
@@ -210,7 +240,13 @@ func Build(ctx context.Context, c *longhorn.Client, namespace, pvc string, size 
 
 	// how much is used: kubelet knows (needs nodes/proxy); else the copy
 	// pod checks it before copying
-	if node := ov.Status.CurrentNodeID; node != "" && ov.Status.State == "attached" {
+	// (an RWX volume is attached to its share manager's node; kubelet
+	// knows the usage where an app pod mounts it)
+	usageNode := ov.Status.CurrentNodeID
+	if p.RWX || usageNode == "" {
+		usageNode = podNode
+	}
+	if node := usageNode; node != "" && ov.Status.State == "attached" {
 		if u, err := c.VolumeUsage(ctx, node, namespace, pvc); err == nil {
 			p.Used, p.UsedFrom = u, "kubelet on "+node
 		}
@@ -287,9 +323,17 @@ func (p *Plan) Steps() []string {
 		}
 		out = append(out, s)
 		if strings.HasPrefix(s, "wait until volume "+sw.OldVolume+" is detached") {
+			if p.RWX {
+				out = append(out, fmt.Sprintf("set volume %s to rwo (annotation %s=rwx) and create PV %s and PVC %s/%s on it – the copy reads it as a block device",
+					sw.OldVolume, AnnAccessMode, p.SrcPV, sw.Namespace, p.SrcPVC))
+			}
 			out = append(out,
 				copyStep(p),
 				fmt.Sprintf("delete the copy pod, PVC %s and PV %s (the new volume stays)", p.TempPVC, p.TempPV))
+			if p.RWX {
+				out = append(out, fmt.Sprintf("delete PVC %s and PV %s, set volume %s back to rwx (on any failure before, too) and the new volume %s to rwx",
+					p.SrcPVC, p.SrcPV, sw.OldVolume, sw.NewVolume))
+			}
 		}
 	}
 	return out
@@ -379,8 +423,10 @@ type runner struct {
 	node   string // where the probe ran: the copy pod runs there too
 	// UIDs of what this run created: deletes never hit a same-named object
 	// of another run
-	pvUID, pvcUID string
-	podUIDs       map[string]string
+	pvUID, pvcUID       string
+	srcPVUID, srcPVCUID string
+	podUIDs             map[string]string
+	oldRWO              bool // the old RWX volume is set to rwo (RWX copy)
 }
 
 func uidDelete(uid string) metav1.DeleteOptions {
@@ -407,50 +453,64 @@ func (r *runner) createTarget() error {
 	r.volUID = string(created.GetUID())
 	r.o.Log("volume %s created (%s)", sw.NewVolume, human(p.NewSize))
 
+	pvUID, pvcUID, err := r.createClaim(r.ctx, "target", p.TempPV, p.TempPVC, sw.NewVolume, p.NewSize)
+	r.pvUID, r.pvcUID = pvUID, pvcUID
+	if err != nil {
+		return err
+	}
+	r.o.Log("PV %s and PVC %s/%s created", p.TempPV, sw.Namespace, p.TempPVC)
+	return nil
+}
+
+// createClaim creates a ReadWriteOnce PV for a Longhorn volume and a PVC
+// bound to it (role "target": the new volume; "source": the old RWX volume
+// as a block device). It returns the UIDs of what it created.
+func (r *runner) createClaim(ctx context.Context, role, pvName, pvcName, volume string, size int64) (string, string, error) {
+	sw := r.p.Switch
+	dyn := r.c.Dynamic()
 	attrs := map[string]any{}
 	for k, v := range sw.PVAttributes {
-		attrs[k] = v
+		if k != "share" { // a block device here, whatever the volume is later
+			attrs[k] = v
+		}
 	}
-	csi := map[string]any{"driver": "driver.longhorn.io", "fsType": sw.FSType, "volumeHandle": sw.NewVolume, "volumeAttributes": attrs}
+	csi := map[string]any{"driver": "driver.longhorn.io", "fsType": sw.FSType, "volumeHandle": volume, "volumeAttributes": attrs}
 	for k, v := range sw.SecretRefs {
 		csi[k] = v
 	}
 	pv := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "v1", "kind": "PersistentVolume",
-		"metadata": map[string]any{"name": p.TempPV, "labels": map[string]any{LabelCopy: "target"}},
+		"metadata": map[string]any{"name": pvName, "labels": map[string]any{LabelCopy: role}},
 		"spec": map[string]any{
-			"capacity":                      map[string]any{"storage": human(p.NewSize)},
+			"capacity":                      map[string]any{"storage": human(size)},
 			"accessModes":                   []any{"ReadWriteOnce"},
 			"volumeMode":                    "Filesystem",
 			"persistentVolumeReclaimPolicy": "Retain",
 			"storageClassName":              sw.StorageClass,
-			"claimRef":                      map[string]any{"apiVersion": "v1", "kind": "PersistentVolumeClaim", "namespace": sw.Namespace, "name": p.TempPVC},
+			"claimRef":                      map[string]any{"apiVersion": "v1", "kind": "PersistentVolumeClaim", "namespace": sw.Namespace, "name": pvcName},
 			"csi":                           csi,
 		},
 	}}
-	cpv, err := dyn.Resource(gvrPV).Create(r.ctx, pv, metav1.CreateOptions{FieldManager: "lhtx"})
+	cpv, err := dyn.Resource(gvrPV).Create(ctx, pv, metav1.CreateOptions{FieldManager: "lhtx"})
 	if err != nil {
-		return fmt.Errorf("create PV %s: %w", p.TempPV, err)
+		return "", "", fmt.Errorf("create PV %s: %w", pvName, err)
 	}
-	r.pvUID = string(cpv.GetUID())
 	pvc := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "v1", "kind": "PersistentVolumeClaim",
-		"metadata": map[string]any{"name": p.TempPVC, "namespace": sw.Namespace, "labels": map[string]any{LabelCopy: "target"}},
+		"metadata": map[string]any{"name": pvcName, "namespace": sw.Namespace, "labels": map[string]any{LabelCopy: role}},
 		"spec": map[string]any{
 			"accessModes":      []any{"ReadWriteOnce"},
 			"storageClassName": sw.StorageClass,
 			"volumeMode":       "Filesystem",
-			"volumeName":       p.TempPV,
-			"resources":        map[string]any{"requests": map[string]any{"storage": human(p.NewSize)}},
+			"volumeName":       pvName,
+			"resources":        map[string]any{"requests": map[string]any{"storage": human(size)}},
 		},
 	}}
-	cpvc, err := dyn.Resource(gvrPVC).Namespace(sw.Namespace).Create(r.ctx, pvc, metav1.CreateOptions{FieldManager: "lhtx"})
+	cpvc, err := dyn.Resource(gvrPVC).Namespace(sw.Namespace).Create(ctx, pvc, metav1.CreateOptions{FieldManager: "lhtx"})
 	if err != nil {
-		return fmt.Errorf("create PVC %s: %w", p.TempPVC, err)
+		return string(cpv.GetUID()), "", fmt.Errorf("create PVC %s: %w", pvcName, err)
 	}
-	r.pvcUID = string(cpvc.GetUID())
-	r.o.Log("PV %s and PVC %s/%s created", p.TempPV, sw.Namespace, p.TempPVC)
-	return nil
+	return string(cpv.GetUID()), string(cpvc.GetUID()), nil
 }
 
 // podObject is the copy pod (probe=false: mounts the old PVC read-only and
@@ -466,6 +526,10 @@ func (r *runner) podObject(role string) *unstructured.Unstructured {
 	}
 	name, args := p.CopyPod, []any{"copy", "--mode", mode, "/src", "/dst"}
 	probe := role == "probe"
+	srcClaim := sw.PVC
+	if p.RWX && role == "copy" {
+		srcClaim = p.SrcPVC // the old volume as a block device (frozen, rwo)
+	}
 	if role == "pre" {
 		name, args = p.PrecopyPod, []any{"copy", "--mode", "pre", "/src", "/dst"}
 	}
@@ -474,7 +538,7 @@ func (r *runner) podObject(role string) *unstructured.Unstructured {
 		map[string]any{"name": "dst", "mountPath": "/dst"},
 	}
 	vols := []any{
-		map[string]any{"name": "src", "persistentVolumeClaim": map[string]any{"claimName": sw.PVC, "readOnly": true}},
+		map[string]any{"name": "src", "persistentVolumeClaim": map[string]any{"claimName": srcClaim, "readOnly": true}},
 		map[string]any{"name": "dst", "persistentVolumeClaim": map[string]any{"claimName": p.TempPVC}},
 	}
 	if probe {
@@ -619,9 +683,14 @@ const transientErrors = 40
 // copy runs while the PVC is frozen and its volume detached.
 func (r *runner) copy(ctx context.Context) error {
 	p := r.p
+	if p.RWX {
+		if err := r.toBlock(ctx); err != nil {
+			return r.backToRWX(ctx, err)
+		}
+	}
 	rep, err := r.runPod(ctx, "copy")
 	if err != nil {
-		return err
+		return r.backToRWX(ctx, err)
 	}
 	took := (time.Duration(rep.Seconds * float64(time.Second))).Round(100 * time.Millisecond)
 	if p.Precopy && rep.Stats.Unchanged > 0 {
@@ -633,9 +702,126 @@ func (r *runner) copy(ctx context.Context) error {
 	}
 	// the temporary PVC and PV go; the switch binds the PVC to the volume
 	if err := r.deleteTemp(ctx); err != nil {
+		return r.backToRWX(ctx, err)
+	}
+	if !p.RWX {
+		return r.waitDetached(ctx)
+	}
+	if err := r.backToRWX(ctx, nil); err != nil {
 		return err
 	}
-	return r.waitDetached(ctx)
+	if err := r.waitDetached(ctx); err != nil {
+		return err
+	}
+	if err := r.setAccessMode(ctx, p.Switch.NewVolume, "rwx", false); err != nil {
+		return fmt.Errorf("set the new volume %s to rwx: %w", p.Switch.NewVolume, err)
+	}
+	r.o.Log("✔ new volume %s set to rwx", p.Switch.NewVolume)
+	return nil
+}
+
+// toBlock (RWX, frozen, old volume detached): the old volume is set to rwo
+// – an rwx volume is always mounted over NFS, which has no xattrs – and a
+// PV/PVC on it lets the copy pod mount it as a block device.
+func (r *runner) toBlock(ctx context.Context) error {
+	p, sw := r.p, r.p.Switch
+	r.oldRWO = true // also if the patch fails: it may have arrived – setting rwx back is harmless
+	if err := r.setAccessMode(ctx, sw.OldVolume, "rwo", true); err != nil {
+		return fmt.Errorf("set the old volume %s to rwo for the copy: %w", sw.OldVolume, err)
+	}
+	r.o.Log("✔ old volume %s set to rwo for the copy (annotation %s: set back afterwards)", sw.OldVolume, AnnAccessMode)
+	pvUID, pvcUID, err := r.createClaim(ctx, "source", p.SrcPV, p.SrcPVC, sw.OldVolume, p.OldSize)
+	r.srcPVUID, r.srcPVCUID = pvUID, pvcUID
+	if err != nil {
+		return err
+	}
+	r.o.Log("PV %s and PVC %s/%s created on the old volume", p.SrcPV, sw.Namespace, p.SrcPVC)
+	return nil
+}
+
+// setAccessMode patches a detached volume's access mode; mark: remember
+// the old mode in AnnAccessMode (else the annotation is removed).
+func (r *runner) setAccessMode(ctx context.Context, volume, mode string, mark bool) error {
+	res := r.c.Dynamic().Resource(longhorn.GVRVolume).Namespace(r.c.Namespace)
+	var last error
+	for range 5 { // a conflict with longhorn-manager's own updates: read again
+		v, err := res.Get(ctx, volume, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+		if st, _, _ := unstructured.NestedString(v.Object, "status", "state"); st != "detached" {
+			return fmt.Errorf("volume %s is %s, not detached", volume, st)
+		}
+		ann := any(nil)
+		if mark {
+			cur, _, _ := unstructured.NestedString(v.Object, "spec", "accessMode")
+			ann = cur
+		}
+		patch, _ := json.Marshal(map[string]any{
+			"metadata": map[string]any{"resourceVersion": v.GetResourceVersion(), "annotations": map[string]any{AnnAccessMode: ann}},
+			"spec":     map[string]any{"accessMode": mode},
+		})
+		_, last = res.Patch(ctx, volume, types.MergePatchType, patch, metav1.PatchOptions{FieldManager: "lhtx"})
+		if last == nil || !apierrors.IsConflict(last) {
+			return last
+		}
+	}
+	return last
+}
+
+// backToRWX (RWX): the copy pod is gone; delete the source PV/PVC, wait
+// for the old volume to detach and set it back to rwx. cause: the error
+// that ended the copy (nil: it succeeded). If the old volume cannot be set
+// back the PVC stays frozen (KeepFrozen): its pods would mount a volume
+// that is not shared any more.
+func (r *runner) backToRWX(ctx context.Context, cause error) error {
+	if !r.p.RWX || (r.srcPVCUID == "" && r.srcPVUID == "" && !r.oldRWO) {
+		return cause
+	}
+	if r.o.Handover && r.ctx.Err() != nil {
+		return cause // the next agent's abort sets it back
+	}
+	ctx = context.WithoutCancel(ctx)
+	p, sw := r.p, r.p.Switch
+	err := r.deleteClaim(ctx, p.SrcPVC, p.SrcPV, r.srcPVCUID, r.srcPVUID)
+	if err == nil {
+		r.srcPVCUID, r.srcPVUID = "", ""
+		if r.oldRWO {
+			if err = r.waitVolumeDetached(ctx, sw.OldVolume); err == nil {
+				err = r.setAccessMode(ctx, sw.OldVolume, "rwx", false)
+			}
+		}
+	}
+	if err != nil {
+		why := fmt.Errorf("the old volume %s could not be set back to rwx: %w – fix it, then lhtx --rw shrink --abort %s (sets it back, unfreezes)", sw.OldVolume, err, sw.PVCRef())
+		if cause != nil {
+			why = fmt.Errorf("%w; %w", cause, why)
+		}
+		return switchover.KeepFrozen(why)
+	}
+	if r.oldRWO {
+		r.oldRWO = false
+		r.o.Log("✔ old volume %s set back to rwx", sw.OldVolume)
+	}
+	return cause
+}
+
+func (r *runner) waitVolumeDetached(ctx context.Context, name string) error {
+	deadline := time.Now().Add(r.o.Wait)
+	for {
+		v, err := r.c.Volume(ctx, name)
+		if err == nil && v.Status.State == "detached" {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("volume %s is not detached after %s", name, r.o.Wait)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(r.o.Poll):
+		}
+	}
 }
 
 // copyReport mirrors cli.CopyReport (the copy pod's JSON lines).
@@ -697,7 +883,10 @@ func (r *runner) followCopy(ctx context.Context, name string) (*copyReport, erro
 		po, err := r.c.Dynamic().Resource(gvrPod).Namespace(sw.Namespace).Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
 			// the copy goes on in the cluster: a blip must not roll it back
-			if errs++; errs > transientErrors || apierrors.IsNotFound(err) {
+			if apierrors.IsNotFound(err) {
+				return nil, fmt.Errorf("the copy pod %s was deleted (not by lhtx) before it finished", name)
+			}
+			if errs++; errs > transientErrors {
 				return nil, fmt.Errorf("copy pod: %w", err)
 			}
 			if errs == 1 {
@@ -827,32 +1016,47 @@ func (r *runner) deleteNamedPod(ctx context.Context, name string) {
 
 func (r *runner) deleteTemp(ctx context.Context) error {
 	sw, p := r.p.Switch, r.p
+	if err := r.deleteClaim(ctx, p.TempPVC, p.TempPV, r.pvcUID, r.pvUID); err != nil {
+		return err
+	}
+	r.o.Log("PVC %s and PV %s deleted (volume %s stays)", p.TempPVC, p.TempPV, sw.NewVolume)
+	return nil
+}
+
+// deleteClaim deletes a temporary PVC, waits until it is gone, then its PV
+// (UID preconditions: only what this run created).
+func (r *runner) deleteClaim(ctx context.Context, pvcName, pvName, pvcUID, pvUID string) error {
+	sw := r.p.Switch
 	dyn := r.c.Dynamic()
-	if err := dyn.Resource(gvrPVC).Namespace(sw.Namespace).Delete(ctx, p.TempPVC, uidDelete(r.pvcUID)); err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("delete PVC %s: %w", p.TempPVC, err)
-	}
 	deadline := time.Now().Add(r.o.Wait)
-	for {
-		_, err := dyn.Resource(gvrPVC).Namespace(sw.Namespace).Get(ctx, p.TempPVC, metav1.GetOptions{})
-		if apierrors.IsNotFound(err) {
-			break
+	if pvcUID != "" {
+		if err := dyn.Resource(gvrPVC).Namespace(sw.Namespace).Delete(ctx, pvcName, uidDelete(pvcUID)); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete PVC %s: %w", pvcName, err)
 		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("PVC %s is not gone after %s", p.TempPVC, r.o.Wait)
+		for {
+			_, err := dyn.Resource(gvrPVC).Namespace(sw.Namespace).Get(ctx, pvcName, metav1.GetOptions{})
+			if apierrors.IsNotFound(err) {
+				break
+			}
+			if time.Now().After(deadline) {
+				return fmt.Errorf("PVC %s is not gone after %s", pvcName, r.o.Wait)
+			}
+			time.Sleep(r.o.Poll)
 		}
-		time.Sleep(r.o.Poll)
 	}
-	if err := dyn.Resource(gvrPV).Delete(ctx, p.TempPV, uidDelete(r.pvUID)); err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("delete PV %s: %w", p.TempPV, err)
+	if pvUID == "" {
+		return nil
+	}
+	if err := dyn.Resource(gvrPV).Delete(ctx, pvName, uidDelete(pvUID)); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete PV %s: %w", pvName, err)
 	}
 	for {
-		_, err := dyn.Resource(gvrPV).Get(ctx, p.TempPV, metav1.GetOptions{})
+		_, err := dyn.Resource(gvrPV).Get(ctx, pvName, metav1.GetOptions{})
 		if apierrors.IsNotFound(err) {
-			r.o.Log("PVC %s and PV %s deleted (volume %s stays)", p.TempPVC, p.TempPV, sw.NewVolume)
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("PV %s is not gone after %s", p.TempPV, r.o.Wait)
+			return fmt.Errorf("PV %s is not gone after %s", pvName, r.o.Wait)
 		}
 		time.Sleep(r.o.Poll)
 	}

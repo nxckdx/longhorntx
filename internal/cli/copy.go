@@ -74,6 +74,16 @@ func copyCmd() *cobra.Command {
 				return fmt.Errorf("give SRC and DST")
 			}
 			src, dst := args[0], args[1]
+			var sfs unix.Statfs_t
+			if err := unix.Statfs(src, &sfs); err != nil {
+				return fail(fmt.Errorf("statfs %s: %w", src, err))
+			}
+			// an RWX volume's pre-copy reads over NFS (4.1: no xattrs); the
+			// copy that counts reads the block device
+			overNFS := sfs.Type == unix.NFS_SUPER_MAGIC
+			if overNFS && mode != "pre" {
+				return fail(fmt.Errorf("%s is NFS: extended attributes (ACLs, capabilities) cannot be read over it – only a pre-copy may read NFS", src))
+			}
 			statePath := filepath.Join(dst, copyStateFile)
 			skip = append(skip, copyStateFile, copyStateFile+".tmp")
 			noOwner := os.Geteuid() != 0
@@ -142,6 +152,7 @@ func copyCmd() *cobra.Command {
 			if mode == "pre" {
 				state = copytree.NewState()
 				o.Live, o.State = true, state
+				o.NoXattrs, state.NoXattrs = overNFS, overNFS
 			}
 			st, err := copytree.Copy(src, dst, o)
 			r.Stats = st

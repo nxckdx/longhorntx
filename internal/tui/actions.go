@@ -57,12 +57,19 @@ type modal struct {
 
 	// onConfirm replaces applying the action (multi-step runs like a switch)
 	onConfirm func() tea.Cmd
+
+	// dryRun: the result of a server dry run, shown in the confirm dialog
+	// it returns to (apply right after with y)
+	dryRun    string
+	dryRunErr bool
 }
 
 type actionDoneMsg struct {
 	title string
 	dry   bool
 	err   error
+	// back: the confirm dialog to return to after a server dry run
+	back *modal
 }
 
 type settingsMsg struct {
@@ -763,10 +770,15 @@ func (m *model) modalKey(k tea.KeyPressMsg) tea.Cmd {
 			return nil
 		}
 		m.modal = &modal{kind: modalBusy, busyText: "server dry run …"}
+		cmd := m.runAction(a, longhorn.DryRunServer)
 		if md.batch != nil {
-			return m.runBatch(md.batch, a.Title, longhorn.DryRunServer)
+			cmd = m.runBatch(md.batch, a.Title, longhorn.DryRunServer)
 		}
-		return m.runAction(a, longhorn.DryRunServer)
+		return func() tea.Msg {
+			msg := cmd().(actionDoneMsg)
+			msg.back = md
+			return msg
+		}
 	case "y", "Y":
 		if a.Destructive && key != "Y" {
 			m.setFlash("destructive action: press capital Y to confirm", true)
@@ -864,6 +876,15 @@ func (m *model) runAction(a *longhorn.Action, mode longhorn.DryRun) tea.Cmd {
 
 func (m *model) applyActionDone(msg actionDoneMsg) tea.Cmd {
 	m.modal = nil
+	if msg.dry && msg.back != nil {
+		// back to the dialog: apply right after a dry run
+		m.modal = msg.back
+		m.modal.dryRun, m.modal.dryRunErr = "✔ accepted by the server (dry run, nothing changed)", false
+		if msg.err != nil {
+			m.modal.dryRun, m.modal.dryRunErr = "✖ server dry run rejected: "+msg.err.Error(), true
+		}
+		return nil
+	}
 	switch {
 	case msg.err != nil:
 		m.setFlash("✖ "+msg.err.Error(), true)
@@ -968,7 +989,7 @@ func (m *model) viewModal(bodyHeight int) string {
 		b.WriteString(title + "\n" + sDim.Render("context "+m.ctxLabel()) + "\n\n")
 		preview := a.Preview(m.client.Namespace)
 		lines := strings.Split(preview, "\n")
-		maxLines := max(bodyHeight-12-len(a.Warnings)-len(a.Notes), 4)
+		maxLines := max(bodyHeight-14-len(a.Warnings)-len(a.Notes), 4)
 		if len(lines) > maxLines {
 			lines = append(lines[:maxLines], "  …")
 		}
@@ -983,6 +1004,13 @@ func (m *model) viewModal(bodyHeight int) string {
 			for _, wn := range a.Warnings {
 				b.WriteString(fg(cWarn, "⚠ "+wn) + "\n")
 			}
+		}
+		if md.dryRun != "" {
+			c := cOK
+			if md.dryRunErr {
+				c = cErr
+			}
+			b.WriteString("\n" + fg(c, fit(md.dryRun, w-8)) + "\n")
 		}
 		b.WriteString("\n")
 		yes := sKey.Render("[y]") + " apply"

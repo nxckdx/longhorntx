@@ -124,6 +124,12 @@ func (c *Client) Volumes(ctx context.Context) ([]*Volume, error) {
 	return list[Volume](ctx, c, GVRVolume, "")
 }
 
+// VolumesWithJobLabel lists the volumes assigned to a job by name
+// (label selector: only those are sent).
+func (c *Client) VolumesWithJobLabel(ctx context.Context, job string) ([]*Volume, error) {
+	return list[Volume](ctx, c, GVRVolume, labelRecurringJob+job+"=enabled")
+}
+
 func (c *Client) Volume(ctx context.Context, name string) (*Volume, error) {
 	u, err := c.res(GVRVolume).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {

@@ -180,7 +180,11 @@ func toAny(ss []string) []any {
 }
 
 // CreateJob builds the create action for a new recurring job.
-func CreateJob(s JobSpec, existing []*RecurringJob) (*Action, error) {
+//
+// vols: volumes to check for a label left by an earlier job of the same name
+// (Longhorn keeps it when a job is deleted) – the new job applies to them
+// at once.
+func CreateJob(s JobSpec, existing []*RecurringJob, vols []*Volume) (*Action, error) {
 	if err := s.Validate(); err != nil {
 		return nil, err
 	}
@@ -196,8 +200,32 @@ func CreateJob(s JobSpec, existing []*RecurringJob) (*Action, error) {
 		Name:   s.Name,
 		Object: lhObject("RecurringJob", s.Name, nil, s.object()),
 	}
-	a.Warnings = append(a.Warnings, jobWarnings(s, time.Now())...)
+	a.Notes = jobNotes(s, time.Now())
+	a.Warnings = append(a.Warnings, jobWarnings(s)...)
+	if left := labelled(s.Name, vols); len(left) > 0 {
+		a.Warnings = append(a.Warnings, fmt.Sprintf("%d volume(s) still carry the label of an earlier job %s and get this one at once: %s (lhtx jobs remove VOLUME %s)",
+			len(left), s.Name, strings.Join(firstNames(left, 8), ", "), s.Name))
+	}
 	return a, nil
+}
+
+// labelled: the volumes assigned to the job by name (not via a group).
+func labelled(job string, vols []*Volume) []string {
+	var out []string
+	for _, v := range vols {
+		if v.Labels[labelRecurringJob+job] == "enabled" {
+			out = append(out, volKeyOf(v))
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func firstNames(names []string, n int) []string {
+	if len(names) <= n {
+		return names
+	}
+	return append(slices.Clone(names[:n]), fmt.Sprintf("… %d more", len(names)-n))
 }
 
 // UpdateJob patches the fields that changed (name and task are fixed:
@@ -244,7 +272,8 @@ func UpdateJob(j *RecurringJob, s JobSpec, vols []*Volume) (*Action, error) {
 		Verb:  VerbPatch, GVR: GVRRecurringJob, Name: j.Name,
 		Patch: patchWithRV(j.ResourceVersion, patch), Changes: ch,
 	}
-	a.Warnings = append(gitopsWarning(j), append(a.Warnings, jobWarnings(s, time.Now())...)...)
+	a.Notes = jobNotes(s, time.Now())
+	a.Warnings = append(gitopsWarning(j), append(a.Warnings, jobWarnings(s)...)...)
 	if s.Retain < old.Retain && taskUsesRetain(s.Task) {
 		a.Warnings = append(a.Warnings, fmt.Sprintf("lower retain: on the next run Longhorn deletes the oldest %ss beyond %d per volume",
 			retainWhat(s.Task), s.Retain))
@@ -321,11 +350,15 @@ func fmtMap(m map[string]string) string {
 	return strings.Join(parts, ",")
 }
 
-func jobWarnings(s JobSpec, now time.Time) []string {
-	var w []string
+func jobNotes(s JobSpec, now time.Time) []string {
 	if runs := NextRuns(s.Cron, now, 3); len(runs) > 0 {
-		w = append(w, "next runs: "+FormatRuns(runs, now)+" "+now.Format("MST")+" (cron is evaluated in UTC by the cluster)")
+		return []string{"next runs: " + FormatRuns(runs, now) + " " + now.Format("MST") + " (cron is evaluated in UTC by the cluster)"}
 	}
+	return nil
+}
+
+func jobWarnings(s JobSpec) []string {
+	var w []string
 	if len(s.Groups) == 0 {
 		w = append(w, "no group: the job only runs for volumes it is assigned to directly (lhtx jobs add / J panel)")
 	}
@@ -358,7 +391,8 @@ func volKeyOf(v *Volume) string {
 }
 
 // DeleteJob deletes a job. Longhorn removes its CronJob; volume labels that
-// name the job stay (harmless) – the preview lists who used it.
+// name the job stay – the preview lists who used it and says so (a new job
+// of the same name would apply to them again).
 func DeleteJob(j *RecurringJob, vols []*Volume) (*Action, error) {
 	a := &Action{
 		Title: fmt.Sprintf("Delete recurring job %s (%s, %s)", j.Name, j.Spec.Task, j.Spec.Cron),
@@ -367,14 +401,14 @@ func DeleteJob(j *RecurringJob, vols []*Volume) (*Action, error) {
 		Warnings:    gitopsWarning(j),
 	}
 	if users := JobVolumes(j, vols); len(users) > 0 {
-		shown := users
-		if len(shown) > 8 {
-			shown = append(slices.Clone(shown[:8]), fmt.Sprintf("… %d more", len(users)-8))
-		}
-		a.Warnings = append(a.Warnings, fmt.Sprintf("%d volumes use this job and lose it: %s", len(users), strings.Join(shown, ", ")))
+		a.Warnings = append(a.Warnings, fmt.Sprintf("%d volume(s) use this job and lose it: %s", len(users), strings.Join(firstNames(users, 8), ", ")))
 		if strings.HasPrefix(j.Spec.Task, "backup") {
 			a.Warnings = append(a.Warnings, "check that these volumes are still backed up by another job (lhtx backups)")
 		}
+	}
+	if left := labelled(j.Name, vols); len(left) > 0 {
+		a.Warnings = append(a.Warnings, fmt.Sprintf("Longhorn leaves the label %s%s on %d volume(s): a new job of that name would apply to them again (lhtx jobs remove VOLUME %s)",
+			labelRecurringJob, j.Name, len(left), j.Name))
 	}
 	a.Warnings = append(a.Warnings, "existing snapshots and backups made by the job stay")
 	return a, nil

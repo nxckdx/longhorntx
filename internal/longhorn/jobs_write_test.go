@@ -70,14 +70,30 @@ func TestJobActions(t *testing.T) {
 		t.Errorf("users %s", got)
 	}
 
-	if _, err := CreateJob(SpecOf(j), []*RecurringJob{j}); err == nil {
+	if _, err := CreateJob(SpecOf(j), []*RecurringJob{j}, nil); err == nil {
 		t.Error("duplicate created")
 	}
 	s := SpecOf(j)
 	s.Name = "weekly"
-	a, err := CreateJob(s, []*RecurringJob{j})
+	a, err := CreateJob(s, []*RecurringJob{j}, vols)
 	if err != nil || a.Object["spec"].(map[string]any)["name"] != "weekly" {
 		t.Fatalf("%v %+v", err, a)
+	}
+	if strings.Contains(strings.Join(a.Warnings, " "), "earlier job") {
+		t.Errorf("no old label, but %v", a.Warnings)
+	}
+	// Longhorn keeps a deleted job's label: delete says so, a new job of
+	// the same name warns
+	d, _ := DeleteJob(j, vols)
+	if w := strings.Join(d.Warnings, " "); !strings.Contains(w, "leaves the label recurring-job.longhorn.io/daily-backup on 1 volume(s)") {
+		t.Errorf("delete warnings %v", d.Warnings)
+	}
+	a, _ = CreateJob(SpecOf(j), nil, vols)
+	if w := strings.Join(a.Warnings, " "); !strings.Contains(w, "1 volume(s) still carry the label of an earlier job daily-backup and get this one at once: v2") {
+		t.Errorf("create warnings %v", a.Warnings)
+	}
+	if len(a.Notes) != 1 || !strings.HasPrefix(a.Notes[0], "next runs") {
+		t.Errorf("notes %v", a.Notes)
 	}
 
 	s = SpecOf(j)
@@ -106,8 +122,8 @@ func TestJobActions(t *testing.T) {
 		t.Error("no-op accepted")
 	}
 
-	d, _ := DeleteJob(j, vols)
-	if !d.Destructive || d.UID != "u1" || !strings.Contains(strings.Join(d.Warnings, " "), "2 volumes use this job") {
+	d, _ = DeleteJob(j, vols)
+	if !d.Destructive || d.UID != "u1" || !strings.Contains(strings.Join(d.Warnings, " "), "2 volume(s) use this job") {
 		t.Errorf("%+v", d)
 	}
 }

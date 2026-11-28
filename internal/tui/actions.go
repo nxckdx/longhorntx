@@ -968,15 +968,18 @@ func (m *model) viewModal(bodyHeight int) string {
 		b.WriteString(title + "\n" + sDim.Render("context "+m.ctxLabel()) + "\n\n")
 		preview := a.Preview(m.client.Namespace)
 		lines := strings.Split(preview, "\n")
-		maxLines := max(bodyHeight-12-len(a.Warnings), 4)
+		maxLines := max(bodyHeight-12-len(a.Warnings)-len(a.Notes), 4)
 		if len(lines) > maxLines {
 			lines = append(lines[:maxLines], "  …")
 		}
 		for _, l := range lines {
 			b.WriteString(sDim.Render(fit(l, w-8)) + "\n")
 		}
-		if len(a.Warnings) > 0 {
+		if len(a.Warnings)+len(a.Notes) > 0 {
 			b.WriteString("\n")
+			for _, n := range a.Notes {
+				b.WriteString(sDim.Render(fit("ℹ "+n, w-8)) + "\n")
+			}
 			for _, wn := range a.Warnings {
 				b.WriteString(fg(cWarn, "⚠ "+wn) + "\n")
 			}

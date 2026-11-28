@@ -114,7 +114,11 @@ time zone). Defaults: concurrency 1, retain 1 (0 for cleanup/trim), no group.
 			if !cmd.Flags().Changed("retain") && (s.Task == "snapshot-cleanup" || s.Task == "filesystem-trim") {
 				s.Retain = 0
 			}
-			a, err := longhorn.CreateJob(s, jobs)
+			left, err := c.VolumesWithJobLabel(cmd.Context(), s.Name)
+			if err != nil {
+				return err
+			}
+			a, err := longhorn.CreateJob(s, jobs, left)
 			if err != nil {
 				return err
 			}

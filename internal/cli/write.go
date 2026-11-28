@@ -50,6 +50,9 @@ func (g *globals) runAction(ctx context.Context, c *longhorn.Client, a *longhorn
 
 func printAction(c *longhorn.Client, a *longhorn.Action) {
 	fmt.Printf("%s · %s\n\n%s\n", a.Title, c.Cluster.Context, a.Preview(c.Namespace))
+	for _, n := range a.Notes {
+		fmt.Println("ℹ " + n)
+	}
 	for _, w := range a.Warnings {
 		fmt.Println("⚠ " + w)
 	}

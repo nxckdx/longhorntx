@@ -129,7 +129,7 @@ func (m *model) jobForm(j *longhorn.RecurringJob) {
 			return nil, err
 		}
 		if j == nil {
-			return longhorn.CreateJob(ns, m.jobsRaw)
+			return longhorn.CreateJob(ns, m.jobsRaw, m.state.Volumes)
 		}
 		return longhorn.UpdateJob(j, ns, m.state.Volumes)
 	}
